@@ -21,6 +21,9 @@ pub struct Shell {
     #[allow(dead_code)]
     client: Option<Arc<NavidromeClient>>,
     home_state: gpui::Entity<HomeState>,
+    selected_album: Option<String>,
+    album_detail: Option<crate::library::AlbumDetail>,
+    album_loading: bool,
     now_playing: gpui::Entity<NowPlayingView>,
     search_view: gpui::Entity<SearchView>,
     settings_view: gpui::Entity<SettingsView>,
@@ -31,6 +34,9 @@ impl Shell {
     pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths, mpris_handle: Option<MprisHandle>) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
         let home_state = cx.new(|_cx| HomeState::default());
+        let selected_album = None;
+        let album_detail = None;
+        let album_loading = false;
         let now_playing = cx.new(|cx| NowPlayingView::new(cx));
         let search_view = cx.new(|_cx| SearchView::new());
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
@@ -125,6 +131,9 @@ impl Shell {
             route,
             client,
             home_state,
+            selected_album,
+            album_detail,
+            album_loading,
             now_playing,
             search_view,
             settings_view,
@@ -178,6 +187,35 @@ impl Shell {
                 window.set_window_title(crate::overlay::OVERLAY_TITLE);
             })
             .ok();
+        }
+    }
+
+    pub fn play_track(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
+        self.player_state.update(cx, |ps, _cx| {
+            // play_now with single track
+            ps.play_now(vec![track.clone()], 0);
+        });
+        // send load+play to engine
+        if let Some(client) = &self.client
+            && let Ok(uri) = client.stream_url(&track.id, self.config.quality) {
+            self.player_handle.tx.send(PlayerCommand::Load { uri, track_id: track.id.clone() }).ok();
+            self.player_handle.tx.send(PlayerCommand::Play).ok();
+        }
+        // fetch lyrics
+        if let Some(client) = &self.client {
+            let c = client.clone();
+            let t = track.clone();
+            let _ps = self.player_state.clone();
+            let np = self.now_playing.clone();
+            cx.spawn(async move |cx| {
+                let status = c.lyrics(&t.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound);
+                cx.update(|app| {
+                    app.update_entity(&np, |v, cx| {
+                        v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
+                        v.set_lyrics(cx, status);
+                    });
+                });
+            }).detach();
         }
     }
 
@@ -591,25 +629,81 @@ impl Render for Shell {
                                             .child("See all"),
                                     ),
                             )
-                            .child({
+                            .child(if self.route == Route::NowPlaying {
+                                div().child(self.now_playing.clone())
+                            } else {
                                 let hs = self.home_state.read(cx);
                                 let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
                                 if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", t));
                                 } else {
                                     for a in hs.albums.iter().take(8) {
-                                        grid = grid.child(album_card(&a.name, &a.artist, t));
+                                        let aid = a.id.clone();
+                                        grid = grid.child(
+                                            album_card(&a.name, &a.artist, t)
+                                                .id(format!("album-{}", aid))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    let aid2 = aid.clone();
+                                                    this.selected_album = Some(aid2.clone());
+                                                    this.album_detail = None;
+                                                    this.album_loading = true;
+                                                    if let Some(client) = this.client.clone() {
+                                                        let entity = cx.entity();
+                                                        let aid3 = aid2.clone();
+                                                        cx.spawn(async move |_, cx| {
+                                                            let res = client.album(&aid3);
+                                                            cx.update(|app| {
+                                                                app.update_entity(&entity, |shell, _cx| {
+                                                                    shell.album_loading = false;
+                                                                    if let Ok(detail) = res {
+                                                                        shell.album_detail = Some(detail);
+                                                                    }
+                                                                });
+                                                            });
+                                                        }).detach();
+                                                    }
+                                                })),
+                                        );
                                     }
                                 }
                                 grid
                             })
-                            .child(
+                            .child(if let Some(detail) = &self.album_detail {
+                                let mut col = div().flex().flex_col().gap(gpui::px(6.0));
+                                col = col.child(
+                                    div()
+                                        .font_family(theme.display_font)
+                                        .text_size(gpui::px(16.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(detail.album.name.clone()),
+                                );
+                                for (i, t_) in detail.songs.iter().enumerate() {
+                                    let track = t_.clone();
+                                    col = col.child(
+                                        track_row(
+                                            &format!("{:02}", i + 1),
+                                            &t_.title,
+                                            &t_.artist,
+                                            &format_time(t_.duration.as_secs_f64()),
+                                            false,
+                                            t,
+                                        )
+                                        .id(format!("track-{}", i))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                                            this.play_track(track.clone(), cx);
+                                        })),
+                                    );
+                                }
+                                col
+                            } else {
                                 div()
                                     .font_family(theme.display_font)
                                     .text_size(gpui::px(16.0))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("Made for you"),
-                            )
+                                    .child("Made for you")
+                            })
                             .child(
                                 div()
                                     .flex()
