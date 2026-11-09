@@ -2,7 +2,7 @@ use myuzik::config;
 use myuzik::ui::Shell;
 
 use gpui::{
-    Window, WindowBackgroundAppearance, WindowDecorations, WindowOptions, prelude::*,
+    WindowBackgroundAppearance, WindowDecorations, WindowOptions, prelude::*,
 };
 use gpui_platform::application;
 

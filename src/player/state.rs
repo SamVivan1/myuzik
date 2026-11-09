@@ -1,6 +1,5 @@
 use crate::library::Track;
 use crate::player::queue::{Queue, RepeatMode};
-use gpui::{Context, Entity};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

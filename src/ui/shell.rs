@@ -1,5 +1,5 @@
-use crate::theme::{midnight_brass, Theme};
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use crate::theme::midnight_brass;
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct Shell;
 
