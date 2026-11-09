@@ -22,7 +22,7 @@ fn main() {
         opts.window_background = WindowBackgroundAppearance::Blurred;
         opts.window_decorations = Some(WindowDecorations::Client);
         cx.open_window(opts, |_window, cx| {
-            cx.new(|_cx| Shell::new())
+            cx.new(|cx| Shell::new(cx))
         })
         .expect("failed to open window");
     });

@@ -60,8 +60,6 @@ pub fn spawn_player() -> PlayerHandle {
             }
         };
 
-        // user-agent
-        let _ = pipeline.set_property("user-agent", "Myuzik/0.1");
         let _ = pipeline.set_property("volume", 0.8_f64);
 
         let bus = pipeline.bus().expect("bus");

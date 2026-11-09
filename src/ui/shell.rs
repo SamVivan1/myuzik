@@ -1,11 +1,21 @@
 use crate::theme::midnight_brass;
+use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle, spawn_player};
+use crate::player::state::{PlayerState, PlaybackStatus};
 use gpui::{Context, Render, Window, div, prelude::*, px};
 
-pub struct Shell;
+pub struct Shell {
+    player_state: gpui::Entity<PlayerState>,
+    player_handle: PlayerHandle,
+}
 
 impl Shell {
-    pub fn new() -> Self {
-        Self
+    pub fn new(cx: &mut gpui::App) -> Self {
+        let player_state = cx.new(|_cx| PlayerState::new());
+        let player_handle = spawn_player();
+        Self {
+            player_state,
+            player_handle,
+        }
     }
 
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
@@ -27,8 +37,34 @@ impl Shell {
         }
     }
 
-    pub fn close_overlay(&mut self, _cx: &mut gpui::App) {
-        // In v1, closing is handled by the overlay window's close button.
+    pub fn close_overlay(&mut self, _cx: &mut gpui::App) {}
+
+    pub fn play(&self) {
+        self.player_handle.tx.send(PlayerCommand::Play).ok();
+    }
+
+    pub fn pause(&self) {
+        self.player_handle.tx.send(PlayerCommand::Pause).ok();
+    }
+
+    pub fn toggle(&self) {
+        self.player_handle.tx.send(PlayerCommand::Toggle).ok();
+    }
+
+    pub fn next(&self) {
+        self.player_handle.tx.send(PlayerCommand::Stop).ok();
+    }
+
+    pub fn previous(&self) {
+        self.player_handle.tx.send(PlayerCommand::Stop).ok();
+    }
+
+    pub fn seek(&self, pos: std::time::Duration) {
+        self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+    }
+
+    pub fn set_volume(&self, v: f32) {
+        self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
     }
 }
 
@@ -36,179 +72,9 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+        let is_playing = self.player_state.read(cx).status == PlaybackStatus::Playing;
 
-        // Sidebar
-        let sidebar = div()
-            .w(gpui::px(212.0))
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .gap(gpui::px(12.0))
-            .px(gpui::px(16.0))
-            .py(gpui::px(18.0))
-            .bg(gpui::rgba(0x0C0C1014))
-            .border_r_1()
-            .border_color(t.glass_border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(gpui::px(10.0))
-                    .child(
-                        div()
-                            .w(gpui::px(30.0))
-                            .h(gpui::px(30.0))
-                            .rounded(gpui::px(10.0))
-                            .bg(t.gold)
-                            .text_color(t.clay_ink)
-                            .font_family(theme.display_font)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_size(gpui::px(18.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child("M"),
-                    )
-                    .child(
-                        div()
-                            .font_family(theme.display_font)
-                            .text_size(gpui::px(22.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("myuzik"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(4.0))
-                    .child(nav_item("Home", true, t, theme.ui_font))
-                    .child(nav_item("Search", false, t, theme.ui_font))
-                    .child(nav_item("Albums", false, t, theme.ui_font))
-                    .child(nav_item("Artists", false, t, theme.ui_font))
-                    .child(nav_item("Playlists", false, t, theme.ui_font))
-                    .child(nav_item("Favorites", false, t, theme.ui_font)),
-            )
-            .child(
-                div()
-                    .mt(gpui::px(8.0))
-                    .text_size(gpui::px(9.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(t.text_tertiary)
-                    .child("YOUR PLAYLISTS"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(2.0))
-                    .child(playlist_item("Late night drive", t))
-                    .child(playlist_item("Focus / no vocals", t))
-                    .child(playlist_item("Sunday morning", t)),
-            )
-            .child(
-                div()
-                    .mt_auto()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(8.0))
-                    .child(
-                        div()
-                            .px(gpui::px(14.0))
-                            .py(gpui::px(10.0))
-                            .rounded(gpui::px(theme.radii.button))
-                            .bg(gpui::rgb(0x2A241C))
-                            .text_color(t.gold_light)
-                            .font_family(theme.ui_font)
-                            .text_size(gpui::px(9.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .cursor_pointer()
-                            .id("pin-btn")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.open_overlay(cx);
-                            }))
-                            .child("Pin lyrics"),
-                    ),
-            );
-
-        // Main content
-        let main = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(gpui::px(18.0))
-            .px(gpui::px(26.0))
-            .py(gpui::px(20.0))
-            .pb(gpui::px(118.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(4.0))
-                    .child(
-                        div()
-                            .text_size(gpui::px(9.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(t.gold)
-                            .child("YOUR LIBRARY"),
-                    )
-                    .child(
-                        div()
-                            .font_family(theme.display_font)
-                            .text_size(gpui::px(30.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Good evening"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .font_family(theme.display_font)
-                            .text_size(gpui::px(16.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Recently added"),
-                    )
-                    .child(
-                        div()
-                            .text_size(gpui::px(10.0))
-                            .text_color(t.text_secondary)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("See all"),
-                    ),
-            )
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(4)
-                    .gap(gpui::px(14.0))
-                    .child(album_card("Neon Harbor", "Lumen Fields", t, theme.ui_font))
-                    .child(album_card("Moss & Static", "Kite Garden", t, theme.ui_font))
-                    .child(album_card("Golden Hour", "Vela", t, theme.ui_font))
-                    .child(album_card("Blue Terminal", "Nightshift", t, theme.ui_font)),
-            )
-            .child(
-                div()
-                    .font_family(theme.display_font)
-                    .text_size(gpui::px(16.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Made for you"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(6.0))
-                    .child(track_row("01", "Midnight Static", "Lumen Fields", "3:42", true, t, theme.ui_font))
-                    .child(track_row("02", "Paper Satellites", "Kite Garden", "4:07", false, t, theme.ui_font))
-                    .child(track_row("03", "Golden Hour", "Vela", "3:18", false, t, theme.ui_font)),
-            );
-
-        // Player bar (clay)
+        // Player bar
         let player = div()
             .absolute()
             .left(gpui::px(18.0))
@@ -229,6 +95,7 @@ impl Render for Shell {
             .flex()
             .items_center()
             .justify_center()
+            .gap(gpui::px(12.0))
             .child(
                 div()
                     .text_color(t.clay_ink)
@@ -236,9 +103,22 @@ impl Render for Shell {
                     .text_size(gpui::px(12.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .child("Player bar — Midnight Brass"),
+            )
+            .child(
+                div()
+                    .px(gpui::px(10.0))
+                    .py(gpui::px(6.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(t.gold)
+                    .text_color(t.clay_ink)
+                    .font_family(theme.ui_font)
+                    .text_size(gpui::px(10.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .cursor_pointer()
+                    .child(if is_playing { "⏸" } else { "▶" }),
             );
 
-        // Glass shell
+        // Glass shell with home content
         div()
             .size_full()
             .bg(t.bg_base)
@@ -260,14 +140,168 @@ impl Render for Shell {
                     }])
                     .flex()
                     .overflow_hidden()
-                    .child(sidebar)
-                    .child(main),
+                    .child(
+                        // Sidebar
+                        div()
+                            .w(gpui::px(212.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .gap(gpui::px(12.0))
+                            .px(gpui::px(16.0))
+                            .py(gpui::px(18.0))
+                            .bg(gpui::rgba(0x0C0C1014))
+                            .border_r_1()
+                            .border_color(t.glass_border)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(gpui::px(10.0))
+                                    .child(
+                                        div()
+                                            .w(gpui::px(30.0))
+                                            .h(gpui::px(30.0))
+                                            .rounded(gpui::px(10.0))
+                                            .bg(t.gold)
+                                            .text_color(t.clay_ink)
+                                            .font_family(theme.display_font)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_size(gpui::px(18.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child("M"),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(theme.display_font)
+                                            .text_size(gpui::px(22.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("myuzik"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(4.0))
+                                    .child(nav_item("Home", true, t))
+                                    .child(nav_item("Search", false, t))
+                                    .child(nav_item("Albums", false, t))
+                                    .child(nav_item("Artists", false, t))
+                                    .child(nav_item("Playlists", false, t))
+                                    .child(nav_item("Favorites", false, t)),
+                            )
+                            .child(
+                                div()
+                                    .mt_auto()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(8.0))
+                                    .child(
+                                        div()
+                                            .px(gpui::px(14.0))
+                                            .py(gpui::px(10.0))
+                                            .rounded(gpui::px(theme.radii.button))
+                                            .bg(gpui::rgb(0x2A241C))
+                                            .text_color(t.gold_light)
+                                            .font_family(theme.ui_font)
+                                            .text_size(gpui::px(9.0))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .cursor_pointer()
+                                            .id("pin-btn")
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.open_overlay(cx);
+                                            }))
+                                            .child("Pin lyrics"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        // Main content
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(gpui::px(18.0))
+                            .px(gpui::px(26.0))
+                            .py(gpui::px(20.0))
+                            .pb(gpui::px(118.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(4.0))
+                                    .child(
+                                        div()
+                                            .text_size(gpui::px(9.0))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(t.gold)
+                                            .child("YOUR LIBRARY"),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(theme.display_font)
+                                            .text_size(gpui::px(30.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Good evening"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .font_family(theme.display_font)
+                                            .text_size(gpui::px(16.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Recently added"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(gpui::px(10.0))
+                                            .text_color(t.text_secondary)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("See all"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .grid()
+                                    .grid_cols(4)
+                                    .gap(gpui::px(14.0))
+                                    .child(album_card("Neon Harbor", "Lumen Fields", t))
+                                    .child(album_card("Moss & Static", "Kite Garden", t))
+                                    .child(album_card("Golden Hour", "Vela", t))
+                                    .child(album_card("Blue Terminal", "Nightshift", t)),
+                            )
+                            .child(
+                                div()
+                                    .font_family(theme.display_font)
+                                    .text_size(gpui::px(16.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Made for you"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(6.0))
+                                    .child(track_row("01", "Midnight Static", "Lumen Fields", "3:42", true, t))
+                                    .child(track_row("02", "Paper Satellites", "Kite Garden", "4:07", false, t))
+                                    .child(track_row("03", "Golden Hour", "Vela", "3:18", false, t)),
+                            ),
+                    ),
             )
             .child(player)
     }
 }
 
-fn nav_item(label: &str, active: bool, t: &crate::theme::Colors, font: &'static str) -> gpui::Div {
+fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
     if active {
         gpui::div()
             .px(gpui::px(10.0))
@@ -275,7 +309,6 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors, font: &'static 
             .rounded(gpui::px(12.0))
             .bg(t.clay_surface)
             .text_color(t.clay_ink)
-            .font_family(font)
             .text_size(gpui::px(12.0))
             .font_weight(gpui::FontWeight::BOLD)
             .child(label.to_string())
@@ -285,29 +318,12 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors, font: &'static 
             .py(gpui::px(7.0))
             .rounded(gpui::px(12.0))
             .text_color(t.text_secondary)
-            .font_family(font)
             .text_size(gpui::px(12.0))
             .child(label.to_string())
     }
 }
 
-fn playlist_item(label: &str, t: &crate::theme::Colors) -> gpui::Div {
-    gpui::div()
-        .flex()
-        .items_center()
-        .gap(gpui::px(8.0))
-        .text_size(gpui::px(11.0))
-        .text_color(t.text_secondary)
-        .child(
-            gpui::div()
-                .w(gpui::px(4.0))
-                .h(gpui::px(4.0))
-                .bg(t.gold_deep),
-        )
-        .child(label.to_string())
-}
-
-fn album_card(title: &str, artist: &str, t: &crate::theme::Colors, font: &'static str) -> gpui::Div {
+fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div {
     gpui::div()
         .flex()
         .flex_col()
@@ -356,7 +372,7 @@ fn album_card(title: &str, artist: &str, t: &crate::theme::Colors, font: &'stati
         )
 }
 
-fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &crate::theme::Colors, font: &'static str) -> gpui::Div {
+fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
     let bg = if active { t.gold } else { t.glass_tint };
     let text_color = if active { t.clay_ink } else { t.text_primary };
     gpui::div()
