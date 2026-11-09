@@ -1,6 +1,15 @@
 use crate::lyrics::model::LyricsStatus;
 use crate::lyrics::model::LyricLine;
 use crate::theme::midnight_brass;
+
+/// Pure: vertical translation to center the active lyric line.
+pub fn target_offset(line_tops: &[f32], line_heights: &[f32], viewport_h: f32, active: usize) -> f32 {
+    if active >= line_tops.len() || line_tops.is_empty() {
+        return 0.0;
+    }
+    let line_center = line_tops[active] + line_heights[active] / 2.0;
+    viewport_h / 2.0 - line_center
+}
 use gpui::{Context, Render, Window, div, prelude::*};
 use std::time::Duration;
 
