@@ -235,10 +235,9 @@ impl NavidromeClient {
             }
         }
         // If the endpoint is unsupported, Navidrome may return error code 70.
-        if let Some(err) = &resp.error {
-            if err.code == 70 {
-                return Err(NavidromeError::Unsupported);
-            }
+        if let Some(err) = &resp.error
+            && err.code == 70 {
+            return Err(NavidromeError::Unsupported);
         }
         Ok(crate::navidrome::types::lyrics_from_dto(resp.data))
     }

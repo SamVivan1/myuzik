@@ -1,3 +1,4 @@
+#![allow(clippy::items_after_test_module)]
 use crate::theme::midnight_brass;
 use gpui::{
     Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*,
@@ -36,6 +37,7 @@ pub fn clamp_geometry(geom: OverlayGeometry, monitor_x: i32, monitor_y: i32, mon
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod geometry_tests {
     use super::*;
 
@@ -240,13 +242,15 @@ impl Render for PinnedLyricsView {
 
 /// Open the overlay window. Returns the window handle.
 pub fn open_overlay(cx: &mut gpui::App) -> gpui::WindowHandle<PinnedLyricsView> {
-    let mut opts = WindowOptions::default();
-    opts.window_background = WindowBackgroundAppearance::Blurred;
-    opts.window_decorations = None;
-    opts.focus = false;
-    opts.show = true;
-    opts.app_id = Some(APP_ID.to_string());
-    opts.titlebar = None;
+    let opts = WindowOptions {
+        window_background: WindowBackgroundAppearance::Blurred,
+        window_decorations: None,
+        focus: false,
+        show: true,
+        app_id: Some(APP_ID.to_string()),
+        titlebar: None,
+        ..Default::default()
+    };
     cx.open_window(opts, |_window, cx| {
         cx.new(|_cx| PinnedLyricsView::new())
     })
@@ -255,4 +259,16 @@ pub fn open_overlay(cx: &mut gpui::App) -> gpui::WindowHandle<PinnedLyricsView> 
 
 pub fn set_overlay_title(window: &mut gpui::Window) {
     window.set_window_title(OVERLAY_TITLE);
+}
+
+impl Default for OverlayWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for PinnedLyricsView {
+    fn default() -> Self {
+        Self::new()
+    }
 }

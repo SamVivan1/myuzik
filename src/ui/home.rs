@@ -1,6 +1,5 @@
 use crate::theme::midnight_brass;
-use crate::ui::components::LyricsView;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct HomeView {
     pub greeting: String,
@@ -198,4 +197,11 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
                 .text_color(if active { t.clay_ink } else { t.text_tertiary })
                 .child(dur.to_string()),
         )
+}
+
+
+impl Default for HomeView {
+    fn default() -> Self {
+        Self::new()
+    }
 }

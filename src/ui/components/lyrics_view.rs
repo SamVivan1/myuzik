@@ -202,3 +202,10 @@ impl Render for LyricsView {
         }
     }
 }
+
+
+impl Default for LyricsView {
+    fn default() -> Self {
+        Self::new()
+    }
+}

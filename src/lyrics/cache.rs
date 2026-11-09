@@ -34,7 +34,7 @@ impl LyricsCache {
         hasher.update(b"|");
         hasher.update(track.album.trim().to_lowercase().as_bytes());
         hasher.update(b"|");
-        hasher.update((track.duration.as_secs() as u64).to_string().as_bytes());
+        hasher.update((track.duration.as_secs()).to_string().as_bytes());
         hex::encode(hasher.finalize())
     }
 
@@ -70,7 +70,7 @@ impl LyricsCache {
             plain: plain_text.to_string(),
         };
         let text = serde_json::to_string(&entry)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, text)?;
         fs::rename(&tmp, &path)?;

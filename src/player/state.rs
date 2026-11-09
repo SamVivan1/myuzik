@@ -47,6 +47,7 @@ impl PlayerState {
         self.scrobble_submitted = false;
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Track> {
         let t = self.queue.next()?;
         self.current = Some(t.clone());
@@ -93,5 +94,12 @@ impl PlayerState {
 
     pub fn set_shuffle(&mut self, on: bool) {
         self.queue.set_shuffle(on);
+    }
+}
+
+
+impl Default for PlayerState {
+    fn default() -> Self {
+        Self::new()
     }
 }

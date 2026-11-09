@@ -1,5 +1,5 @@
 use crate::theme::midnight_brass;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct SearchView {
     pub query: String,
@@ -65,5 +65,12 @@ impl Render for SearchView {
                     .text_color(t.text_secondary)
                     .child("Type to search artists, albums, songs, and playlists."),
             )
+    }
+}
+
+
+impl Default for SearchView {
+    fn default() -> Self {
+        Self::new()
     }
 }

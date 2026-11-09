@@ -1,7 +1,7 @@
 use crate::lyrics::model::LyricsStatus;
 use crate::theme::midnight_brass;
 use crate::ui::components::LyricsView;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct NowPlayingView {
     pub lyrics: gpui::Entity<LyricsView>,

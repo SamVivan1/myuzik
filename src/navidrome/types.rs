@@ -275,11 +275,9 @@ pub fn lyrics_from_dto(dto: LyricsDto) -> Option<crate::lyrics::model::LyricsSta
     let mut lines: Vec<crate::lyrics::model::LyricLine> = sl
         .lines
         .into_iter()
-        .filter_map(|l| {
-            Some(crate::lyrics::model::LyricLine {
-                time: Duration::from_millis(l.start.unwrap_or(0).max(0) as u64),
-                text: l.value.unwrap_or_default(),
-            })
+        .map(|l| crate::lyrics::model::LyricLine {
+            time: Duration::from_millis(l.start.unwrap_or(0).max(0) as u64),
+            text: l.value.unwrap_or_default(),
         })
         .collect();
     lines.sort_by_key(|l| l.time);

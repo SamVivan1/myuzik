@@ -7,7 +7,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum MprisCommand {
-    UpdateMetadata(Track, Option<String>),
+    UpdateMetadata(Box<Track>, Option<String>),
     UpdateStatus(PlaybackStatus),
     UpdatePosition(Duration),
     UpdateVolume(f32),
@@ -134,7 +134,7 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
 
 impl MprisHandle {
     pub fn update_metadata(&self, track: &Track, art_url: Option<String>) {
-        let _ = self.cmd_tx.send(MprisCommand::UpdateMetadata(track.clone(), art_url));
+        let _ = self.cmd_tx.send(MprisCommand::UpdateMetadata(Box::new(track.clone()), art_url));
     }
 
     pub fn update_status(&self, status: PlaybackStatus) {

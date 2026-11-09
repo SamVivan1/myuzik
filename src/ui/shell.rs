@@ -1,29 +1,108 @@
-use crate::player::engine::{PlayerCommand, PlayerHandle};
-use crate::platform::mpris::MprisHandle;
+use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
+use crate::player::state::{PlayerState, PlaybackStatus};
 use crate::theme::midnight_brass;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct Shell {
+    player_state: gpui::Entity<PlayerState>,
     player_handle: PlayerHandle,
-    mpris_handle: Option<MprisHandle>,
 }
 
 impl Shell {
-    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, mpris_handle: Option<MprisHandle>) -> Self {
+    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle) -> Self {
+        let player_state = cx.new(|_cx| PlayerState::new());
+        // Poll player events in background
+        let state = player_state.clone();
+        let rx = player_handle.rx.clone();
+        cx.spawn(async move |cx| {
+            loop {
+                match rx.recv_async().await {
+                    Ok(PlayerEvent::StateChanged(s)) => {
+                        cx.update(|app| {
+                            state.update(app, |ps, _cx| {
+                                ps.set_status(s);
+                            });
+                        });
+                    }
+                    Ok(PlayerEvent::Position(pos)) => {
+                        cx.update(|app| {
+                            state.update(app, |ps, _cx| {
+                                ps.set_position(pos);
+                            });
+                        });
+                    }
+                    Ok(PlayerEvent::Duration(dur)) => {
+                        cx.update(|app| {
+                            state.update(app, |ps, _cx| {
+                                ps.duration = Some(dur);
+                            });
+                        });
+                    }
+                    Ok(PlayerEvent::Eos) => {
+                        cx.update(|app| {
+                            state.update(app, |ps, _cx| {
+                                ps.set_status(PlaybackStatus::Stopped);
+                            });
+                        });
+                    }
+                    Ok(PlayerEvent::Error(e)) => {
+                        tracing::error!("player error: {:?}", e);
+                    }
+                    Ok(PlayerEvent::TrackStarted(id)) => {
+                        tracing::info!("track started: {}", id);
+                    }
+                    Ok(PlayerEvent::Buffering(p)) => {
+                        tracing::debug!("buffering: {}%", p);
+                    }
+                    Err(_) => break,
+                }
+            }
+        }).detach();
+
         Self {
+            player_state,
             player_handle,
-            mpris_handle,
         }
     }
 
+    pub fn toggle_playback(&self) {
+        self.player_handle.tx.send(PlayerCommand::Toggle).ok();
+    }
+
+    pub fn play(&self) {
+        self.player_handle.tx.send(PlayerCommand::Play).ok();
+    }
+
+    pub fn pause(&self) {
+        self.player_handle.tx.send(PlayerCommand::Pause).ok();
+    }
+
+    pub fn next(&self) {
+        self.player_handle.tx.send(PlayerCommand::Stop).ok();
+    }
+
+    pub fn previous(&self) {
+        self.player_handle.tx.send(PlayerCommand::Stop).ok();
+    }
+
+    pub fn seek(&self, pos: std::time::Duration) {
+        self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+    }
+
+    pub fn set_volume(&self, v: f32) {
+        self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+    }
+
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
-        let mut opts = gpui::WindowOptions::default();
-        opts.window_background = gpui::WindowBackgroundAppearance::Blurred;
-        opts.window_decorations = None;
-        opts.focus = false;
-        opts.show = true;
-        opts.app_id = Some(crate::overlay::APP_ID.to_string());
-        opts.titlebar = None;
+        let opts = gpui::WindowOptions {
+            window_background: gpui::WindowBackgroundAppearance::Blurred,
+            window_decorations: None,
+            focus: false,
+            show: true,
+            app_id: Some(crate::overlay::APP_ID.to_string()),
+            titlebar: None,
+            ..Default::default()
+        };
         let handle = cx.open_window(opts, |_window, cx| {
             cx.new(|_cx| crate::overlay::PinnedLyricsView::new())
         });
@@ -42,7 +121,20 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+        let status = self.player_state.read(cx).status;
+        let is_playing = status == PlaybackStatus::Playing;
+        let current_title = self.player_state.read(cx).current.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+        let current_artist = self.player_state.read(cx).current.as_ref().map(|t| t.artist.clone()).unwrap_or_default();
+        let position = self.player_state.read(cx).position;
+        let duration = self.player_state.read(cx).duration.unwrap_or(std::time::Duration::ZERO);
 
+        let progress_pct = if duration.as_secs_f64() > 0.0 {
+            (position.as_secs_f64() / duration.as_secs_f64() * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+
+        // Player bar
         let player = div()
             .absolute()
             .left(gpui::px(18.0))
@@ -62,34 +154,179 @@ impl Render for Shell {
             }])
             .flex()
             .items_center()
-            .justify_center()
-            .gap(gpui::px(12.0))
+            .gap(gpui::px(16.0))
+            .px(gpui::px(20.0))
             .child(
+                // Now playing info
                 div()
-                    .text_color(t.clay_ink)
-                    .font_family(theme.ui_font)
-                    .text_size(gpui::px(12.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child("Player bar — Midnight Brass"),
+                    .flex()
+                    .items_center()
+                    .gap(gpui::px(12.0))
+                    .w(gpui::px(260.0))
+                    .child(
+                        div()
+                            .w(gpui::px(52.0))
+                            .h(gpui::px(52.0))
+                            .rounded(gpui::px(14.0))
+                            .bg(t.glass_tint)
+                            .border_1()
+                            .border_color(t.glass_border),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(gpui::px(2.0))
+                            .child(
+                                div()
+                                    .text_size(gpui::px(12.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(t.clay_ink)
+                                    .child(if current_title.is_empty() { "Nothing playing".to_string() } else { current_title.clone() }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(gpui::px(9.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .child(current_artist.clone()),
+                            ),
+                    ),
             )
             .child(
+                // Transport
                 div()
-                    .px(gpui::px(10.0))
-                    .py(gpui::px(6.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(t.gold)
-                    .text_color(t.clay_ink)
-                    .font_family(theme.ui_font)
-                    .text_size(gpui::px(10.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .cursor_pointer()
-                    .id("play-btn")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.player_handle.tx.send(PlayerCommand::Toggle).ok();
-                    }))
-                    .child("▶"),
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(gpui::px(6.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(gpui::px(14.0))
+                            .child(
+                                div()
+                                    .w(gpui::px(24.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(t.clay_ink)
+                                    .child("⏮"),
+                            )
+                            .child(
+                                div()
+                                    .w(gpui::px(44.0))
+                                    .h(gpui::px(44.0))
+                                    .rounded(gpui::px(999.0))
+                                    .bg(t.gold)
+                                    .text_color(t.clay_ink)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(16.0))
+                                    .cursor_pointer()
+                                    .id("play-btn")
+                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                        this.player_handle.tx.send(PlayerCommand::Toggle).ok();
+                                    }))
+                                    .child(if is_playing { "⏸" } else { "▶" }),
+                            )
+                            .child(
+                                div()
+                                    .w(gpui::px(24.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(t.clay_ink)
+                                    .child("⏭"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(gpui::px(8.0))
+                            .w(gpui::px(320.0))
+                            .child(
+                                div()
+                                    .text_size(gpui::px(8.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .child(format_time(position.as_secs_f64())),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h(gpui::px(6.0))
+                                    .rounded(gpui::px(999.0))
+                                    .bg(t.clay_shade)
+                                    .child(
+                                        div()
+                                            .w(gpui::px(progress_pct as f32 * 3.2))
+                                            .h_full()
+                                            .rounded(gpui::px(999.0))
+                                            .bg(t.gold),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(gpui::px(8.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .child(format_time(duration.as_secs_f64())),
+                            ),
+                    ),
+            )
+            .child(
+                // Right controls
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(gpui::px(12.0))
+                    .w(gpui::px(180.0))
+                    .child(
+                        div()
+                            .text_size(gpui::px(9.0))
+                            .text_color(t.clay_ink)
+                            .child("VOL"),
+                    )
+                    .child(
+                        div()
+                            .w(gpui::px(60.0))
+                            .h(gpui::px(5.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(t.clay_shade)
+                            .child(
+                                div()
+                                    .w(gpui::px(37.0))
+                                    .h_full()
+                                    .rounded(gpui::px(999.0))
+                                    .bg(t.os_accent),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px(gpui::px(10.0))
+                            .py(gpui::px(6.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(gpui::rgb(0x2A241C))
+                            .text_color(t.gold_light)
+                            .text_size(gpui::px(8.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .cursor_pointer()
+                            .id("pin-btn")
+                            .on_click(cx.listener(|this, _event, _window, _cx| {
+                                this.open_overlay(_cx);
+                            }))
+                            .child("Pin lyrics"),
+                    ),
             );
 
+        // Glass shell with home content
         div()
             .size_full()
             .bg(t.bg_base)
@@ -112,6 +349,7 @@ impl Render for Shell {
                     .flex()
                     .overflow_hidden()
                     .child(
+                        // Sidebar
                         div()
                             .w(gpui::px(212.0))
                             .flex_shrink_0()
@@ -198,8 +436,8 @@ impl Render for Shell {
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .cursor_pointer()
                                             .id("pin-btn")
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.open_overlay(cx);
+                                            .on_click(cx.listener(|this, _event, _window, _cx| {
+                                                this.open_overlay(_cx);
                                             }))
                                             .child("Pin lyrics"),
                                     ),
@@ -427,4 +665,10 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
                 .text_color(if active { t.clay_ink } else { t.text_tertiary })
                 .child(dur.to_string()),
         )
+}
+
+fn format_time(seconds: f64) -> String {
+    let mins = (seconds / 60.0) as u64;
+    let secs = (seconds % 60.0) as u64;
+    format!("{}:{:02}", mins, secs)
 }

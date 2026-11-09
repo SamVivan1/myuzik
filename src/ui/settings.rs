@@ -1,6 +1,6 @@
-use crate::config::{AppConfig, StreamQuality};
+use crate::config::AppConfig;
 use crate::theme::midnight_brass;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Render, Window, div, prelude::*};
 
 pub struct SettingsView {
     pub config: AppConfig,
@@ -61,7 +61,7 @@ impl Render for SettingsView {
     }
 }
 
-fn section(title: &str, t: &crate::theme::Colors, font: &'static str, rows: Vec<(&str, &str)>) -> gpui::Div {
+fn section(title: &str, t: &crate::theme::Colors, _font: &'static str, rows: Vec<(&str, &str)>) -> gpui::Div {
     let mut s = div()
         .flex()
         .flex_col()

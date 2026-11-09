@@ -83,6 +83,7 @@ impl Queue {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Track> {
         if self.items.is_empty() {
             return None;
@@ -179,10 +180,9 @@ impl Queue {
             self.shuffle_order.swap(i, j);
         }
         // move current to front
-        if let Some(cur) = self.current {
-            if let Some(pos) = self.shuffle_order.iter().position(|&x| x == cur) {
-                self.shuffle_order.swap(0, pos);
-            }
+        if let Some(cur) = self.current
+            && let Some(pos) = self.shuffle_order.iter().position(|&x| x == cur) {
+            self.shuffle_order.swap(0, pos);
         }
         self.shuffle_pos = 0;
     }

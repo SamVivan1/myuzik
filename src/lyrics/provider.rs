@@ -96,12 +96,10 @@ impl LyricsProvider {
             urlencoding::encode(&track.album),
             duration
         );
-        if let Ok(resp) = agent.get(&url).header("User-Agent", &self.user_agent).call() {
-            if let Ok(json) = resp.into_body().read_json::<serde_json::Value>() {
-                if let Some(status) = build_result(&json) {
-                    return Some(status);
-                }
-            }
+        if let Ok(resp) = agent.get(&url).header("User-Agent", &self.user_agent).call()
+            && let Ok(json) = resp.into_body().read_json::<serde_json::Value>()
+            && let Some(status) = build_result(&json) {
+            return Some(status);
         }
         // fallback search
         let search_url = format!(
@@ -109,9 +107,9 @@ impl LyricsProvider {
             urlencoding::encode(&track.artist),
             urlencoding::encode(&track.title)
         );
-        if let Ok(resp) = agent.get(&search_url).header("User-Agent", &self.user_agent).call() {
-            if let Ok(json) = resp.into_body().read_json::<serde_json::Value>() {
-                if let Some(arr) = json.as_array() {
+        if let Ok(resp) = agent.get(&search_url).header("User-Agent", &self.user_agent).call()
+            && let Ok(json) = resp.into_body().read_json::<serde_json::Value>()
+            && let Some(arr) = json.as_array() {
                     let mut plain = None;
                     for entry in arr {
                         if let Some(status) = build_result(entry) {
@@ -126,8 +124,6 @@ impl LyricsProvider {
                     if let Some(p) = plain {
                         return Some(p);
                     }
-                }
-            }
         }
         None
     }

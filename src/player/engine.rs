@@ -60,7 +60,7 @@ pub fn spawn_player() -> PlayerHandle {
             }
         };
 
-        let _ = pipeline.set_property("volume", 0.8_f64);
+         pipeline.set_property("volume", 0.8_f64);
 
         let bus = pipeline.bus().expect("bus");
         let evt_tx_bus = evt_tx.clone();
@@ -132,7 +132,7 @@ fn handle_command(pipeline: &gst::Element, cmd: PlayerCommand, evt_tx: &flume::S
     match cmd {
         PlayerCommand::Load { uri, track_id } => {
             let _ = pipeline.set_state(gst::State::Ready);
-            let _ = pipeline.set_property("uri", uri);
+             pipeline.set_property("uri", uri);
             let _ = pipeline.set_state(gst::State::Playing);
             let _ = evt_tx.send(PlayerEvent::TrackStarted(track_id));
         }
@@ -157,7 +157,7 @@ fn handle_command(pipeline: &gst::Element, cmd: PlayerCommand, evt_tx: &flume::S
             );
         }
         PlayerCommand::SetVolume(v) => {
-            let _ = pipeline.set_property("volume", v as f64);
+             pipeline.set_property("volume", v as f64);
         }
         PlayerCommand::Stop => {
             let _ = pipeline.set_state(gst::State::Null);
