@@ -1,0 +1,8 @@
+{
+  "uuid": "myuzik-pin@samvivan1.github.io",
+  "name": "Myuzik Pin",
+  "description": "Keeps the Myuzik lyrics window above other windows and on all workspaces.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 1,
+  "url": "https://github.com/samvivan1/myuzik"
+}

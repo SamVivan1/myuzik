@@ -1,0 +1,40 @@
+[package]
+name = "myuzik"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Personal Navidrome music player with synced lyrics for Linux"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "14b7b0ef3764d62a85070c8b5ccea105a2ad3235" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "14b7b0ef3764d62a85070c8b5ccea105a2ad3235" }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.2"
+directories = "6"
+md-5 = "0.11"
+sha2 = "0.11"
+hex = "0.4"
+url = "2"
+percent-encoding = "2"
+ureq = { version = "3.5", features = ["rustls", "json"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+flume = "0.12"
+gstreamer = { version = "0.25", features = ["v1_24"], optional = true }
+mpris-server = "0.11"
+keyring = { version = "4.2", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+ashpd = { version = "0.14", features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+urlencoding = "2"
+
+[features]
+default = ["audio"]
+audio = ["dep:gstreamer"]
+
+[dev-dependencies]
+httpmock = "0.8"
