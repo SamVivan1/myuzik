@@ -43,6 +43,7 @@ impl Shell {
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
         let mpris_for_loop = mpris_handle.clone();
+        let now_playing_for_loop = now_playing.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
             let hs = home_state.clone();
@@ -80,6 +81,13 @@ impl Shell {
                             });
                         });
                         if let Some(mh) = &mpris_for_loop { mh.update_position(pos); }
+                        let np = now_playing_for_loop.clone();
+                        let dur = cx.update(|app| state.read(app).duration.map(|d| d.as_secs_f64()).unwrap_or(0.0));
+                        cx.update(|app| {
+                            app.update_entity(&np, |v, cx| {
+                                v.set_position(cx, pos.as_secs_f64(), dur);
+                            });
+                        });
                     }
                     Ok(PlayerEvent::Duration(dur)) => {
                         cx.update(|app| {
