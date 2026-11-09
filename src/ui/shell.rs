@@ -1,20 +1,18 @@
+use crate::player::engine::{PlayerCommand, PlayerHandle};
+use crate::platform::mpris::MprisHandle;
 use crate::theme::midnight_brass;
-use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle, spawn_player};
-use crate::player::state::{PlayerState, PlaybackStatus};
 use gpui::{Context, Render, Window, div, prelude::*, px};
 
 pub struct Shell {
-    player_state: gpui::Entity<PlayerState>,
     player_handle: PlayerHandle,
+    mpris_handle: Option<MprisHandle>,
 }
 
 impl Shell {
-    pub fn new(cx: &mut gpui::App) -> Self {
-        let player_state = cx.new(|_cx| PlayerState::new());
-        let player_handle = spawn_player();
+    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, mpris_handle: Option<MprisHandle>) -> Self {
         Self {
-            player_state,
             player_handle,
+            mpris_handle,
         }
     }
 
@@ -38,43 +36,13 @@ impl Shell {
     }
 
     pub fn close_overlay(&mut self, _cx: &mut gpui::App) {}
-
-    pub fn play(&self) {
-        self.player_handle.tx.send(PlayerCommand::Play).ok();
-    }
-
-    pub fn pause(&self) {
-        self.player_handle.tx.send(PlayerCommand::Pause).ok();
-    }
-
-    pub fn toggle(&self) {
-        self.player_handle.tx.send(PlayerCommand::Toggle).ok();
-    }
-
-    pub fn next(&self) {
-        self.player_handle.tx.send(PlayerCommand::Stop).ok();
-    }
-
-    pub fn previous(&self) {
-        self.player_handle.tx.send(PlayerCommand::Stop).ok();
-    }
-
-    pub fn seek(&self, pos: std::time::Duration) {
-        self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
-    }
-
-    pub fn set_volume(&self, v: f32) {
-        self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
-    }
 }
 
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
-        let is_playing = self.player_state.read(cx).status == PlaybackStatus::Playing;
 
-        // Player bar
         let player = div()
             .absolute()
             .left(gpui::px(18.0))
@@ -115,10 +83,13 @@ impl Render for Shell {
                     .text_size(gpui::px(10.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .cursor_pointer()
-                    .child(if is_playing { "⏸" } else { "▶" }),
+                    .id("play-btn")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.player_handle.tx.send(PlayerCommand::Toggle).ok();
+                    }))
+                    .child("▶"),
             );
 
-        // Glass shell with home content
         div()
             .size_full()
             .bg(t.bg_base)
@@ -141,7 +112,6 @@ impl Render for Shell {
                     .flex()
                     .overflow_hidden()
                     .child(
-                        // Sidebar
                         div()
                             .w(gpui::px(212.0))
                             .flex_shrink_0()
@@ -192,6 +162,23 @@ impl Render for Shell {
                                     .child(nav_item("Artists", false, t))
                                     .child(nav_item("Playlists", false, t))
                                     .child(nav_item("Favorites", false, t)),
+                            )
+                            .child(
+                                div()
+                                    .mt(gpui::px(8.0))
+                                    .text_size(gpui::px(9.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(t.text_tertiary)
+                                    .child("YOUR PLAYLISTS"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(2.0))
+                                    .child(playlist_item("Late night drive", t))
+                                    .child(playlist_item("Focus / no vocals", t))
+                                    .child(playlist_item("Sunday morning", t)),
                             )
                             .child(
                                 div()
@@ -321,6 +308,22 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .text_size(gpui::px(12.0))
             .child(label.to_string())
     }
+}
+
+fn playlist_item(label: &str, t: &crate::theme::Colors) -> gpui::Div {
+    gpui::div()
+        .flex()
+        .items_center()
+        .gap(gpui::px(8.0))
+        .text_size(gpui::px(11.0))
+        .text_color(t.text_secondary)
+        .child(
+            gpui::div()
+                .w(gpui::px(4.0))
+                .h(gpui::px(4.0))
+                .bg(t.gold_deep),
+        )
+        .child(label.to_string())
 }
 
 fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div {
