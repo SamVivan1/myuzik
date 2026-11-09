@@ -19,9 +19,12 @@ fn main() {
     tracing::info!(?paths.config, server = %cfg.server_url, "config loaded");
 
     let app = application();
-    app.run(|cx| {
+    app.run(move |cx| {
         let player_handle = spawn_player();
         let _mpris_handle = start_mpris(player_handle.tx.clone()).ok();
+
+        let config = cfg.clone();
+        let paths = paths.clone();
 
         let opts = WindowOptions {
             window_background: WindowBackgroundAppearance::Blurred,
@@ -29,7 +32,7 @@ fn main() {
             ..Default::default()
         };
         cx.open_window(opts, |_window, cx| {
-            cx.new(|cx| Shell::new(cx, player_handle))
+            cx.new(|cx| Shell::new(cx, player_handle, config, paths))
         })
         .expect("failed to open window");
     });

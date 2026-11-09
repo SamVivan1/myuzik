@@ -1,16 +1,30 @@
+use crate::app::Route;
+use crate::config::{AppConfig, Paths};
+use crate::navidrome::client::NavidromeClient;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
 use crate::player::state::{PlayerState, PlaybackStatus};
 use crate::theme::midnight_brass;
 use gpui::{Context, Render, Window, div, prelude::*};
 
+#[allow(dead_code)]
 pub struct Shell {
     player_state: gpui::Entity<PlayerState>,
     player_handle: PlayerHandle,
+    config: AppConfig,
+    paths: Paths,
+    route: Route,
+    #[allow(dead_code)]
+    client: Option<NavidromeClient>,
 }
 
 impl Shell {
-    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle) -> Self {
+    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
+        let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
+        let password = crate::config::load_password(&paths);
+        let client = if !config.server_url.is_empty() {
+            password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok())
+        } else { None };
         // Poll player events in background
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
@@ -62,6 +76,10 @@ impl Shell {
         Self {
             player_state,
             player_handle,
+            config,
+            paths,
+            route,
+            client,
         }
     }
 

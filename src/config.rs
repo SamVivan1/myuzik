@@ -53,6 +53,7 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct Paths {
     pub config: PathBuf,
     pub cache: PathBuf,
@@ -83,6 +84,35 @@ impl Paths {
         }
         Ok(())
     }
+}
+
+
+pub fn credentials_path(paths: &Paths) -> PathBuf {
+    paths.config.parent().unwrap_or(&paths.cache).join("credentials")
+}
+
+pub fn load_password(paths: &Paths) -> Option<String> {
+    let p = credentials_path(paths);
+    if !p.exists() { return None; }
+    std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+pub fn save_password(paths: &Paths, password: &str) -> anyhow::Result<()> {
+    paths.ensure()?;
+    let p = credentials_path(paths);
+    std::fs::write(&p, password)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&p)?.permissions();
+        perm.set_mode(0o600);
+        std::fs::set_permissions(&p, perm)?;
+    }
+    Ok(())
+}
+
+pub fn delete_password(paths: &Paths) {
+    let _ = std::fs::remove_file(credentials_path(paths));
 }
 
 pub fn load_config(paths: &Paths) -> Result<AppConfig> {
