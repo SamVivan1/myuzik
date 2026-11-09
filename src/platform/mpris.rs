@@ -1,4 +1,5 @@
 use crate::library::Track;
+use crate::player::engine::PlayerCommand;
 use crate::player::state::PlaybackStatus;
 use flume::Sender;
 use mpris_server::Player;
@@ -17,7 +18,7 @@ pub struct MprisHandle {
     pub cmd_tx: Sender<MprisCommand>,
 }
 
-pub fn start_mpris() -> std::result::Result<MprisHandle, String> {
+pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<MprisHandle, String> {
     let (cmd_tx, cmd_rx) = flume::unbounded::<MprisCommand>();
 
     std::thread::spawn(move || {
@@ -31,7 +32,7 @@ pub fn start_mpris() -> std::result::Result<MprisHandle, String> {
 
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async move {
-            let player = match Player::builder("Myuzik")
+            let player = match Player::builder("io.github.samvivan1.Myuzik")
                 .identity("Myuzik")
                 .desktop_entry("io.github.samvivan1.Myuzik")
                 .can_play(true)
@@ -50,17 +51,30 @@ pub fn start_mpris() -> std::result::Result<MprisHandle, String> {
                 }
             };
 
-            // Handle control callbacks
-            player.connect_play_pause(|_p| {
-                // In v1, MPRIS play/pause is handled by the player thread.
-                // The UI should observe MPRIS commands; for now, log.
+            // Handle control callbacks — forward to player thread
+            let player_tx_clone = player_tx.clone();
+            player.connect_play_pause(move |_p| {
+                let _ = player_tx_clone.send(PlayerCommand::Toggle);
             });
-            player.connect_next(|_p| {});
-            player.connect_previous(|_p| {});
-            player.connect_seek(|_p, _time| {});
-            player.connect_set_position(|_p, _track_id, _time| {});
+            let player_tx_clone = player_tx.clone();
+            player.connect_next(move |_p| {
+                let _ = player_tx_clone.send(PlayerCommand::Stop); // placeholder: next
+            });
+            let player_tx_clone = player_tx.clone();
+            player.connect_previous(move |_p| {
+                let _ = player_tx_clone.send(PlayerCommand::Stop); // placeholder: previous
+            });
+            let player_tx_clone = player_tx.clone();
+            player.connect_seek(move |_p, time| {
+                let pos = Duration::from_micros(time.as_micros() as u64);
+                let _ = player_tx_clone.send(PlayerCommand::Seek(pos));
+            });
+            let player_tx_clone = player_tx.clone();
+            player.connect_set_position(move |_p, _track_id, time| {
+                let pos = Duration::from_micros(time.as_micros() as u64);
+                let _ = player_tx_clone.send(PlayerCommand::Seek(pos));
+            });
 
-            // Spawn the player event loop
             tokio::task::spawn_local(player.run());
 
             // Process commands
@@ -72,21 +86,33 @@ pub fn start_mpris() -> std::result::Result<MprisHandle, String> {
                         meta.set_artist(Some(vec![track.artist.clone()]));
                         meta.set_album(Some(track.album.clone()));
                         meta.set_album_artist(Some(vec![track.artist.clone()]));
-                        meta.set_length(Some(mpris_server::Time::from_micros(track.duration.as_micros() as i64)));
+                        meta.set_length(Some(mpris_server::Time::from_micros(
+                            track.duration.as_micros() as i64,
+                        )));
                         if let Some(url) = art_url {
                             meta.set_art_url(Some(url));
                         }
-                        if let Ok(tid) = mpris_server::TrackId::try_from(format!("/org/mpris/MediaPlayer2/Track/{}", track.id)) {
+                        if let Ok(tid) = mpris_server::TrackId::try_from(format!(
+                            "/org/mpris/MediaPlayer2/Track/{}",
+                            track.id
+                        )) {
                             meta.set_trackid(Some(tid));
+                        }
+                        if let Some(n) = track.track_number {
+                            meta.set_track_number(Some(n as i32));
+                        }
+                        if let Some(n) = track.disc_number {
+                            meta.set_disc_number(Some(n as i32));
                         }
                         let _ = player.set_metadata(meta).await;
                         let _ = player.set_can_go_next(true).await;
                         let _ = player.set_can_go_previous(true).await;
                     }
                     MprisCommand::UpdateStatus(status) => {
+                        use crate::player::state::PlaybackStatus;
                         let ps = match status {
-                            crate::player::state::PlaybackStatus::Playing => mpris_server::PlaybackStatus::Playing,
-                            crate::player::state::PlaybackStatus::Paused => mpris_server::PlaybackStatus::Paused,
+                            PlaybackStatus::Playing => mpris_server::PlaybackStatus::Playing,
+                            PlaybackStatus::Paused => mpris_server::PlaybackStatus::Paused,
                             _ => mpris_server::PlaybackStatus::Stopped,
                         };
                         let _ = player.set_playback_status(ps).await;

@@ -1,3 +1,3 @@
 pub mod lyrics_view;
 
-pub use lyrics_view::target_offset;
+pub use lyrics_view::LyricsView;
