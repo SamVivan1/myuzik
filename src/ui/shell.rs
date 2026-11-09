@@ -4,6 +4,9 @@ use crate::navidrome::client::NavidromeClient;
 use std::sync::Arc;
 use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
+use crate::ui::now_playing::NowPlayingView;
+use crate::ui::search::SearchView;
+use crate::ui::settings::SettingsView;
 use crate::player::state::{PlayerState, PlaybackStatus};
 use crate::theme::midnight_brass;
 use gpui::{Context, Render, Window, div, prelude::*};
@@ -18,6 +21,9 @@ pub struct Shell {
     #[allow(dead_code)]
     client: Option<Arc<NavidromeClient>>,
     home_state: gpui::Entity<HomeState>,
+    now_playing: gpui::Entity<NowPlayingView>,
+    search_view: gpui::Entity<SearchView>,
+    settings_view: gpui::Entity<SettingsView>,
     mpris_handle: Option<MprisHandle>,
 }
 
@@ -25,6 +31,9 @@ impl Shell {
     pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths, mpris_handle: Option<MprisHandle>) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
         let home_state = cx.new(|_cx| HomeState::default());
+        let now_playing = cx.new(|cx| NowPlayingView::new(cx));
+        let search_view = cx.new(|_cx| SearchView::new());
+        let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
         let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
@@ -108,6 +117,9 @@ impl Shell {
             route,
             client,
             home_state,
+            now_playing,
+            search_view,
+            settings_view,
             mpris_handle,
         }
     }
@@ -441,12 +453,12 @@ impl Render for Shell {
                                     .flex()
                                     .flex_col()
                                     .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", true, t))
-                                    .child(nav_item("Search", false, t))
-                                    .child(nav_item("Albums", false, t))
-                                    .child(nav_item("Artists", false, t))
-                                    .child(nav_item("Playlists", false, t))
-                                    .child(nav_item("Favorites", false, t)),
+                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Search; })))
+                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
+                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
+                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; }))),
                             )
                             .child(
                                 div()
@@ -511,14 +523,27 @@ impl Render for Shell {
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(t.gold)
-                                            .child("YOUR LIBRARY"),
+                                            .child(match self.route {
+                                                crate::app::Route::Home => "YOUR LIBRARY",
+                                                crate::app::Route::Search => "SEARCH",
+                                                crate::app::Route::NowPlaying => "NOW PLAYING",
+                                                crate::app::Route::Settings => "SETTINGS",
+                                                _ => "MYUZIK",
+                                            }),
                                     )
                                     .child(
                                         div()
                                             .font_family(theme.display_font)
                                             .text_size(gpui::px(30.0))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child("Good evening"),
+                                            .child(match self.route {
+                                                crate::app::Route::Home => "Good evening",
+                                                crate::app::Route::Search => "Search",
+                                                crate::app::Route::NowPlaying => "Now Playing",
+                                                crate::app::Route::Settings => "Settings",
+                                                crate::app::Route::Setup => "Setup",
+                                                _ => "Myuzik",
+                                            }),
                                     )
                                     .child(
                                         div()
