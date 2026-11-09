@@ -1,6 +1,7 @@
 pub mod components;
 pub mod home;
 pub mod now_playing;
+pub mod search;
 pub mod settings;
 pub mod shell;
 
