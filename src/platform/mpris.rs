@@ -14,6 +14,7 @@ pub enum MprisCommand {
     Quit,
 }
 
+#[derive(Clone)]
 pub struct MprisHandle {
     pub cmd_tx: Sender<MprisCommand>,
 }

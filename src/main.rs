@@ -21,7 +21,7 @@ fn main() {
     let app = application();
     app.run(move |cx| {
         let player_handle = spawn_player();
-        let _mpris_handle = start_mpris(player_handle.tx.clone()).ok();
+        let mpris_handle = start_mpris(player_handle.tx.clone()).ok();
 
         let config = cfg.clone();
         let paths = paths.clone();
@@ -32,7 +32,7 @@ fn main() {
             ..Default::default()
         };
         cx.open_window(opts, |_window, cx| {
-            cx.new(|cx| Shell::new(cx, player_handle, config, paths))
+            cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle))
         })
         .expect("failed to open window");
     });

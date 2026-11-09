@@ -1,6 +1,7 @@
 use crate::app::Route;
 use crate::config::{AppConfig, Paths};
 use crate::navidrome::client::NavidromeClient;
+use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
 use crate::player::state::{PlayerState, PlaybackStatus};
 use crate::theme::midnight_brass;
@@ -15,10 +16,11 @@ pub struct Shell {
     route: Route,
     #[allow(dead_code)]
     client: Option<NavidromeClient>,
+    mpris_handle: Option<MprisHandle>,
 }
 
 impl Shell {
-    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths) -> Self {
+    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths, mpris_handle: Option<MprisHandle>) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
         let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
         let password = crate::config::load_password(&paths);
@@ -28,6 +30,7 @@ impl Shell {
         // Poll player events in background
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
+        let mpris_for_loop = mpris_handle.clone();
         cx.spawn(async move |cx| {
             loop {
                 match rx.recv_async().await {
@@ -37,6 +40,7 @@ impl Shell {
                                 ps.set_status(s);
                             });
                         });
+                        if let Some(mh) = &mpris_for_loop { mh.update_status(s); }
                     }
                     Ok(PlayerEvent::Position(pos)) => {
                         cx.update(|app| {
@@ -44,6 +48,7 @@ impl Shell {
                                 ps.set_position(pos);
                             });
                         });
+                        if let Some(mh) = &mpris_for_loop { mh.update_position(pos); }
                     }
                     Ok(PlayerEvent::Duration(dur)) => {
                         cx.update(|app| {
@@ -80,6 +85,7 @@ impl Shell {
             paths,
             route,
             client,
+            mpris_handle,
         }
     }
 
