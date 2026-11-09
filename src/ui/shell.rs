@@ -591,16 +591,18 @@ impl Render for Shell {
                                             .child("See all"),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .grid()
-                                    .grid_cols(4)
-                                    .gap(gpui::px(14.0))
-                                    .child(album_card("Neon Harbor", "Lumen Fields", t))
-                                    .child(album_card("Moss & Static", "Kite Garden", t))
-                                    .child(album_card("Golden Hour", "Vela", t))
-                                    .child(album_card("Blue Terminal", "Nightshift", t)),
-                            )
+                            .child({
+                                let hs = self.home_state.read(cx);
+                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
+                                if hs.albums.is_empty() {
+                                    grid = grid.child(album_card("No albums", "Connect a server", t));
+                                } else {
+                                    for a in hs.albums.iter().take(8) {
+                                        grid = grid.child(album_card(&a.name, &a.artist, t));
+                                    }
+                                }
+                                grid
+                            })
                             .child(
                                 div()
                                     .font_family(theme.display_font)
