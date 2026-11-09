@@ -1,6 +1,7 @@
 use crate::app::Route;
 use crate::config::{AppConfig, Paths};
 use crate::navidrome::client::NavidromeClient;
+use std::sync::Arc;
 use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
 use crate::player::state::{PlayerState, PlaybackStatus};
@@ -15,22 +16,43 @@ pub struct Shell {
     paths: Paths,
     route: Route,
     #[allow(dead_code)]
-    client: Option<NavidromeClient>,
+    client: Option<Arc<NavidromeClient>>,
+    home_state: gpui::Entity<HomeState>,
     mpris_handle: Option<MprisHandle>,
 }
 
 impl Shell {
     pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths, mpris_handle: Option<MprisHandle>) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
+        let home_state = cx.new(|_cx| HomeState::default());
         let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
-            password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok())
+            password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok()).map(Arc::new)
         } else { None };
         // Poll player events in background
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
         let mpris_for_loop = mpris_handle.clone();
+        // Fetch home data asynchronously
+        if let Some(client) = client.clone() {
+            let hs = home_state.clone();
+            cx.spawn(async move |cx| {
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| { h.loading = true; });
+                });
+                let res = client.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0);
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| {
+                        h.loading = false;
+                        match res {
+                            Ok(albums) => h.albums = albums,
+                            Err(e) => h.error = Some(format!("{:?}", e)),
+                        }
+                    });
+                });
+            }).detach();
+        }
         cx.spawn(async move |cx| {
             loop {
                 match rx.recv_async().await {
@@ -85,6 +107,7 @@ impl Shell {
             paths,
             route,
             client,
+            home_state,
             mpris_handle,
         }
     }
@@ -496,6 +519,23 @@ impl Render for Shell {
                                             .text_size(gpui::px(30.0))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child("Good evening"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(gpui::px(9.0))
+                                            .text_color(t.text_tertiary)
+                                            .child({
+                                                let hs = self.home_state.read(cx);
+                                                if hs.loading {
+                                                    "Loading library…".to_string()
+                                                } else if let Some(e) = &hs.error {
+                                                    format!("Library error: {}", e)
+                                                } else if hs.albums.is_empty() {
+                                                    "No albums loaded".to_string()
+                                                } else {
+                                                    format!("{} albums loaded", hs.albums.len())
+                                                }
+                                            }),
                                     ),
                             )
                             .child(
@@ -695,4 +735,11 @@ fn format_time(seconds: f64) -> String {
     let mins = (seconds / 60.0) as u64;
     let secs = (seconds % 60.0) as u64;
     format!("{}:{:02}", mins, secs)
+}
+
+#[derive(Clone, Default)]
+pub struct HomeState {
+    pub albums: Vec<crate::library::Album>,
+    pub loading: bool,
+    pub error: Option<String>,
 }
