@@ -1,6 +1,7 @@
 pub mod components;
 pub mod home;
 pub mod now_playing;
+pub mod settings;
 pub mod shell;
 
 pub use components::LyricsView;
