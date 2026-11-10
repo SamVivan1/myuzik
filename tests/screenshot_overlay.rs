@@ -269,6 +269,37 @@ fn capture_overlay_states() {
         }
     }
 
+    // ---- 1d. the reported case: minimum window, long title, no cover ----
+    {
+        let st = state.clone();
+        cx.update(move |app| {
+            st.update(app, |s, _| {
+                s.begin("Kenangan Yang Hilang".to_string(), "Aryiion".to_string());
+                s.set_status(&LyricsStatus::NotFound);
+                s.sync_position(Duration::from_secs(28), 0, Some(Duration::from_secs(193)));
+            });
+        });
+        cx.update(|app| app.refresh_windows());
+        let any = cx.update(|app| {
+            app.windows()
+                .iter()
+                .find(|w| w.downcast::<myuzik::overlay::PinnedLyricsView>().is_some())
+                .copied()
+        });
+        if let Some(any) = any {
+            let _ = cx.update_window(any, |_view, window, _cx| {
+                window.resize(gpui::size(
+                    gpui::px(myuzik::overlay::MIN_WIDTH as f32),
+                    gpui::px(myuzik::overlay::MIN_HEIGHT as f32),
+                ));
+            });
+            capture("overlay-title-wrap", &mut cx, any, false);
+            let _ = cx.update_window(any, |_view, window, _cx| {
+                window.resize(gpui::size(gpui::px(W as f32), gpui::px(H as f32)));
+            });
+        }
+    }
+
     // ---- 2. unsynced transcript ----
     {
         let st = state.clone();

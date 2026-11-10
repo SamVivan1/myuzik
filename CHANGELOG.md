@@ -31,8 +31,9 @@
 - Long lines wrap inside the lyric column instead of running past the panel edge, and each row's
   height is estimated from the wrap so neighbouring lines no longer overlap; the scroll target adds
   those heights up, keeping the active line centred.
-- The minimum overlay size is 520x300 so the footer (progress bar and both timestamps) always fits,
-  and a saved small geometry from an older version is clamped up to it.
+- The minimum overlay size is 520x300, the window pins that as its `window_min_size`, and nothing in
+  the left column can be shrunk by flex. The artwork now shrinks to give the text block room, so a
+  two-line title at the minimum height no longer pushes the timestamps past the bottom edge.
 - The lyric band now scrolls instead of swapping a fixed slice: every line is laid out once and the
   column glides (380 ms, ease-out) so the line being sung stays centred, with the surrounding lines
   clipped at the edges — the behaviour of the media widget in `device-tweak/Widget`. Rows use one

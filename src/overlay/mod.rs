@@ -515,9 +515,21 @@ impl Render for PinnedLyricsView {
         };
 
         // ---- left column: artwork, title, artist, progress ----
+        //
+        // How tall the text under the artwork will be: a title can wrap to two
+        // lines, and at the minimum window height a fixed artwork would push the
+        // timestamps past the bottom edge.
+        let available_h = f32::from(window.bounds().size.height) - 40.0;
+        let title_lines = (title.chars().count() as f32 / (LEFT_COLUMN / (20.0 * 0.5)).max(4.0))
+            .ceil()
+            .clamp(1.0, 2.0);
+        let title_h = title_lines * 25.0;
+        let fixed_below = 10.0 + 4.0 + 16.0 + 12.0 + 5.0 + 6.0 + 12.0;
+        let art_side = (available_h - title_h - fixed_below).clamp(72.0, LEFT_COLUMN);
+
         let art = div()
-            .w(gpui::px(LEFT_COLUMN))
-            .h(gpui::px(LEFT_COLUMN))
+            .w(gpui::px(art_side))
+            .h(gpui::px(art_side))
             .flex_none()
             .rounded(gpui::px(18.0))
             .overflow_hidden()
@@ -535,8 +547,8 @@ impl Render for PinnedLyricsView {
                     .size_full()
                     .child(
                         gpui::img(gpui::ImageSource::Image(image.clone()))
-                            .w(gpui::px(LEFT_COLUMN))
-                            .h(gpui::px(LEFT_COLUMN))
+                            .w(gpui::px(art_side))
+                            .h(gpui::px(art_side))
                             .object_fit(gpui::ObjectFit::Cover),
                     )
                     .into_any_element(),
