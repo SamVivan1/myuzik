@@ -930,3 +930,90 @@ fn global_shortcuts_work(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Search);
 }
+
+#[gpui::test]
+fn stale_search_response_is_discarded(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    let _slow = server.mock(|when, then| {
+        when.method(GET).path("/rest/search3.view").query_param("query", "a");
+        then.delay(Duration::from_secs(2))
+            .status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""searchResult3":{"song":[{"id":"slow","title":"Slow","artist":"A","album":"X","duration":100}],"album":[],"artist":[]}"#));
+    });
+    let _fast = server.mock(|when, then| {
+        when.method(GET).path("/rest/search3.view").query_param("query", "alpha");
+        then.status(200).header("content-type", "application/json").body(ok(r#""searchResult3":{"song":[{"id":"f1","title":"Fast One","artist":"A","album":"X","duration":100},{"id":"f2","title":"Fast Two","artist":"A","album":"X","duration":100}],"album":[],"artist":[]}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("stalesearch");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, _crx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(_crx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+
+    let search = cx.debug_bounds("nav-search").expect("nav-search");
+    cx.simulate_click(search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("lpha");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.search_result_count()) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(shell.read_with(&cx, |s, _| s.search_result_count()), 2);
+    std::thread::sleep(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.search_result_count()),
+        2,
+        "stale search response overwrote newer results"
+    );
+}

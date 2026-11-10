@@ -86,3 +86,35 @@ fn play_next_inserts_after_current() {
     assert_eq!(q.next().unwrap().id, "b");
     assert_eq!(q.next().unwrap().id, "c");
 }
+
+#[test]
+fn rapid_next_previous_stays_consistent() {
+    let paths = myuzik::config::Paths::new().unwrap();
+    let _ = paths;
+    let tracks: Vec<myuzik::library::Track> = (0..50)
+        .map(|i| myuzik::library::Track {
+            id: format!("t{i}"),
+            title: format!("Track {i}"),
+            artist: "A".into(),
+            artist_id: None,
+            album: "X".into(),
+            album_id: None,
+            cover_art_id: None,
+            duration: std::time::Duration::from_secs(180),
+            track_number: Some(i + 1),
+            disc_number: Some(1),
+            year: None,
+            starred: false,
+        })
+        .collect();
+    let mut q = myuzik::player::queue::Queue::new();
+    q.set_repeat(myuzik::player::queue::RepeatMode::All);
+    q.play_now(tracks, 0);
+    for _ in 0..100 {
+        assert!(q.next().is_some());
+    }
+    for _ in 0..100 {
+        assert!(q.previous().is_some());
+    }
+    assert!(q.current().is_some());
+}

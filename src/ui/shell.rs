@@ -45,6 +45,7 @@ pub struct Shell {
     toast: Option<String>,
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
     scrobble_enabled: Arc<std::sync::atomic::AtomicBool>,
+    search_generation: Arc<std::sync::atomic::AtomicU64>,
     setup_server: String,
     setup_user: String,
     setup_pass: String,
@@ -109,6 +110,7 @@ impl Shell {
         let toast = None;
         let lyrics_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let scrobble_enabled = Arc::new(std::sync::atomic::AtomicBool::new(config.scrobble));
+        let search_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let setup_server = if config.server_url.is_empty() {
             "https://".to_string()
         } else {
@@ -353,6 +355,7 @@ impl Shell {
             toast,
             lyrics_generation,
             scrobble_enabled,
+            search_generation,
             setup_server,
             setup_user,
             setup_pass,
@@ -612,7 +615,7 @@ impl Shell {
                 });
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
-                        h.covers.insert(cid.clone(), image.clone());
+                        h.insert_cover(cid.clone(), image.clone());
                     });
                     app.update_entity(&np, |view, _cx| {
                         view.set_cover(Some(image.clone()));
@@ -1275,8 +1278,8 @@ impl Render for Shell {
             .rounded(gpui::px(30.0))
             .bg(gpui::linear_gradient(
                 145.0,
-                gpui::linear_color_stop(gpui::rgb(0xF7F0E4), 0.0),
-                gpui::linear_color_stop(gpui::rgb(0xEADCC4), 1.0),
+                gpui::linear_color_stop(t.clay_gradient_start, 0.0),
+                gpui::linear_color_stop(t.clay_gradient_end, 1.0),
             ))
             .border_1()
             .border_color(gpui::rgba(0xFFFFFFFF))
@@ -1296,7 +1299,7 @@ impl Render for Shell {
                     inset: true,
                 },
                 gpui::BoxShadow {
-                    color: gpui::rgba(0x8C6D3F33).into(),
+                    color: t.shadow_deep.into(),
                     offset: gpui::point(gpui::px(-4.0), gpui::px(-4.0)),
                     blur_radius: gpui::px(10.0),
                     spread_radius: gpui::px(0.0),
@@ -1618,19 +1621,19 @@ impl Render for Shell {
                             .rounded(gpui::px(999.0))
                             .bg(gpui::linear_gradient(
                                 145.0,
-                                gpui::linear_color_stop(gpui::rgb(0x2A241C), 0.0),
-                                gpui::linear_color_stop(gpui::rgb(0x171310), 1.0),
+                                gpui::linear_color_stop(t.clay_dark, 0.0),
+                                gpui::linear_color_stop(t.clay_dark_2, 1.0),
                             ))
                             .shadow(vec![
                                 gpui::BoxShadow {
-                                    color: gpui::rgba(0xFFFFFF14).into(),
+                                    color: t.glass_highlight_strong.into(),
                                     offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
                                     blur_radius: gpui::px(3.0),
                                     spread_radius: gpui::px(0.0),
                                     inset: true,
                                 },
                                 gpui::BoxShadow {
-                                    color: gpui::rgba(0x00000080).into(),
+                                    color: t.scrim.into(),
                                     offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
                                     blur_radius: gpui::px(7.0),
                                     spread_radius: gpui::px(0.0),
@@ -1734,8 +1737,8 @@ impl Render for Shell {
                     .inset_0()
                     .bg(gpui::linear_gradient(
                         135.0,
-                        gpui::linear_color_stop(gpui::rgba(0x1C140BFF), 0.0),
-                        gpui::linear_color_stop(gpui::rgba(0x0B0B0EFF), 1.0),
+                        gpui::linear_color_stop(t.bg_gradient_start, 0.0),
+                        gpui::linear_color_stop(t.bg_gradient_end, 1.0),
                     )),
             )
             .child(
@@ -1746,9 +1749,9 @@ impl Render for Shell {
                     .w(gpui::px(820.0))
                     .h(gpui::px(620.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0xC9A86A3A))
+                    .bg(t.gold_glow)
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0xC9A86A55).into(),
+                        color: t.gold_glow_border.into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                         blur_radius: gpui::px(260.0),
                         spread_radius: gpui::px(0.0),
@@ -1763,7 +1766,7 @@ impl Render for Shell {
                     .w(gpui::px(760.0))
                     .h(gpui::px(560.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0x2F6B6330))
+                    .bg(t.ambient_teal)
                     .shadow(vec![gpui::BoxShadow {
                         color: gpui::rgba(0x2F6B6348).into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
@@ -1780,7 +1783,7 @@ impl Render for Shell {
                     .w(gpui::px(560.0))
                     .h(gpui::px(480.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0x7A4A5528))
+                    .bg(t.ambient_rose)
                     .shadow(vec![gpui::BoxShadow {
                         color: gpui::rgba(0x7A4A5540).into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
@@ -1796,8 +1799,8 @@ impl Render for Shell {
                     .rounded(gpui::px(24.0))
                     .bg(gpui::linear_gradient(
                         135.0,
-                        gpui::linear_color_stop(gpui::rgba(0x0A0A0DA8), 0.0),
-                        gpui::linear_color_stop(gpui::rgba(0x14100A96), 1.0),
+                        gpui::linear_color_stop(t.glass_gradient_start, 0.0),
+                        gpui::linear_color_stop(t.glass_gradient_end, 1.0),
                     ))
                     .border_1()
                     .border_color(t.glass_border)
@@ -1810,7 +1813,7 @@ impl Render for Shell {
                             inset: false,
                         },
                         gpui::BoxShadow {
-                            color: gpui::rgba(0xFFFFFF0D).into(),
+                            color: t.glass_highlight.into(),
                             offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
                             blur_radius: gpui::px(0.0),
                             spread_radius: gpui::px(0.0),
@@ -1828,7 +1831,7 @@ impl Render for Shell {
                             .rounded(gpui::px(24.0))
                             .bg(gpui::linear_gradient(
                                 135.0,
-                                gpui::linear_color_stop(gpui::rgba(0xFFFFFF0D), 0.0),
+                                gpui::linear_color_stop(t.glass_highlight, 0.0),
                                 gpui::linear_color_stop(gpui::rgba(0xFFFFFF00), 0.42),
                             )),
                     )
@@ -1842,9 +1845,9 @@ impl Render for Shell {
                             .items_center()
                             .gap(gpui::px(10.0))
                             .px(gpui::px(15.0))
-                            .bg(gpui::rgba(0xFFFFFF06))
+                            .bg(t.glass_inner_strong)
                             .border_b_1()
-                            .border_color(gpui::rgba(0xE8D3A314))
+                            .border_color(t.glass_border_soft)
                             .child(
                                 div()
                                     .flex_1()
@@ -1918,9 +1921,9 @@ impl Render for Shell {
                             .gap(gpui::px(12.0))
                             .px(gpui::px(16.0))
                             .py(gpui::px(18.0))
-                            .bg(gpui::rgba(0xFFFFFF05))
+                            .bg(t.glass_inner)
                             .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(0xFFFFFF0A).into(),
+                                color: t.glass_highlight_soft.into(),
                                 offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
                                 blur_radius: gpui::px(0.0),
                                 spread_radius: gpui::px(0.0),
@@ -2003,19 +2006,19 @@ impl Render for Shell {
                                             .rounded(gpui::px(theme.radii.button))
                                             .bg(gpui::linear_gradient(
                                                 145.0,
-                                                gpui::linear_color_stop(gpui::rgb(0x2A241C), 0.0),
-                                                gpui::linear_color_stop(gpui::rgb(0x171310), 1.0),
+                                                gpui::linear_color_stop(t.clay_dark, 0.0),
+                                                gpui::linear_color_stop(t.clay_dark_2, 1.0),
                                             ))
                                             .shadow(vec![
                                                 gpui::BoxShadow {
-                                                    color: gpui::rgba(0xFFFFFF14).into(),
+                                                    color: t.glass_highlight_strong.into(),
                                                     offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
                                                     blur_radius: gpui::px(3.0),
                                                     spread_radius: gpui::px(0.0),
                                                     inset: true,
                                                 },
                                                 gpui::BoxShadow {
-                                                    color: gpui::rgba(0x00000080).into(),
+                                                    color: t.scrim.into(),
                                                     offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
                                                     blur_radius: gpui::px(7.0),
                                                     spread_radius: gpui::px(0.0),
@@ -2129,7 +2132,7 @@ impl Render for Shell {
                                                     inset: true,
                                                 },
                                                 gpui::BoxShadow {
-                                                    color: gpui::rgba(0x8C6D3F2E).into(),
+                                                    color: t.shadow_deep.into(),
                                                     offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
                                                     blur_radius: gpui::px(5.0),
                                                     spread_radius: gpui::px(0.0),
@@ -2198,13 +2201,23 @@ impl Render for Shell {
                                                 } else if k == "escape" {
                                                     this.search_query.clear();
                                                     this.search_results = None;
+                                                    this.search_generation
+                                                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                                                 } else if k == "enter" {
                                                     let q = this.search_query.trim().to_string();
                                                     if !q.is_empty()
                                                         && let Some(client) = this.client.clone() {
                                                         let entity2 = cx.entity();
+                                                        let generation = this
+                                                            .search_generation
+                                                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                                                            + 1;
+                                                        let counter = this.search_generation.clone();
                                                         cx.spawn(async move |_, cx| {
                                                             let res = cx.background_executor().spawn(async move { client.search(&q) }).await;
+                                                            if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                                                                return;
+                                                            }
                                                             cx.update(|app| {
                                                                 app.update_entity(&entity2, |shell, _| {
                                                                     if let Ok(r) = res { shell.search_results = Some(r); }
@@ -2335,7 +2348,7 @@ impl Render for Shell {
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(6.0))
                                                     .rounded(gpui::px(999.0))
-                                                    .bg(gpui::rgba(0xFFFFFF0A))
+                                                    .bg(t.glass_highlight_soft)
                                                     .border_1()
                                                     .border_color(t.glass_border)
                                                     .text_size(gpui::px(10.0))
@@ -2353,7 +2366,7 @@ impl Render for Shell {
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(6.0))
                                                     .rounded(gpui::px(999.0))
-                                                    .bg(gpui::rgba(0xFFFFFF0A))
+                                                    .bg(t.glass_highlight_soft)
                                                     .border_1()
                                                     .border_color(t.glass_border)
                                                     .text_size(gpui::px(10.0))
@@ -2571,7 +2584,7 @@ impl Render for Shell {
                                                 .px(gpui::px(14.0))
                                                 .py(gpui::px(8.0))
                                                 .rounded(gpui::px(999.0))
-                                                .bg(gpui::rgba(0xFFFFFF0A))
+                                                .bg(t.glass_highlight_soft)
                                                 .border_1()
                                                 .border_color(t.glass_border)
                                                 .text_color(t.gold_light)
@@ -2825,7 +2838,7 @@ fn spawn_home_fetch(
                     let cid = cover_id.clone();
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {
-                            h.covers.insert(cid, image);
+                            h.insert_cover(cid, image);
                         });
                     });
                 }
@@ -2912,7 +2925,7 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
                     inset: true,
                 },
                 gpui::BoxShadow {
-                    color: gpui::rgba(0x8C6D3F30).into(),
+                    color: t.shadow_deep.into(),
                     offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
                     blur_radius: gpui::px(5.0),
                     spread_radius: gpui::px(0.0),
@@ -2927,7 +2940,7 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .rounded(gpui::px(12.0))
             .text_color(t.text_secondary)
             .text_size(gpui::px(12.0))
-            .hover(|style| style.bg(gpui::rgba(0xFFFFFF08)))
+            .hover(|style| style.bg(t.glass_hover))
             .child(label.to_string())
     }
 }
@@ -2948,7 +2961,7 @@ fn album_card(
         .flex_col()
         .gap(gpui::px(7.0))
         .w_full()
-        .hover(|style| style.bg(gpui::rgba(0xFFFFFF08)).rounded(gpui::px(16.0)))
+        .hover(|style| style.bg(t.glass_hover).rounded(gpui::px(16.0)))
         .child(
             gpui::div()
                 .w_full()
@@ -3034,11 +3047,7 @@ fn track_row(
     active: bool,
     t: &crate::theme::Colors,
 ) -> gpui::Div {
-    let bg = if active {
-        gpui::rgba(0xC9A86A12)
-    } else {
-        t.glass_tint
-    };
+    let bg = if active { t.gold_tint } else { t.glass_tint };
     let text_color = t.text_primary;
     gpui::div()
         .flex()
@@ -3050,7 +3059,7 @@ fn track_row(
         .bg(bg)
         .border_1()
         .border_color(if active {
-            gpui::rgba(0xC9A86A55)
+            t.gold_glow_border
         } else {
             t.glass_border
         })
@@ -3109,9 +3118,27 @@ pub struct HomeState {
     pub loading: bool,
     pub error: Option<String>,
     pub covers: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
+    pub cover_order: std::collections::VecDeque<String>,
     pub artists: Vec<crate::library::Artist>,
     pub playlists: Vec<crate::library::Playlist>,
     pub favorites: Vec<crate::library::Album>,
+}
+
+impl HomeState {
+    /// Insert a cover, evicting the least recently added beyond 200 entries.
+    pub fn insert_cover(&mut self, id: String, image: std::sync::Arc<gpui::Image>) {
+        if self.covers.insert(id.clone(), image).is_none() {
+            self.cover_order.push_back(id);
+        } else {
+            self.cover_order.retain(|existing| existing != &id);
+            self.cover_order.push_back(id);
+        }
+        while self.cover_order.len() > 200 {
+            if let Some(old) = self.cover_order.pop_front() {
+                self.covers.remove(&old);
+            }
+        }
+    }
 }
 
 fn fxhash_id(s: &str) -> u64 {
