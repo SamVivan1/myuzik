@@ -56,6 +56,12 @@ pub struct Shell {
     radio_continue_pending: Arc<std::sync::atomic::AtomicBool>,
     /// Handle used to resume playback from the async radio completion.
     self_weak: gpui::WeakEntity<Shell>,
+    /// System tray, when one could be started. A slot rather than a plain field
+    /// because it is attached after construction while the player event loop
+    /// (created inside `new`) also reports into it.
+    tray_slot: Arc<std::sync::Mutex<Option<Arc<crate::platform::tray::Tray>>>>,
+    /// The window's close handler is registered once, on the first frame.
+    close_handler_registered: bool,
     setup_server: String,
     setup_user: String,
     setup_pass: String,
@@ -156,6 +162,8 @@ impl Shell {
                 config.prefer_navidrome_lyrics,
             ))
         });
+        let tray_slot: Arc<std::sync::Mutex<Option<Arc<crate::platform::tray::Tray>>>> =
+            Arc::new(std::sync::Mutex::new(None));
         let radio = Arc::new(std::sync::Mutex::new(crate::library::radio::Radio::new()));
         let autoplay_enabled = Arc::new(std::sync::atomic::AtomicBool::new(config.autoplay));
         let radio_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -175,6 +183,7 @@ impl Shell {
         let scrobble_client = client.clone();
         let scrobble_enabled_for_loop = scrobble_enabled.clone();
         let overlay_for_loop = overlay_state.clone();
+        let tray_slot_for_loop = tray_slot.clone();
         let lyrics_offset_for_loop =
             Arc::new(std::sync::atomic::AtomicI64::new(config.lyrics_offset_ms));
         let lyrics_offset_field = lyrics_offset_for_loop.clone();
@@ -205,6 +214,11 @@ impl Shell {
                             app.update_entity(&np, |view, _cx| {
                                 view.set_playing(s == PlaybackStatus::Playing);
                             });
+                            if let Some(tray) =
+                                tray_slot_for_loop.lock().ok().and_then(|slot| slot.clone())
+                            {
+                                tray.set_playing(s == PlaybackStatus::Playing);
+                            }
                         });
                         if let Some(mh) = &mpris_for_loop {
                             mh.update_status(s);
@@ -385,6 +399,8 @@ impl Shell {
             radio_in_flight,
             radio_continue_pending,
             self_weak,
+            tray_slot,
+            close_handler_registered: false,
             setup_server,
             setup_user,
             setup_pass,
@@ -398,6 +414,17 @@ impl Shell {
             a11y_focus: std::cell::RefCell::new(std::collections::HashMap::new()),
             mpris_handle,
         }
+    }
+
+    /// Give the shell the system tray so it can keep it in step with playback.
+    pub fn attach_tray(&self, tray: Arc<crate::platform::tray::Tray>) {
+        if let Ok(mut slot) = self.tray_slot.lock() {
+            *slot = Some(tray);
+        }
+    }
+
+    fn tray(&self) -> Option<Arc<crate::platform::tray::Tray>> {
+        self.tray_slot.lock().ok().and_then(|slot| slot.clone())
     }
 
     pub fn toggle_playback(&self) {
@@ -501,6 +528,9 @@ impl Shell {
     }
 
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
+        if let Some(tray) = self.tray() {
+            tray.set_pinned(true);
+        }
         if let Some(handle) = self.overlay_handle {
             if handle.update(cx, |_view, _window, _cx| {}).is_err() {
                 self.overlay_handle = None;
@@ -669,6 +699,7 @@ impl Shell {
             return;
         };
         let covers_dir = self.paths.covers.clone();
+        let os_for_cover = self.overlay_state.clone();
         let hs = self.home_state.clone();
         let mh = self.mpris_handle.clone();
         let np = self.now_playing.clone();
@@ -703,6 +734,9 @@ impl Shell {
                     app.update_entity(&np, |view, _cx| {
                         view.set_cover(Some(image.clone()));
                     });
+                    app.update_entity(&os_for_cover, |state, _cx| {
+                        state.set_cover(Some(image.clone()));
+                    });
                 });
                 if let Some(mh) = &mh {
                     mh.update_metadata(&track, Some(format!("file://{}", path.display())));
@@ -728,9 +762,19 @@ impl Shell {
         self.cache_track_cover(track, cx);
         // Show the new track's placeholder immediately: without this the pin kept
         // the previous song's lines until the fetch resolved.
+        // Reuse the cached artwork so the PiP shows it immediately; if it is not
+        // cached yet, `cache_track_cover` fills it in when it lands.
+        let cached_cover = track
+            .cover_art_id
+            .as_ref()
+            .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
         self.overlay_state.update(cx, |st, _cx| {
             st.begin(track.title.clone(), track.artist.clone());
+            st.set_cover(cached_cover);
         });
+        if let Some(tray) = self.tray() {
+            tray.set_track(&track.title, &track.artist);
+        }
         if let Some(provider) = &self.lyrics_provider {
             let p = provider.clone();
             let t = track.clone();
@@ -996,6 +1040,12 @@ impl Shell {
         self.config.scrobble = !self.config.scrobble;
         self.scrobble_enabled
             .store(self.config.scrobble, std::sync::atomic::Ordering::Relaxed);
+        self.persist_config();
+    }
+
+    /// Hide the window to the tray on close instead of quitting.
+    pub fn toggle_close_to_tray(&mut self) {
+        self.config.close_to_tray = !self.config.close_to_tray;
         self.persist_config();
     }
 
@@ -1345,6 +1395,9 @@ impl Shell {
     }
 
     pub fn close_overlay(&mut self, cx: &mut gpui::App) {
+        if let Some(tray) = self.tray() {
+            tray.set_pinned(false);
+        }
         if let Some(handle) = self.overlay_handle.take() {
             let geometry = self.overlay_geometry.clone();
             let _ = handle.update(cx, move |_view, window, _cx| {
@@ -2098,6 +2151,23 @@ impl Render for Shell {
             window.focus(&self.root_focus, cx);
             self.root_focus_requested = true;
         }
+        if !self.close_handler_registered {
+            // Registered once per window. Returning false cancels the close, so
+            // "close to tray" keeps the process, the player and the tray alive.
+            let weak = self.self_weak.clone();
+            window.on_window_should_close(cx, move |window, app| {
+                let close_to_tray = weak
+                    .upgrade()
+                    .map(|entity| entity.read(app).config.close_to_tray)
+                    .unwrap_or(false);
+                if !close_to_tray {
+                    return true;
+                }
+                window.minimize_window();
+                false
+            });
+            self.close_handler_registered = true;
+        }
         let key_entity = cx.entity();
         // Glass shell with home content
         div()
@@ -2779,6 +2849,8 @@ impl Render for Shell {
                                     self.focus_for("settings-reduce-motion", Self::TAB_CONTENT, cx);
                                 let f_set_autoplay =
                                     self.focus_for("settings-autoplay", Self::TAB_CONTENT, cx);
+                                let f_set_close_to_tray =
+                                    self.focus_for("settings-close-to-tray", Self::TAB_CONTENT, cx);
                                 let f_offset_down = self.focus_for("settings-offset-down", Self::TAB_CONTENT, cx);
                                 let f_offset_up = self.focus_for("settings-offset-up", Self::TAB_CONTENT, cx);
                                 col = col
@@ -2821,6 +2893,21 @@ impl Render for Shell {
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _event, _window, _cx| {
                                             this.toggle_autoplay();
+                                        })),
+                                    )
+                                    .child(
+                                        setting_row(
+                                            "Close to tray",
+                                            if self.config.close_to_tray { "On" } else { "Off" },
+                                            t,
+                                        )
+                                        .id("set-close-to-tray").debug_selector(|| "set-close-to-tray".to_string())
+                                        .track_focus(&f_set_close_to_tray).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button)
+                                        .aria_label(format!("Close to tray, {}", if self.config.close_to_tray { "on" } else { "off" }))
+                                        .border_2().border_color(self.focus_border(&f_set_close_to_tray, window, t.glass_border, t))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                                            this.toggle_close_to_tray();
                                         })),
                                     )
                                     .child(setting_row(

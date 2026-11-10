@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+- **System tray** (`src/platform/tray.rs`): a StatusNotifierItem plus DBusMenu on the session bus,
+  with Show/Hide, Play/Pause, Previous, Next, Pin lyrics and Quit. The menu labels follow the
+  current track and play state. Without a session bus the app runs normally, just without a tray.
+- **Close to tray**: closing the main window hides it instead of quitting, so playback continues and
+  the tray brings it back. Configurable (`close_to_tray`, default on) with a Settings → Playback row.
+
+### Changed
+- The pinned overlay is redesigned to the approved reference: two columns — artwork, title, artist
+  and a real progress bar with elapsed/total time on the left; a seven-line lyric band on the right.
+  Line tiers (active / next / far / dim) replace the old flat list, the panel has its own warm
+  material with ambient light (Mutter provides no backdrop blur, so the surface cannot rely on the
+  wallpaper), and the default window grew from 392x180 to 620x330 to hold the layout.
+- Overlay artwork reuses the cached cover, and the lyric state is read without cloning the whole
+  lyric list on every frame.
+
 ### Fixed
 - **The pinned lyric overlay is now readable.** It used to render *every* line of the song into a
   392×180 window — a 70-line lyric sheet collapsed into an unreadable pile — with the whole text

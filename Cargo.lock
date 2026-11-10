@@ -3631,6 +3631,7 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
+ "zbus 5.19.0",
 ]
 
 [[package]]

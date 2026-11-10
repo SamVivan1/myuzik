@@ -16,10 +16,16 @@ and GStreamer.
 - **Synced lyrics** from Navidrome (OpenSubsonic) with LRCLIB fallback and a disk cache. LRCLIB
   results are matched by title, artist and duration, so a different edit of the same song is not
   accepted: no lyrics beats the wrong lyrics.
-- **Pinned lyrics overlay** — a borderless, always-above window showing a karaoke band of six lines
-  around the line being sung (never the whole song), honouring the lyric offset. Unsynced
-  transcripts follow the track's progress and are marked "unsynced". On GNOME, a small Shell
-  extension pins it above other windows and across workspaces.
+- **Pinned lyrics overlay** — a borderless, always-above window laid out like a mini player:
+  artwork, title, artist and a live progress bar on the left; a seven-line lyric band on the right
+  with the line being sung in gold and the rest falling away in brightness. It honours the lyric
+  offset, follows unsynchronised transcripts by progress (marked "UNSYNCED"), and explains itself
+  when there are no lyrics. On GNOME, a small Shell extension pins it above other windows and
+  across workspaces.
+- **System tray** — a StatusNotifierItem icon (visible in the GNOME top bar with the AppIndicator
+  extension) with Show/Hide, Play/Pause, Previous, Next, Pin lyrics and Quit.
+- **Close to tray** — closing the window hides Myuzik to the tray and keeps the music playing;
+  turn it off in Settings → Playback. Quit from the tray menu.
 - **MPRIS** controls and metadata (works with `playerctl`, GNOME media menu, etc.).
 - **Scrobbling** (now-playing + submitted) to Navidrome.
 - **Endless autoplay**: when a track ends, Myuzik keeps going with similar music — first
@@ -145,6 +151,7 @@ username = "you"
 quality = "original"          # original | kbps320 | kbps192
 scrobble = true
 autoplay = true              # keep playing similar tracks when the queue ends
+close_to_tray = true         # closing the window hides to the tray instead of quitting
 volume = 0.8
 lyrics_offset_ms = 0
 prefer_navidrome_lyrics = true

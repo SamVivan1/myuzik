@@ -138,12 +138,17 @@ The app window uses the glass shell: warm-black translucent background with nati
 
 - A separate GPUI window titled exactly `Myuzik Lyrics`, app ID `io.github.samvivan1.Myuzik`.
 - Borderless, transparent, native blur, draggable by its surface; size ~392 × 160–220 px depending on lyric wrapping; position/size persisted.
-- Content: small gold "Pinned lyrics" pill, close button, title/artist, **a karaoke band of at
-  most six lines** (two before the active line, three after), and a progress bar. The band is the
-  whole point: a 70-line lyric sheet must never be squeezed into a 180 px window. When the text is
-  an unsynchronised transcript the band follows progress through the track instead of highlighting
-  a fake active line, and says so with a small "unsynced" tag. When there is nothing to show
-  (loading, instrumental, not found, error) the window says so instead of drawing an empty box.
+- Content: **two columns**, 620 × 330 default (min 520 × 280). Left: artwork (160 px, rounded,
+  hairline border), title in Fraunces, artist, and a real progress bar with elapsed/total time.
+  Right: **a seven-line lyric band** (three before the active line, three after) in four tiers —
+  active (gold, semibold, 20 px), next (17 px), far (16 px), dim (15.5 px) — because a 70-line
+  lyric sheet must never be squeezed into a small window. A close control sits in the top-right
+  corner. Unsynced transcripts follow progress through the track, never highlight a fake active
+  line, and carry a small "UNSYNCED" chip. Loading/instrumental/not-found/error states show a
+  message and a hint instead of an empty box.
+- Material: the window gets no backdrop blur from Mutter, so the panel carries its own surface — a
+  warm opaque gradient with a gold ambient glow top-left and a cool one bottom-right, a hairline
+  champagne border and an inset top highlight. It reads correctly on light and dark wallpapers.
 - Toggle from player bar/sidebar (and Ctrl+P). Opening the window = pinned; closing = unpinned. The GNOME extension auto-pins windows with the matching title/app ID using `make_above()` + `stick()`; it can also hide it from the window list.
 - If the extension is not installed, show a one-time hint in Settings/status: install `myuzik-pin@samvivan1.github.io`; the overlay still works as a normal floating window.
 - The overlay is readable over any wallpaper: dark tint ≥ ~72% opacity, high-contrast ivory text, gold active line, no reliance on blur for contrast.

@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub volume: f32,
     /// Keep playing similar tracks when the queue runs out (autoplay radio).
     pub autoplay: bool,
+    /// Closing the main window hides it to the tray instead of quitting.
+    pub close_to_tray: bool,
     pub lyrics_offset_ms: i64,
     pub prefer_navidrome_lyrics: bool,
     pub overlay_x: i32,
@@ -43,6 +45,7 @@ impl Default for AppConfig {
             scrobble: true,
             volume: 0.8,
             autoplay: true,
+            close_to_tray: true,
             lyrics_offset_ms: 0,
             prefer_navidrome_lyrics: true,
             overlay_x: 0,

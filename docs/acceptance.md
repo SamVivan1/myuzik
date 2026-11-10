@@ -23,7 +23,7 @@ inline `#[cfg(test)]` modules in `src/` (31 tests), not separate files under `te
 ```text
 cargo fmt --check                              → clean
 cargo clippy --all-targets -- -D warnings      → clean
-cargo test -- --test-threads=1                 → 127 passed, 0 failed, 11 ignored
+cargo test -- --test-threads=1                 → 149 passed, 0 failed, 13 ignored
 MYUZIK_LIVE=1 cargo test --test live_navidrome -- --ignored → 7 passed, 0 failed
 MYUZIK_LIVE=1 cargo test --test live_player    -- --ignored → 1 passed, 0 failed
 desktop-file-validate packaging/*.desktop      → exit 0
@@ -76,6 +76,19 @@ server, enabled with `MYUZIK_LIVE=1`) and the 1 `screenshots` capture.
 | Player bar: play/pause, ±10 s, volume ±, progress, cover | ✅ run today — `home_album_track_play_flow` (tests/ui_flow.rs) |
 | Global shortcuts: Space, arrows, Shift+arrows, Ctrl+K, Ctrl+P, Esc | ✅ run today — `global_shortcuts_work` (tests/ui_flow.rs) |
 | EOS advances to the next track | ✅ earlier — `play_next` path; MPRIS `next` verified with `playerctl` in the earlier acceptance run |
+
+### Pinned overlay design, tray and close-to-tray
+
+| Check | Result |
+|---|---|
+| Overlay shows artwork, title, artist, progress and a lyric band (not the whole song) | ✅ screenshots `docs/screenshots/overlay*.png` + `overlay_draws_a_band_not_the_whole_song` |
+| Progress bar reflects real playback position | ✅ `progress_fraction_is_clamped`; times rendered from position/duration |
+| Line tiers active/next/far/dim around the active line | ✅ `tiers_follow_the_active_line` |
+| Unsynced transcript: no fake active line, chip shown | ✅ `plain_lyrics_follow_progress_and_never_highlight_a_fake_line` + `overlay-plain.png` |
+| Missing lyrics show a message, not an empty box | ✅ `states_show_a_message_instead_of_an_empty_box` + `overlay-empty.png` |
+| Panel holds up on a light and a dark wallpaper | ✅ `overlay.png` (dark) and `overlay-light.png` (bright), reviewed |
+| Tray icon registers and answers menu clicks | ✅ run today on the real session: `org.kde.StatusNotifierItem-<pid>-1` registered, GNOME's appindicator called `AboutToShow`/`Event(clicked)`; `tray.shutdown()` releases the name |
+| Close to tray keeps the app alive | ⚠️ implemented (`on_window_should_close` → minimise, process + tray + player stay up) and the setting persists, but the window-manager close needs one manual click to confirm on the desktop |
 
 ### Lyrics rendering and matching
 

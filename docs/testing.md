@@ -57,8 +57,14 @@ autoplay-radio selection helpers (3).
   primitives (`remaining`, `append`, `append_continue` resuming an exhausted queue, and
   `trim_front_to` bounding the queue under both linear and shuffle playback).
 - `tests/overlay_lyrics.rs`: the pinned overlay through the real `Shell` — a 70-line lyric sheet
-  draws at most six rows, the lyric offset shifts the active line, and a track without lyrics shows
-  a message instead of an empty box.
+  draws at most seven rows, the lyric offset shifts the active line, and a track without lyrics
+  shows a message instead of an empty box.
+- `tests/screenshot_overlay.rs` (`#[ignore]`d, needs the headless GPU renderer): renders the overlay
+  window over a dark and a bright backdrop and writes `docs/screenshots/overlay*.png`, so the design
+  can be reviewed without launching the app.
+- `tests/platform::tray` (unit + one `#[ignore]`d live test): menu model, command mapping, label
+  flips, and a real session-bus round trip (name registered, menu replies, name released on
+  shutdown).
 - `tests/radio.rs`: autoplay radio against a mocked server — source priority, dedup against
   the queue/history/seed, genre pagination advancing and wrapping, the random backstop, a
   failing source not aborting the batch, and the stall guard.
