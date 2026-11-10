@@ -181,7 +181,8 @@ impl Queue {
         }
         // move current to front
         if let Some(cur) = self.current
-            && let Some(pos) = self.shuffle_order.iter().position(|&x| x == cur) {
+            && let Some(pos) = self.shuffle_order.iter().position(|&x| x == cur)
+        {
             self.shuffle_order.swap(0, pos);
         }
         self.shuffle_pos = 0;

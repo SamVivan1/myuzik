@@ -111,7 +111,13 @@ mod tests {
 
     #[test]
     fn should_submit_helper() {
-        assert!(!should_submit(Duration::from_secs(80), Duration::from_secs(180)));
-        assert!(should_submit(Duration::from_secs(90), Duration::from_secs(180)));
+        assert!(!should_submit(
+            Duration::from_secs(80),
+            Duration::from_secs(180)
+        ));
+        assert!(should_submit(
+            Duration::from_secs(90),
+            Duration::from_secs(180)
+        ));
     }
 }

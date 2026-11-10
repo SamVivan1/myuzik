@@ -60,7 +60,7 @@ pub fn spawn_player() -> PlayerHandle {
             }
         };
 
-         pipeline.set_property("volume", 0.8_f64);
+        pipeline.set_property("volume", 0.8_f64);
 
         let bus = pipeline.bus().expect("bus");
         let evt_tx_bus = evt_tx.clone();
@@ -107,14 +107,12 @@ pub fn spawn_player() -> PlayerHandle {
                 handle_command(&pipeline_clone, cmd, &evt_tx_tick);
             }
             if let Some(pos) = pipeline_clone.query_position::<gst::ClockTime>() {
-                let _ = evt_tx_tick.send(PlayerEvent::Position(Duration::from_nanos(
-                    pos.nseconds(),
-                )));
+                let _ =
+                    evt_tx_tick.send(PlayerEvent::Position(Duration::from_nanos(pos.nseconds())));
             }
             if let Some(dur) = pipeline_clone.query_duration::<gst::ClockTime>() {
-                let _ = evt_tx_tick.send(PlayerEvent::Duration(Duration::from_nanos(
-                    dur.nseconds(),
-                )));
+                let _ =
+                    evt_tx_tick.send(PlayerEvent::Duration(Duration::from_nanos(dur.nseconds())));
             }
             glib::ControlFlow::Continue
         });
@@ -125,14 +123,21 @@ pub fn spawn_player() -> PlayerHandle {
         let _ = pipeline.set_state(gst::State::Null);
     });
 
-    PlayerHandle { tx: cmd_tx, rx: evt_rx }
+    PlayerHandle {
+        tx: cmd_tx,
+        rx: evt_rx,
+    }
 }
 
-fn handle_command(pipeline: &gst::Element, cmd: PlayerCommand, evt_tx: &flume::Sender<PlayerEvent>) {
+fn handle_command(
+    pipeline: &gst::Element,
+    cmd: PlayerCommand,
+    evt_tx: &flume::Sender<PlayerEvent>,
+) {
     match cmd {
         PlayerCommand::Load { uri, track_id } => {
             let _ = pipeline.set_state(gst::State::Ready);
-             pipeline.set_property("uri", uri);
+            pipeline.set_property("uri", uri);
             let _ = pipeline.set_state(gst::State::Playing);
             let _ = evt_tx.send(PlayerEvent::TrackStarted(track_id));
         }
@@ -157,7 +162,7 @@ fn handle_command(pipeline: &gst::Element, cmd: PlayerCommand, evt_tx: &flume::S
             );
         }
         PlayerCommand::SetVolume(v) => {
-             pipeline.set_property("volume", v as f64);
+            pipeline.set_property("volume", v as f64);
         }
         PlayerCommand::Stop => {
             let _ = pipeline.set_state(gst::State::Null);

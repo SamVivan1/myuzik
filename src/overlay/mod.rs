@@ -1,8 +1,6 @@
 #![allow(clippy::items_after_test_module)]
 use crate::theme::midnight_brass;
-use gpui::{
-    Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*,
-};
+use gpui::{Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*};
 pub const DEFAULT_WIDTH: u32 = 392;
 pub const DEFAULT_HEIGHT: u32 = 180;
 pub const MIN_WIDTH: u32 = 320;
@@ -28,12 +26,27 @@ impl Default for OverlayGeometry {
 }
 
 /// Clamp overlay geometry to a monitor work area.
-pub fn clamp_geometry(geom: OverlayGeometry, monitor_x: i32, monitor_y: i32, monitor_w: u32, monitor_h: u32) -> OverlayGeometry {
+pub fn clamp_geometry(
+    geom: OverlayGeometry,
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_w: u32,
+    monitor_h: u32,
+) -> OverlayGeometry {
     let w = geom.width.clamp(MIN_WIDTH, monitor_w);
     let h = geom.height.clamp(MIN_HEIGHT, monitor_h);
-    let x = geom.x.clamp(monitor_x, monitor_x + (monitor_w as i32) - (w as i32));
-    let y = geom.y.clamp(monitor_y, monitor_y + (monitor_h as i32) - (h as i32));
-    OverlayGeometry { x, y, width: w, height: h }
+    let x = geom
+        .x
+        .clamp(monitor_x, monitor_x + (monitor_w as i32) - (w as i32));
+    let y = geom
+        .y
+        .clamp(monitor_y, monitor_y + (monitor_h as i32) - (h as i32));
+    OverlayGeometry {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 #[cfg(test)]
@@ -50,7 +63,12 @@ mod geometry_tests {
 
     #[test]
     fn clamp_size_to_monitor() {
-        let g = OverlayGeometry { x: 0, y: 0, width: 10000, height: 10000 };
+        let g = OverlayGeometry {
+            x: 0,
+            y: 0,
+            width: 10000,
+            height: 10000,
+        };
         let c = clamp_geometry(g, 0, 0, 1920, 1080);
         assert_eq!(c.width, 1920);
         assert_eq!(c.height, 1080);
@@ -58,7 +76,12 @@ mod geometry_tests {
 
     #[test]
     fn clamp_position_to_monitor() {
-        let g = OverlayGeometry { x: -100, y: -50, width: 392, height: 180 };
+        let g = OverlayGeometry {
+            x: -100,
+            y: -50,
+            width: 392,
+            height: 180,
+        };
         let c = clamp_geometry(g, 0, 0, 1920, 1080);
         assert_eq!(c.x, 0);
         assert_eq!(c.y, 0);
@@ -66,7 +89,12 @@ mod geometry_tests {
 
     #[test]
     fn clamp_min_size() {
-        let g = OverlayGeometry { x: 0, y: 0, width: 100, height: 50 };
+        let g = OverlayGeometry {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
         let c = clamp_geometry(g, 0, 0, 1920, 1080);
         assert_eq!(c.width, MIN_WIDTH);
         assert_eq!(c.height, MIN_HEIGHT);
@@ -135,7 +163,11 @@ impl Render for PinnedLyricsView {
 
         for (i, line) in state.lines.iter().enumerate() {
             let is_active = state.active == Some(i);
-            let line_color = if is_active { t.gold_light } else { t.text_secondary };
+            let line_color = if is_active {
+                t.gold_light
+            } else {
+                t.text_secondary
+            };
             let line_size = if is_active { 13.0 } else { 11.0 };
             let line_weight = if is_active {
                 gpui::FontWeight::BOLD
@@ -178,7 +210,10 @@ impl Render for PinnedLyricsView {
                     .border_b_1()
                     .border_color(t.glass_border)
                     .id("overlay-header")
-                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_this, _event, window, _cx| window.start_window_move()))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|_this, _event, window, _cx| window.start_window_move()),
+                    )
                     .child(
                         div()
                             .px(gpui::px(8.0))
@@ -195,7 +230,9 @@ impl Render for PinnedLyricsView {
                         div()
                             .id("overlay-close")
                             .cursor_pointer()
-                            .on_click(cx.listener(|_this, _event, window, _cx| window.remove_window()))
+                            .on_click(
+                                cx.listener(|_this, _event, window, _cx| window.remove_window()),
+                            )
                             .w(gpui::px(24.0))
                             .h(gpui::px(24.0))
                             .rounded(gpui::px(999.0))
@@ -237,7 +274,10 @@ impl Render for PinnedLyricsView {
 }
 
 /// Open the overlay window. Returns the window handle.
-pub fn open_overlay(cx: &mut gpui::App, state: gpui::Entity<OverlayState>) -> gpui::WindowHandle<PinnedLyricsView> {
+pub fn open_overlay(
+    cx: &mut gpui::App,
+    state: gpui::Entity<OverlayState>,
+) -> gpui::WindowHandle<PinnedLyricsView> {
     let opts = WindowOptions {
         window_background: WindowBackgroundAppearance::Blurred,
         window_decorations: None,
@@ -262,4 +302,3 @@ impl Default for OverlayWindow {
         Self::new()
     }
 }
-

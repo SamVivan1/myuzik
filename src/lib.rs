@@ -4,7 +4,7 @@ pub mod library;
 pub mod lyrics;
 pub mod navidrome;
 pub mod overlay;
-pub mod player;
 pub mod platform;
+pub mod player;
 pub mod theme;
 pub mod ui;

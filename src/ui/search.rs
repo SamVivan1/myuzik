@@ -68,7 +68,6 @@ impl Render for SearchView {
     }
 }
 
-
 impl Default for SearchView {
     fn default() -> Self {
         Self::new()

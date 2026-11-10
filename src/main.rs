@@ -4,7 +4,8 @@ use myuzik::player::engine::spawn_player;
 use myuzik::ui::Shell;
 
 use gpui::{
-    Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, size, px, prelude::*,
+    Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, prelude::*,
+    px, size,
 };
 use gpui_platform::application;
 

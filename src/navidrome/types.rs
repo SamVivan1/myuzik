@@ -1,4 +1,6 @@
-use crate::library::{Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, SearchResults, Track};
+use crate::library::{
+    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, SearchResults, Track,
+};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -273,7 +275,11 @@ pub fn search_results_from_dto(s: SearchResult3) -> SearchResults {
         artists: s.artist.into_iter().map(artist_dto_to_artist).collect(),
         albums: s.album.into_iter().map(album_dto_to_album).collect(),
         songs: s.song.into_iter().map(song_dto_to_track).collect(),
-        playlists: s.playlist.into_iter().map(playlist_dto_to_playlist).collect(),
+        playlists: s
+            .playlist
+            .into_iter()
+            .map(playlist_dto_to_playlist)
+            .collect(),
     }
 }
 
@@ -294,7 +300,11 @@ pub fn lyrics_from_dto(dto: LyricsDto) -> Option<crate::lyrics::model::LyricsSta
         Some(LyricsStatus::Synced(lines))
     } else {
         // If there are plain lines, join as plain.
-        let plain: String = lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+        let plain: String = lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         if plain.trim().is_empty() {
             Some(LyricsStatus::NotFound)
         } else {

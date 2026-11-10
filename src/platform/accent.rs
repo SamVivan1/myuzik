@@ -9,7 +9,9 @@ pub fn read_os_accent() -> Rgba {
 }
 
 pub fn accent_from_rgb(r: f64, g: f64, b: f64) -> Rgba {
-    rgb(((r * 255.0).round() as u32) << 16 | ((g * 255.0).round() as u32) << 8 | ((b * 255.0).round() as u32))
+    rgb(((r * 255.0).round() as u32) << 16
+        | ((g * 255.0).round() as u32) << 8
+        | ((b * 255.0).round() as u32))
 }
 
 pub fn fallback_accent() -> Rgba {
@@ -38,7 +40,10 @@ mod tests {
 
     #[test]
     fn maps_known_accent_names() {
-        assert_eq!(accent_from_rgb(0.2078, 0.5176, 0.8941), gnome_accent_name_to_rgb("blue"));
+        assert_eq!(
+            accent_from_rgb(0.2078, 0.5176, 0.8941),
+            gnome_accent_name_to_rgb("blue")
+        );
     }
 
     #[test]

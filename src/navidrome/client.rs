@@ -1,5 +1,7 @@
 use crate::config::StreamQuality;
-use crate::library::{Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, SearchResults};
+use crate::library::{
+    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, SearchResults,
+};
 use crate::lyrics::model::LyricsStatus;
 use crate::navidrome::auth::{auth_params, random_salt};
 use crate::navidrome::error::NavidromeError;
@@ -36,9 +38,12 @@ pub struct NavidromeClient {
 
 impl NavidromeClient {
     pub fn new(base_url: &str, username: &str, password: &str) -> Result<Self, NavidromeError> {
-        let mut base_url = Url::parse(base_url).map_err(|e| NavidromeError::Protocol(e.to_string()))?;
+        let mut base_url =
+            Url::parse(base_url).map_err(|e| NavidromeError::Protocol(e.to_string()))?;
         if !base_url.path().ends_with('/') {
-            base_url = base_url.join("/").map_err(|e| NavidromeError::Protocol(e.to_string()))?;
+            base_url = base_url
+                .join("/")
+                .map_err(|e| NavidromeError::Protocol(e.to_string()))?;
         }
         let config = ureq::Agent::config_builder()
             .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
@@ -72,8 +77,13 @@ impl NavidromeClient {
             url.query_pairs_mut().append_pair(k, v);
         }
 
-        let resp = self.agent.get(url.as_str()).call().map_err(NavidromeError::from)?;
-        let value: serde_json::Value = resp.into_body().read_json().map_err(NavidromeError::from)?;
+        let resp = self
+            .agent
+            .get(url.as_str())
+            .call()
+            .map_err(NavidromeError::from)?;
+        let value: serde_json::Value =
+            resp.into_body().read_json().map_err(NavidromeError::from)?;
         let inner = match value {
             serde_json::Value::Object(mut map) => map
                 .remove("subsonic-response")
@@ -96,7 +106,10 @@ impl NavidromeClient {
             let lower = msg.to_lowercase();
             if lower.contains("not found") || lower.contains("missing parameter") {
                 Err(NavidromeError::NotFound)
-            } else if lower.contains("wrong username") || lower.contains("password") || lower.contains("unauthorized") {
+            } else if lower.contains("wrong username")
+                || lower.contains("password")
+                || lower.contains("unauthorized")
+            {
                 Err(NavidromeError::Unauthorized)
             } else if lower.contains("not supported") || lower.contains("not implemented") {
                 Err(NavidromeError::Unsupported)
@@ -116,12 +129,19 @@ impl NavidromeClient {
         })
     }
 
-    pub fn album_list(&self, kind: AlbumListKind, size: u32, offset: u32) -> Result<Vec<Album>, NavidromeError> {
+    pub fn album_list(
+        &self,
+        kind: AlbumListKind,
+        size: u32,
+        offset: u32,
+    ) -> Result<Vec<Album>, NavidromeError> {
         let kind_str = kind.as_str();
         let size_s = size.to_string();
         let offset_s = offset.to_string();
-        let resp: SubsonicResponse<AlbumListData> =
-            self.get_json("getAlbumList2", &[("type", kind_str), ("size", &size_s), ("offset", &offset_s)])?;
+        let resp: SubsonicResponse<AlbumListData> = self.get_json(
+            "getAlbumList2",
+            &[("type", kind_str), ("size", &size_s), ("offset", &offset_s)],
+        )?;
         Self::check_status(&resp)?;
         let albums = resp.data.album_list2.map(|a| a.album).unwrap_or_default();
         Ok(albums.into_iter().map(album_dto_to_album).collect())
@@ -150,7 +170,11 @@ impl NavidromeClient {
         let resp: SubsonicResponse<AlbumDetailData> = self.get_json("getAlbum", &[("id", id)])?;
         Self::check_status(&resp)?;
         let album = resp.data.album.ok_or(NavidromeError::NotFound)?;
-        let songs = if album.song.is_empty() { resp.data.song } else { album.song.clone() };
+        let songs = if album.song.is_empty() {
+            resp.data.song
+        } else {
+            album.song.clone()
+        };
         Ok(album_detail_from_dto(album, songs))
     }
 
@@ -162,7 +186,8 @@ impl NavidromeClient {
     }
 
     pub fn playlist(&self, id: &str) -> Result<PlaylistDetail, NavidromeError> {
-        let resp: SubsonicResponse<PlaylistDetailData> = self.get_json("getPlaylist", &[("id", id)])?;
+        let resp: SubsonicResponse<PlaylistDetailData> =
+            self.get_json("getPlaylist", &[("id", id)])?;
         Self::check_status(&resp)?;
         let pl = resp.data.playlist.ok_or(NavidromeError::NotFound)?;
         Ok(playlist_detail_from_dto(pl, resp.data.entry))
@@ -171,13 +196,24 @@ impl NavidromeClient {
     pub fn search(&self, query: &str) -> Result<SearchResults, NavidromeError> {
         let resp: SubsonicResponse<Search3Data> = self.get_json(
             "search3",
-            &[("query", query), ("artistCount", "20"), ("albumCount", "20"), ("songCount", "40")],
+            &[
+                ("query", query),
+                ("artistCount", "20"),
+                ("albumCount", "20"),
+                ("songCount", "40"),
+            ],
         )?;
         Self::check_status(&resp)?;
-        Ok(search_results_from_dto(resp.data.search_result3.unwrap_or_default()))
+        Ok(search_results_from_dto(
+            resp.data.search_result3.unwrap_or_default(),
+        ))
     }
 
-    pub fn stream_url(&self, track_id: &str, quality: StreamQuality) -> Result<String, NavidromeError> {
+    pub fn stream_url(
+        &self,
+        track_id: &str,
+        quality: StreamQuality,
+    ) -> Result<String, NavidromeError> {
         let mut url = self
             .base_url
             .join("rest/stream.view")
@@ -233,17 +269,26 @@ impl NavidromeClient {
         Ok(())
     }
 
-    pub fn scrobble(&self, track_id: &str, submission: bool, time_ms: i64) -> Result<(), NavidromeError> {
+    pub fn scrobble(
+        &self,
+        track_id: &str,
+        submission: bool,
+        time_ms: i64,
+    ) -> Result<(), NavidromeError> {
         let sub = if submission { "true" } else { "false" };
         let time = time_ms.to_string();
-        let resp: SubsonicResponse<PingData> =
-            self.get_json("scrobble", &[("id", track_id), ("submission", sub), ("time", &time)])?;
+        let resp: SubsonicResponse<PingData> = self.get_json(
+            "scrobble",
+            &[("id", track_id), ("submission", sub), ("time", &time)],
+        )?;
         Self::check_status(&resp)?;
         Ok(())
     }
 
     pub fn lyrics(&self, track_id: &str) -> Result<Option<LyricsStatus>, NavidromeError> {
-        let resp: SubsonicResponse<LyricsDto> = match self.get_json("getLyricsBySongId", &[("id", track_id)]) {
+        let resp: SubsonicResponse<LyricsDto> = match self
+            .get_json("getLyricsBySongId", &[("id", track_id)])
+        {
             Ok(r) => r,
             Err(NavidromeError::NotFound) | Err(NavidromeError::Unsupported) => return Ok(None),
             Err(e) => return Err(e),
@@ -260,7 +305,8 @@ impl NavidromeClient {
         }
         // If the endpoint is unsupported, Navidrome may return error code 70.
         if let Some(err) = &resp.error
-            && err.code == 70 {
+            && err.code == 70
+        {
             return Err(NavidromeError::Unsupported);
         }
         Ok(crate::navidrome::types::lyrics_from_dto(resp.data))

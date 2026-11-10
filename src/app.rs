@@ -1,9 +1,9 @@
 use crate::config::{AppConfig, Paths};
-use crate::library::{Track, HomeData};
+use crate::library::{HomeData, Track};
 use crate::lyrics::model::LyricsStatus;
 use crate::player::engine::{PlayerCommand, PlayerHandle, spawn_player};
-use crate::player::state::PlayerState;
 use crate::player::scrobble::ScrobbleTracker;
+use crate::player::state::PlayerState;
 use crate::theme::midnight_brass;
 use gpui::{Context, Entity, Render, Window, div, prelude::*};
 use std::time::Duration;
@@ -69,10 +69,13 @@ impl MyuzikApp {
 
     pub fn play_track(&self, track: Track) {
         let uri = format!("track://{}", track.id); // placeholder; real URI from Navidrome
-        self.player_handle.tx.send(PlayerCommand::Load {
-            uri,
-            track_id: track.id.clone(),
-        }).ok();
+        self.player_handle
+            .tx
+            .send(PlayerCommand::Load {
+                uri,
+                track_id: track.id.clone(),
+            })
+            .ok();
         self.player_handle.tx.send(PlayerCommand::Play).ok();
     }
 

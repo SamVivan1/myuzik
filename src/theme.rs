@@ -46,33 +46,33 @@ pub struct Theme {
 
 pub fn midnight_brass() -> Theme {
     Theme {
-    colors: Colors {
-        bg_base: rgb(0x0B0B0E),
-        bg_raised: rgb(0x121218),
-        glass_tint: rgba(0x0C0C10B8), // ~72% opacity
-        glass_border: rgba(0xE8D3A328),
-        text_primary: rgb(0xF5EFE4),
-        text_secondary: rgb(0xB8B0A2),
-        text_tertiary: rgb(0x7C756A),
-        gold: rgb(0xC9A86A),
-        gold_light: rgb(0xE8D3A3),
-        gold_deep: rgb(0x8C6D3F),
-        clay_surface: rgb(0xF4EBDD),
-        clay_shade: rgb(0xE7D8C2),
-        clay_ink: rgb(0x2A241C),
-        os_accent: rgb(0x3584E4),
-        danger: rgb(0xD96C6C),
-        shadow_warm: rgba(0x5A411E55),
-    },
-    radii: Radii {
-        glass: 20.0,
-        card: 16.0,
-        clay: 28.0,
-        button: 999.0,
-        pill: 999.0,
-    },
-    display_font: "Fraunces",
-    ui_font: "Inter",
+        colors: Colors {
+            bg_base: rgb(0x0B0B0E),
+            bg_raised: rgb(0x121218),
+            glass_tint: rgba(0x0C0C10B8), // ~72% opacity
+            glass_border: rgba(0xE8D3A328),
+            text_primary: rgb(0xF5EFE4),
+            text_secondary: rgb(0xB8B0A2),
+            text_tertiary: rgb(0x7C756A),
+            gold: rgb(0xC9A86A),
+            gold_light: rgb(0xE8D3A3),
+            gold_deep: rgb(0x8C6D3F),
+            clay_surface: rgb(0xF4EBDD),
+            clay_shade: rgb(0xE7D8C2),
+            clay_ink: rgb(0x2A241C),
+            os_accent: rgb(0x3584E4),
+            danger: rgb(0xD96C6C),
+            shadow_warm: rgba(0x5A411E55),
+        },
+        radii: Radii {
+            glass: 20.0,
+            card: 16.0,
+            clay: 28.0,
+            button: 999.0,
+            pill: 999.0,
+        },
+        display_font: "Fraunces",
+        ui_font: "Inter",
     }
 }
 
@@ -125,7 +125,10 @@ mod tests {
 
     #[test]
     fn clay_ink_on_clay_passes_aa() {
-        let ratio = contrast_ratio(midnight_brass().colors.clay_ink, midnight_brass().colors.clay_surface);
+        let ratio = contrast_ratio(
+            midnight_brass().colors.clay_ink,
+            midnight_brass().colors.clay_surface,
+        );
         assert!(ratio >= 4.5, "clay ink contrast {ratio:.2} < 4.5");
     }
 
@@ -133,7 +136,12 @@ mod tests {
     fn os_accent_focus_ring_passes_3_to_1() {
         let glass = glass_over(midnight_brass().colors.bg_base);
         assert!(contrast_ratio(midnight_brass().colors.os_accent, glass) >= 3.0);
-        assert!(contrast_ratio(midnight_brass().colors.os_accent, midnight_brass().colors.clay_surface) >= 3.0);
+        assert!(
+            contrast_ratio(
+                midnight_brass().colors.os_accent,
+                midnight_brass().colors.clay_surface
+            ) >= 3.0
+        );
     }
 
     #[test]

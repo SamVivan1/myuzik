@@ -23,7 +23,10 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
     let (cmd_tx, cmd_rx) = flume::unbounded::<MprisCommand>();
 
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 eprintln!("mpris: failed to create runtime: {e}");
@@ -119,7 +122,8 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
                         let _ = player.set_playback_status(ps).await;
                     }
                     MprisCommand::UpdatePosition(pos) => {
-                        player.set_position(mpris_server::Time::from_micros(pos.as_micros() as i64));
+                        player
+                            .set_position(mpris_server::Time::from_micros(pos.as_micros() as i64));
                     }
                     MprisCommand::UpdateVolume(v) => {
                         let _ = player.set_volume(v as f64).await;
@@ -135,7 +139,10 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
 
 impl MprisHandle {
     pub fn update_metadata(&self, track: &Track, art_url: Option<String>) {
-        let _ = self.cmd_tx.send(MprisCommand::UpdateMetadata(Box::new(track.clone()), art_url));
+        let _ = self.cmd_tx.send(MprisCommand::UpdateMetadata(
+            Box::new(track.clone()),
+            art_url,
+        ));
     }
 
     pub fn update_status(&self, status: PlaybackStatus) {

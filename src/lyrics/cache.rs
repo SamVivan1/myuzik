@@ -1,8 +1,8 @@
 use crate::library::Track;
 use crate::lyrics::lrc::parse_lrc;
 use crate::lyrics::model::LyricsStatus;
-use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
@@ -69,8 +69,7 @@ impl LyricsCache {
             synced: synced_text.to_string(),
             plain: plain_text.to_string(),
         };
-        let text = serde_json::to_string(&entry)
-            .map_err(std::io::Error::other)?;
+        let text = serde_json::to_string(&entry).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, text)?;
         fs::rename(&tmp, &path)?;

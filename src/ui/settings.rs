@@ -32,51 +32,86 @@ impl Render for SettingsView {
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child("Settings"),
             )
-            .child(section("Account", t, theme.ui_font, vec![
-                ("Server URL", self.config.server_url.as_str()),
-                ("Username", self.config.username.as_str()),
-            ]))
-            .child(section("Playback", t, theme.ui_font, vec![
-                ("Stream quality", match self.config.quality {
-                    crate::config::StreamQuality::Original => "Original",
-                    crate::config::StreamQuality::Kbps320 => "320 kbps",
-                    crate::config::StreamQuality::Kbps192 => "192 kbps",
-                }),
-                ("Volume", "80%"),
-                ("Scrobble", if self.config.scrobble { "On" } else { "Off" }),
-            ]))
-            .child(section("Lyrics", t, theme.ui_font, vec![
-                ("Offset", "0 ms"),
-                ("Source", if self.config.prefer_navidrome_lyrics { "Navidrome first" } else { "LRCLIB first" }),
-            ]))
-            .child(section("Overlay", t, theme.ui_font, vec![
-                ("Status", "Available"),
-                ("Opacity", "74%"),
-            ]))
-            .child(section("Appearance", t, theme.ui_font, vec![
-                ("Theme", "Midnight Brass"),
-                ("Reduce motion", "Off"),
-                ("OS accent", "Follow system"),
-            ]))
-            .child(section("About", t, theme.ui_font, vec![
-                ("Version", "0.1.0"),
-                ("License", "MIT"),
-            ]))
+            .child(section(
+                "Account",
+                t,
+                theme.ui_font,
+                vec![
+                    ("Server URL", self.config.server_url.as_str()),
+                    ("Username", self.config.username.as_str()),
+                ],
+            ))
+            .child(section(
+                "Playback",
+                t,
+                theme.ui_font,
+                vec![
+                    (
+                        "Stream quality",
+                        match self.config.quality {
+                            crate::config::StreamQuality::Original => "Original",
+                            crate::config::StreamQuality::Kbps320 => "320 kbps",
+                            crate::config::StreamQuality::Kbps192 => "192 kbps",
+                        },
+                    ),
+                    ("Volume", "80%"),
+                    ("Scrobble", if self.config.scrobble { "On" } else { "Off" }),
+                ],
+            ))
+            .child(section(
+                "Lyrics",
+                t,
+                theme.ui_font,
+                vec![
+                    ("Offset", "0 ms"),
+                    (
+                        "Source",
+                        if self.config.prefer_navidrome_lyrics {
+                            "Navidrome first"
+                        } else {
+                            "LRCLIB first"
+                        },
+                    ),
+                ],
+            ))
+            .child(section(
+                "Overlay",
+                t,
+                theme.ui_font,
+                vec![("Status", "Available"), ("Opacity", "74%")],
+            ))
+            .child(section(
+                "Appearance",
+                t,
+                theme.ui_font,
+                vec![
+                    ("Theme", "Midnight Brass"),
+                    ("Reduce motion", "Off"),
+                    ("OS accent", "Follow system"),
+                ],
+            ))
+            .child(section(
+                "About",
+                t,
+                theme.ui_font,
+                vec![("Version", "0.1.0"), ("License", "MIT")],
+            ))
     }
 }
 
-fn section(title: &str, t: &crate::theme::Colors, _font: &'static str, rows: Vec<(&str, &str)>) -> gpui::Div {
-    let mut s = div()
-        .flex()
-        .flex_col()
-        .gap(gpui::px(8.0))
-        .child(
-            div()
-                .text_size(gpui::px(9.0))
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(t.gold)
-                .child(title.to_uppercase()),
-        );
+fn section(
+    title: &str,
+    t: &crate::theme::Colors,
+    _font: &'static str,
+    rows: Vec<(&str, &str)>,
+) -> gpui::Div {
+    let mut s = div().flex().flex_col().gap(gpui::px(8.0)).child(
+        div()
+            .text_size(gpui::px(9.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(t.gold)
+            .child(title.to_uppercase()),
+    );
 
     for (label, value) in rows {
         s = s.child(

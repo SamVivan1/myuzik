@@ -86,15 +86,23 @@ impl Paths {
     }
 }
 
-
 pub fn credentials_path(paths: &Paths) -> PathBuf {
-    paths.config.parent().unwrap_or(&paths.cache).join("credentials")
+    paths
+        .config
+        .parent()
+        .unwrap_or(&paths.cache)
+        .join("credentials")
 }
 
 pub fn load_password(paths: &Paths) -> Option<String> {
     let p = credentials_path(paths);
-    if !p.exists() { return None; }
-    std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    if !p.exists() {
+        return None;
+    }
+    std::fs::read_to_string(&p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn save_password(paths: &Paths, password: &str) -> anyhow::Result<()> {

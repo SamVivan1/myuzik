@@ -25,7 +25,10 @@ pub fn parse_lrc(text: &str) -> Vec<LyricLine> {
         }
         let value = rest.trim().to_string();
         for t in stamps {
-            lines.push(LyricLine { time: t, text: value.clone() });
+            lines.push(LyricLine {
+                time: t,
+                text: value.clone(),
+            });
         }
     }
     lines.sort_by_key(|l| l.time);
@@ -39,7 +42,11 @@ fn parse_stamp(s: &str) -> Option<Duration> {
     let parts: Vec<&str> = s.split(':').collect();
     let (hours, minutes, seconds) = match parts.len() {
         2 => (0u64, parts[0].parse::<u64>().ok()?, parts[1]),
-        3 => (parts[0].parse::<u64>().ok()?, parts[1].parse::<u64>().ok()?, parts[2]),
+        3 => (
+            parts[0].parse::<u64>().ok()?,
+            parts[1].parse::<u64>().ok()?,
+            parts[2],
+        ),
         _ => return None,
     };
     // seconds may have fraction
@@ -112,8 +119,14 @@ mod tests {
 
     #[test]
     fn supports_centiseconds_ms_hours_multi() {
-        assert_eq!(parse_lrc("[00:01.5] a")[0].time, Duration::from_millis(1500));
-        assert_eq!(parse_lrc("[00:01.005] b")[0].time, Duration::from_millis(1005));
+        assert_eq!(
+            parse_lrc("[00:01.5] a")[0].time,
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            parse_lrc("[00:01.005] b")[0].time,
+            Duration::from_millis(1005)
+        );
         assert_eq!(parse_lrc("[60:00] c")[0].time, Duration::from_secs(3600));
         let lines = parse_lrc("[00:10][00:20] la");
         assert_eq!(lines.len(), 2);
@@ -151,8 +164,17 @@ mod tests {
 
     #[test]
     fn offset_clamps_at_zero() {
-        assert_eq!(apply_offset(Duration::from_secs(1), -500), Duration::from_millis(500));
-        assert_eq!(apply_offset(Duration::from_millis(100), -500), Duration::ZERO);
-        assert_eq!(apply_offset(Duration::from_secs(1), 500), Duration::from_millis(1500));
+        assert_eq!(
+            apply_offset(Duration::from_secs(1), -500),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            apply_offset(Duration::from_millis(100), -500),
+            Duration::ZERO
+        );
+        assert_eq!(
+            apply_offset(Duration::from_secs(1), 500),
+            Duration::from_millis(1500)
+        );
     }
 }

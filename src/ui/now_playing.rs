@@ -318,8 +318,8 @@ impl Render for NowPlayingView {
                             .text_size(gpui::px(8.0))
                             .text_color(t.text_tertiary)
                             .child(format!("{} — {}", self.title, self.artist))
-                            .child("1:24 / 3:42")
-                    )
+                            .child("1:24 / 3:42"),
+                    ),
             )
     }
 }

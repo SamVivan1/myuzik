@@ -89,8 +89,22 @@ impl Render for HomeView {
                     .flex()
                     .flex_col()
                     .gap(gpui::px(6.0))
-                    .child(track_row("01", "Midnight Static", "Lumen Fields", "3:42", true, t))
-                    .child(track_row("02", "Paper Satellites", "Kite Garden", "4:07", false, t))
+                    .child(track_row(
+                        "01",
+                        "Midnight Static",
+                        "Lumen Fields",
+                        "3:42",
+                        true,
+                        t,
+                    ))
+                    .child(track_row(
+                        "02",
+                        "Paper Satellites",
+                        "Kite Garden",
+                        "4:07",
+                        false,
+                        t,
+                    ))
                     .child(track_row("03", "Golden Hour", "Vela", "3:18", false, t)),
             )
     }
@@ -145,7 +159,14 @@ fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div 
         )
 }
 
-fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
+fn track_row(
+    idx: &str,
+    title: &str,
+    artist: &str,
+    dur: &str,
+    active: bool,
+    t: &crate::theme::Colors,
+) -> gpui::Div {
     let bg = if active { t.gold } else { t.glass_tint };
     let text_color = if active { t.clay_ink } else { t.text_primary };
     div()
@@ -198,7 +219,6 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
                 .child(dur.to_string()),
         )
 }
-
 
 impl Default for HomeView {
     fn default() -> Self {

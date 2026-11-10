@@ -1,16 +1,19 @@
 use crate::app::Route;
 use crate::config::{AppConfig, Paths};
-use crate::navidrome::client::NavidromeClient;
 use crate::lyrics::provider::LyricsProvider;
-use std::sync::Arc;
+use crate::navidrome::client::NavidromeClient;
 use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
+use crate::player::state::{PlaybackStatus, PlayerState};
+use crate::theme::midnight_brass;
 use crate::ui::now_playing::NowPlayingView;
 use crate::ui::search::SearchView;
 use crate::ui::settings::SettingsView;
-use crate::player::state::{PlayerState, PlaybackStatus};
-use crate::theme::midnight_brass;
-use gpui::{AnimationExt, Context, InteractiveElement, Render, StatefulInteractiveElement, Window, div, prelude::*};
+use gpui::{
+    AnimationExt, Context, InteractiveElement, Render, StatefulInteractiveElement, Window, div,
+    prelude::*,
+};
+use std::sync::Arc;
 
 #[allow(dead_code)]
 pub struct Shell {
@@ -39,7 +42,13 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new(cx: &mut gpui::App, player_handle: PlayerHandle, config: AppConfig, paths: Paths, mpris_handle: Option<MprisHandle>) -> Self {
+    pub fn new(
+        cx: &mut gpui::Context<Self>,
+        player_handle: PlayerHandle,
+        config: AppConfig,
+        paths: Paths,
+        mpris_handle: Option<MprisHandle>,
+    ) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
         let home_state = cx.new(|_cx| HomeState::default());
         let selected_album = None;
@@ -56,8 +65,12 @@ impl Shell {
         let resize_start = None;
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
-            password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok()).map(Arc::new)
-        } else { None };
+            password
+                .and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok())
+                .map(Arc::new)
+        } else {
+            None
+        };
         let lyrics_provider = client.as_ref().map(|_| {
             let pw = crate::config::load_password(&paths).unwrap_or_default();
             let owned = NavidromeClient::new(&config.server_url, &config.username, &pw)
@@ -68,24 +81,38 @@ impl Shell {
                 config.prefer_navidrome_lyrics,
             ))
         });
-        let route = if client.is_none() { Route::Setup } else { Route::Home };
+        let route = if client.is_none() {
+            Route::Setup
+        } else {
+            Route::Home
+        };
         // Poll player events in background
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
         let mpris_for_loop = mpris_handle.clone();
         let now_playing_for_loop = now_playing.clone();
+        let self_entity = cx.entity();
         let overlay_for_loop = overlay_state.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
             let hs = home_state.clone();
-            cx.spawn(async move |cx| {
+            cx.spawn(async move |_, cx| {
                 cx.update(|app| {
-                    app.update_entity(&hs, |h, _| { h.loading = true; });
+                    app.update_entity(&hs, |h, _| {
+                        h.loading = true;
+                    });
                 });
                 let client_bg = client.clone();
-                let res = cx.background_executor().spawn(async move {
-                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 100, 0)
-                }).await;
+                let res = cx
+                    .background_executor()
+                    .spawn(async move {
+                        client_bg.album_list(
+                            crate::navidrome::client::AlbumListKind::Newest,
+                            100,
+                            0,
+                        )
+                    })
+                    .await;
                 let albums = match res {
                     Ok(a) => a,
                     Err(e) => {
@@ -105,9 +132,17 @@ impl Shell {
                     });
                 });
                 let client_bg = client.clone();
-                let artists = cx.background_executor().spawn(async move { client_bg.artists() }).await.unwrap_or_default();
+                let artists = cx
+                    .background_executor()
+                    .spawn(async move { client_bg.artists() })
+                    .await
+                    .unwrap_or_default();
                 let client_bg = client.clone();
-                let playlists = cx.background_executor().spawn(async move { client_bg.playlists() }).await.unwrap_or_default();
+                let playlists = cx
+                    .background_executor()
+                    .spawn(async move { client_bg.playlists() })
+                    .await
+                    .unwrap_or_default();
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
                         h.artists = artists;
@@ -119,9 +154,10 @@ impl Shell {
                     if let Some(cover_id) = &album.cover_art_id {
                         let cid_bg = cover_id.clone();
                         let client_bg = client.clone();
-                        let fetched = cx.background_executor().spawn(async move {
-                            client_bg.cover_bytes(&cid_bg, 512)
-                        }).await;
+                        let fetched = cx
+                            .background_executor()
+                            .spawn(async move { client_bg.cover_bytes(&cid_bg, 512) })
+                            .await;
                         if let Ok(bytes) = fetched {
                             let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
                                 gpui::ImageFormat::Png
@@ -142,9 +178,10 @@ impl Shell {
                         }
                     }
                 }
-            }).detach();
+            })
+            .detach();
         }
-        cx.spawn(async move |cx| {
+        cx.spawn(async move |_, cx| {
             loop {
                 match rx.recv_async().await {
                     Ok(PlayerEvent::StateChanged(s)) => {
@@ -153,7 +190,9 @@ impl Shell {
                                 ps.set_status(s);
                             });
                         });
-                        if let Some(mh) = &mpris_for_loop { mh.update_status(s); }
+                        if let Some(mh) = &mpris_for_loop {
+                            mh.update_status(s);
+                        }
                     }
                     Ok(PlayerEvent::Position(pos)) => {
                         cx.update(|app| {
@@ -161,9 +200,17 @@ impl Shell {
                                 ps.set_position(pos);
                             });
                         });
-                        if let Some(mh) = &mpris_for_loop { mh.update_position(pos); }
+                        if let Some(mh) = &mpris_for_loop {
+                            mh.update_position(pos);
+                        }
                         let np = now_playing_for_loop.clone();
-                        let dur = cx.update(|app| state.read(app).duration.map(|d| d.as_secs_f64()).unwrap_or(0.0));
+                        let dur = cx.update(|app| {
+                            state
+                                .read(app)
+                                .duration
+                                .map(|d| d.as_secs_f64())
+                                .unwrap_or(0.0)
+                        });
                         cx.update(|app| {
                             app.update_entity(&np, |v, cx| {
                                 v.set_position(cx, pos.as_secs_f64(), dur);
@@ -190,6 +237,10 @@ impl Shell {
                             state.update(app, |ps, _cx| {
                                 ps.set_status(PlaybackStatus::Stopped);
                             });
+                            let entity = self_entity.clone();
+                            entity.update(app, |shell, cx| {
+                                shell.play_next(cx);
+                            });
                         });
                     }
                     Ok(PlayerEvent::Error(e)) => {
@@ -204,7 +255,8 @@ impl Shell {
                     Err(_) => break,
                 }
             }
-        }).detach();
+        })
+        .detach();
 
         Self {
             player_state,
@@ -294,16 +346,31 @@ impl Shell {
             self.config = cfg.clone();
             let password = crate::config::load_password(&self.paths);
             self.client = if !cfg.server_url.is_empty() {
-                password.and_then(|pw| NavidromeClient::new(&cfg.server_url, &cfg.username, &pw).ok()).map(Arc::new)
-            } else { None };
-            self.route = if cfg.server_url.is_empty() { Route::Setup } else { Route::Home };
+                password
+                    .and_then(|pw| NavidromeClient::new(&cfg.server_url, &cfg.username, &pw).ok())
+                    .map(Arc::new)
+            } else {
+                None
+            };
+            self.route = if cfg.server_url.is_empty() {
+                Route::Setup
+            } else {
+                Route::Home
+            };
             if let Some(client) = self.client.clone() {
                 let hs = self.home_state.clone();
                 cx.spawn(async move |cx| {
                     let client_bg = client.clone();
-                let res = cx.background_executor().spawn(async move {
-                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 100, 0)
-                }).await;
+                    let res = cx
+                        .background_executor()
+                        .spawn(async move {
+                            client_bg.album_list(
+                                crate::navidrome::client::AlbumListKind::Newest,
+                                100,
+                                0,
+                            )
+                        })
+                        .await;
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {
                             h.loading = false;
@@ -313,7 +380,8 @@ impl Shell {
                             }
                         });
                     });
-                }).detach();
+                })
+                .detach();
             }
         }
     }
@@ -325,8 +393,15 @@ impl Shell {
         });
         // send load+play to engine
         if let Some(client) = &self.client
-            && let Ok(uri) = client.stream_url(&track.id, self.config.quality) {
-            self.player_handle.tx.send(PlayerCommand::Load { uri, track_id: track.id.clone() }).ok();
+            && let Ok(uri) = client.stream_url(&track.id, self.config.quality)
+        {
+            self.player_handle
+                .tx
+                .send(PlayerCommand::Load {
+                    uri,
+                    track_id: track.id.clone(),
+                })
+                .ok();
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
         // fetch lyrics
@@ -338,20 +413,32 @@ impl Shell {
             cx.spawn(async move |cx| {
                 let t_bg = t.clone();
                 let c_bg = c.clone();
-                let status = cx.background_executor().spawn(async move {
-                    c_bg.lyrics(&t_bg.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
-                }).await;
+                let status = cx
+                    .background_executor()
+                    .spawn(async move {
+                        c_bg.lyrics(&t_bg.id)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                    })
+                    .await;
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
                         v.set_lyrics(cx, status);
                     });
                 });
-            }).detach();
+            })
+            .detach();
         }
     }
 
-    pub fn play_tracks(&mut self, tracks: Vec<crate::library::Track>, start: usize, cx: &mut gpui::App) {
+    pub fn play_tracks(
+        &mut self,
+        tracks: Vec<crate::library::Track>,
+        start: usize,
+        cx: &mut gpui::App,
+    ) {
         if tracks.is_empty() || start >= tracks.len() {
             return;
         }
@@ -377,8 +464,15 @@ impl Shell {
 
     fn load_and_play(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
         if let Some(client) = &self.client
-            && let Ok(uri) = client.stream_url(&track.id, self.config.quality) {
-            self.player_handle.tx.send(PlayerCommand::Load { uri, track_id: track.id.clone() }).ok();
+            && let Ok(uri) = client.stream_url(&track.id, self.config.quality)
+        {
+            self.player_handle
+                .tx
+                .send(PlayerCommand::Load {
+                    uri,
+                    track_id: track.id.clone(),
+                })
+                .ok();
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
         if let Some(provider) = &self.lyrics_provider {
@@ -386,14 +480,20 @@ impl Shell {
             let t = track.clone();
             let np = self.now_playing.clone();
             let os = self.overlay_state.clone();
-            let cover = track.cover_art_id.as_ref()
+            let cover = track
+                .cover_art_id
+                .as_ref()
                 .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
             cx.spawn(async move |cx| {
                 let t_bg = t.clone();
                 let p_bg = p.clone();
-                let status = cx.background_executor().spawn(async move {
-                    p_bg.fetch(&t_bg).unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
-                }).await;
+                let status = cx
+                    .background_executor()
+                    .spawn(async move {
+                        p_bg.fetch(&t_bg)
+                            .unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                    })
+                    .await;
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
@@ -417,8 +517,17 @@ impl Shell {
                         };
                     });
                 });
-            }).detach();
+            })
+            .detach();
         }
+    }
+
+    pub fn go(&mut self, route: Route) {
+        self.route = route;
+    }
+
+    pub fn route(&self) -> Route {
+        self.route.clone()
     }
 
     pub fn close_overlay(&mut self, cx: &mut gpui::App) {
@@ -435,7 +544,9 @@ impl Render for Shell {
 
         if self.route == Route::Setup {
             let cfg_path = self.paths.config.display().to_string();
-            let cred_path = crate::config::credentials_path(&self.paths).display().to_string();
+            let cred_path = crate::config::credentials_path(&self.paths)
+                .display()
+                .to_string();
             return div()
                 .size_full()
                 .bg(t.bg_base)
@@ -507,13 +618,33 @@ impl Render for Shell {
 
         let status = self.player_state.read(cx).status;
         let is_playing = status == PlaybackStatus::Playing;
-        let current_title = self.player_state.read(cx).current.as_ref().map(|t| t.title.clone()).unwrap_or_default();
-        let current_artist = self.player_state.read(cx).current.as_ref().map(|t| t.artist.clone()).unwrap_or_default();
-        let current_cover = self.player_state.read(cx).current.as_ref()
+        let current_title = self
+            .player_state
+            .read(cx)
+            .current
+            .as_ref()
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        let current_artist = self
+            .player_state
+            .read(cx)
+            .current
+            .as_ref()
+            .map(|t| t.artist.clone())
+            .unwrap_or_default();
+        let current_cover = self
+            .player_state
+            .read(cx)
+            .current
+            .as_ref()
             .and_then(|t| t.cover_art_id.clone())
             .and_then(|cid| self.home_state.read(cx).covers.get(&cid).cloned());
         let position = self.player_state.read(cx).position;
-        let duration = self.player_state.read(cx).duration.unwrap_or(std::time::Duration::ZERO);
+        let duration = self
+            .player_state
+            .read(cx)
+            .duration
+            .unwrap_or(std::time::Duration::ZERO);
 
         let progress_pct = if duration.as_secs_f64() > 0.0 {
             (position.as_secs_f64() / duration.as_secs_f64() * 100.0).clamp(0.0, 100.0)
@@ -572,6 +703,7 @@ impl Render for Shell {
                     .w(gpui::px(260.0))
                     .cursor_pointer()
                     .id("np-open")
+                    .debug_selector(|| "np-open".to_string())
                     .on_click(cx.listener(|this, _event, _window, _cx| {
                         this.route = Route::NowPlaying;
                     }))
@@ -611,7 +743,11 @@ impl Render for Shell {
                                     .text_size(gpui::px(12.0))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .text_color(t.clay_ink)
-                                    .child(if current_title.is_empty() { "Nothing playing".to_string() } else { current_title.clone() }),
+                                    .child(if current_title.is_empty() {
+                                        "Nothing playing".to_string()
+                                    } else {
+                                        current_title.clone()
+                                    }),
                             )
                             .child(
                                 div()
@@ -696,6 +832,7 @@ impl Render for Shell {
                                     .text_size(gpui::px(16.0))
                                     .cursor_pointer()
                                     .id("play-btn")
+                                    .debug_selector(|| "play-btn".to_string())
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.player_state.update(cx, |ps, _cx| ps.toggle());
                                         this.player_handle.tx.send(PlayerCommand::Toggle).ok();
@@ -813,7 +950,11 @@ impl Render for Shell {
                             .cursor_pointer()
                             .id("pin-btn")
                             .on_click(cx.listener(|this, _event, _window, _cx| {
-                                if this.overlay_handle.is_some() { this.close_overlay(_cx); } else { this.open_overlay(_cx); }
+                                if this.overlay_handle.is_some() {
+                                    this.close_overlay(_cx);
+                                } else {
+                                    this.open_overlay(_cx);
+                                }
                             }))
                             .child("Pin lyrics"),
                     ),
@@ -1065,14 +1206,14 @@ impl Render for Shell {
                                     .flex()
                                     .flex_col()
                                     .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
-                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; window.focus(&this.search_focus, cx); })))
-                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
-                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
-                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; })))
-                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; }))),
+                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").debug_selector(|| "nav-home".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
+                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; window.focus(&this.search_focus, cx); })))
+                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
+                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
+                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; })))
+                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; }))),
                             )
                             .child(
                                 div()
@@ -1602,7 +1743,13 @@ impl Render for Shell {
     }
 }
 
-fn eq_bar(id: &'static str, duration_ms: u64, min: f32, max: f32, color: gpui::Rgba) -> impl IntoElement {
+fn eq_bar(
+    id: &'static str,
+    duration_ms: u64,
+    min: f32,
+    max: f32,
+    color: gpui::Rgba,
+) -> impl IntoElement {
     div()
         .w(gpui::px(3.0))
         .h(gpui::px(max))
@@ -1660,9 +1807,17 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
     }
 }
 
-
-fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Image>>, t: &crate::theme::Colors) -> gpui::Div {
-    let initial = title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".to_string());
+fn album_card(
+    title: &str,
+    artist: &str,
+    cover: Option<std::sync::Arc<gpui::Image>>,
+    t: &crate::theme::Colors,
+) -> gpui::Div {
+    let initial = title
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
     gpui::div()
         .flex()
         .flex_col()
@@ -1746,8 +1901,19 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         )
 }
 
-fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
-    let bg = if active { gpui::rgba(0xC9A86A12) } else { t.glass_tint };
+fn track_row(
+    idx: &str,
+    title: &str,
+    artist: &str,
+    dur: &str,
+    active: bool,
+    t: &crate::theme::Colors,
+) -> gpui::Div {
+    let bg = if active {
+        gpui::rgba(0xC9A86A12)
+    } else {
+        t.glass_tint
+    };
     let text_color = t.text_primary;
     gpui::div()
         .flex()
@@ -1758,7 +1924,11 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
         .rounded(gpui::px(12.0))
         .bg(bg)
         .border_1()
-        .border_color(if active { gpui::rgba(0xC9A86A55) } else { t.glass_border })
+        .border_color(if active {
+            gpui::rgba(0xC9A86A55)
+        } else {
+            t.glass_border
+        })
         .child(
             gpui::div()
                 .w(gpui::px(15.0))
@@ -1817,7 +1987,6 @@ pub struct HomeState {
     pub artists: Vec<crate::library::Artist>,
     pub playlists: Vec<crate::library::Playlist>,
 }
-
 
 fn fxhash_id(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;

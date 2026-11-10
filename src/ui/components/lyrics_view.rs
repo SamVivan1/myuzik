@@ -1,9 +1,14 @@
-use crate::lyrics::model::LyricsStatus;
 use crate::lyrics::model::LyricLine;
+use crate::lyrics::model::LyricsStatus;
 use crate::theme::midnight_brass;
 
 /// Pure: vertical translation to center the active lyric line.
-pub fn target_offset(line_tops: &[f32], line_heights: &[f32], viewport_h: f32, active: usize) -> f32 {
+pub fn target_offset(
+    line_tops: &[f32],
+    line_heights: &[f32],
+    viewport_h: f32,
+    active: usize,
+) -> f32 {
     if active >= line_tops.len() || line_tops.is_empty() {
         return 0.0;
     }
@@ -128,34 +133,30 @@ impl Render for LyricsView {
         let t = &theme.colors;
 
         match self.mode {
-            LyricsMode::Message => {
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .text_size(gpui::px(14.0))
-                            .text_color(t.text_secondary)
-                            .child(self.message.clone()),
-                    )
-            }
-            LyricsMode::Plain => {
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(4.0))
-                    .px(gpui::px(16.0))
-                    .py(gpui::px(12.0))
-                    .child(
-                        div()
-                            .text_size(gpui::px(13.0))
-                            .text_color(t.text_secondary)
-                            .child(self.plain_text.clone()),
-                    )
-            }
+            LyricsMode::Message => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(gpui::px(14.0))
+                        .text_color(t.text_secondary)
+                        .child(self.message.clone()),
+                ),
+            LyricsMode::Plain => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap(gpui::px(4.0))
+                .px(gpui::px(16.0))
+                .py(gpui::px(12.0))
+                .child(
+                    div()
+                        .text_size(gpui::px(13.0))
+                        .text_color(t.text_secondary)
+                        .child(self.plain_text.clone()),
+                ),
             LyricsMode::Synced => {
                 let _active = self.active.unwrap_or(0);
                 let mut container = div()
@@ -168,7 +169,11 @@ impl Render for LyricsView {
 
                 for (i, line) in self.lines.iter().enumerate() {
                     let is_active = self.active == Some(i);
-                    let color = if is_active { t.gold_light } else { t.text_secondary };
+                    let color = if is_active {
+                        t.gold_light
+                    } else {
+                        t.text_secondary
+                    };
                     let size = if is_active { 16.0 } else { 13.0 };
                     let weight = if is_active {
                         gpui::FontWeight::BOLD
@@ -202,7 +207,6 @@ impl Render for LyricsView {
         }
     }
 }
-
 
 impl Default for LyricsView {
     fn default() -> Self {

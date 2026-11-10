@@ -97,7 +97,6 @@ impl PlayerState {
     }
 }
 
-
 impl Default for PlayerState {
     fn default() -> Self {
         Self::new()

@@ -1,4 +1,4 @@
-use myuzik::navidrome::auth::{random_salt, subsonic_token, auth_params};
+use myuzik::navidrome::auth::{auth_params, random_salt, subsonic_token};
 
 #[test]
 fn token_is_md5_of_password_plus_salt() {
@@ -11,7 +11,10 @@ fn auth_params_include_required_fields() {
     let params = auth_params("user", "secret", "abc123");
     let map: std::collections::HashMap<_, _> = params.into_iter().collect();
     assert_eq!(map.get("u"), Some(&"user".to_string()));
-    assert_eq!(map.get("t"), Some(&"f22ae4f5eacb35c993e910606a413410".to_string()));
+    assert_eq!(
+        map.get("t"),
+        Some(&"f22ae4f5eacb35c993e910606a413410".to_string())
+    );
     assert_eq!(map.get("s"), Some(&"abc123".to_string()));
     assert_eq!(map.get("v"), Some(&"1.16.1".to_string()));
     assert_eq!(map.get("c"), Some(&"myuzik".to_string()));

@@ -43,7 +43,11 @@ impl LyricsProvider {
                     // Cache raw text if possible.
                     match &status {
                         LyricsStatus::Synced(lines) => {
-                            let text = lines.iter().map(|l| format!("[{}] {}", format_time(l.time), l.text)).collect::<Vec<_>>().join("\n");
+                            let text = lines
+                                .iter()
+                                .map(|l| format!("[{}] {}", format_time(l.time), l.text))
+                                .collect::<Vec<_>>()
+                                .join("\n");
                             let _ = self.cache.write_raw(&key, false, &text, "");
                         }
                         LyricsStatus::Plain(t) => {
@@ -67,7 +71,11 @@ impl LyricsProvider {
             // cache
             match &status {
                 LyricsStatus::Synced(lines) => {
-                    let text = lines.iter().map(|l| format!("[{}] {}", format_time(l.time), l.text)).collect::<Vec<_>>().join("\n");
+                    let text = lines
+                        .iter()
+                        .map(|l| format!("[{}] {}", format_time(l.time), l.text))
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     let _ = self.cache.write_raw(&key, false, &text, "");
                 }
                 LyricsStatus::Plain(t) => {
@@ -96,9 +104,13 @@ impl LyricsProvider {
             urlencoding::encode(&track.album),
             duration
         );
-        if let Ok(resp) = agent.get(&url).header("User-Agent", &self.user_agent).call()
+        if let Ok(resp) = agent
+            .get(&url)
+            .header("User-Agent", &self.user_agent)
+            .call()
             && let Ok(json) = resp.into_body().read_json::<serde_json::Value>()
-            && let Some(status) = build_result(&json) {
+            && let Some(status) = build_result(&json)
+        {
             return Some(status);
         }
         // fallback search
@@ -107,35 +119,48 @@ impl LyricsProvider {
             urlencoding::encode(&track.artist),
             urlencoding::encode(&track.title)
         );
-        if let Ok(resp) = agent.get(&search_url).header("User-Agent", &self.user_agent).call()
+        if let Ok(resp) = agent
+            .get(&search_url)
+            .header("User-Agent", &self.user_agent)
+            .call()
             && let Ok(json) = resp.into_body().read_json::<serde_json::Value>()
-            && let Some(arr) = json.as_array() {
-                    let mut plain = None;
-                    for entry in arr {
-                        if let Some(status) = build_result(entry) {
-                            if matches!(status, LyricsStatus::Synced(_)) {
-                                return Some(status);
-                            }
-                            if plain.is_none() {
-                                plain = Some(status);
-                            }
-                        }
+            && let Some(arr) = json.as_array()
+        {
+            let mut plain = None;
+            for entry in arr {
+                if let Some(status) = build_result(entry) {
+                    if matches!(status, LyricsStatus::Synced(_)) {
+                        return Some(status);
                     }
-                    if let Some(p) = plain {
-                        return Some(p);
+                    if plain.is_none() {
+                        plain = Some(status);
                     }
+                }
+            }
+            if let Some(p) = plain {
+                return Some(p);
+            }
         }
         None
     }
 }
 
 fn build_result(payload: &serde_json::Value) -> Option<LyricsStatus> {
-    let instrumental = payload.get("instrumental").and_then(|v| v.as_bool()).unwrap_or(false);
+    let instrumental = payload
+        .get("instrumental")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if instrumental {
         return Some(LyricsStatus::Instrumental);
     }
-    let synced_text = payload.get("syncedLyrics").and_then(|v| v.as_str()).unwrap_or("");
-    let plain_text = payload.get("plainLyrics").and_then(|v| v.as_str()).unwrap_or("");
+    let synced_text = payload
+        .get("syncedLyrics")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let plain_text = payload
+        .get("plainLyrics")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let synced = parse_lrc(synced_text);
     if !synced.is_empty() {
         return Some(LyricsStatus::Synced(synced));
