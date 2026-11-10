@@ -499,6 +499,20 @@ pub struct PinnedLyricsView {
 }
 
 impl PinnedLyricsView {
+    /// Remember where the window is and close it. Called from the close control.
+    fn close(&mut self, window: &mut gpui::Window) {
+        let bounds = window.bounds();
+        if let Ok(mut geometry) = self.geometry.lock() {
+            *geometry = OverlayGeometry {
+                x: f32::from(bounds.origin.x) as i32,
+                y: f32::from(bounds.origin.y) as i32,
+                width: f32::from(bounds.size.width) as u32,
+                height: f32::from(bounds.size.height) as u32,
+            };
+        }
+        window.remove_window();
+    }
+
     pub fn new(
         state: gpui::Entity<OverlayState>,
         geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
@@ -925,17 +939,23 @@ impl Render for PinnedLyricsView {
                             })
                             .aria_label("Close lyrics overlay")
                             .cursor_pointer()
-                            .on_click(cx.listener(|this, _event, window, _cx| {
-                                let bounds = window.bounds();
-                                if let Ok(mut g) = this.geometry.lock() {
-                                    *g = OverlayGeometry {
-                                        x: f32::from(bounds.origin.x) as i32,
-                                        y: f32::from(bounds.origin.y) as i32,
-                                        width: f32::from(bounds.size.width) as u32,
-                                        height: f32::from(bounds.size.height) as u32,
-                                    };
-                                }
-                                window.remove_window();
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _event, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close(window);
+                                }),
+                            )
+                            .on_mouse_down(
+                                gpui::MouseButton::Right,
+                                cx.listener(|this, _event, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close(window);
+                                }),
+                            )
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                cx.stop_propagation();
+                                this.close(window);
                             }))
                             .w(gpui::px(28.0))
                             .h(gpui::px(28.0))

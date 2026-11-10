@@ -428,3 +428,36 @@ fn the_overlay_repaints_without_any_input() {
     );
     eprintln!("overlay repainted without input");
 }
+
+/// The close control must actually destroy the overlay window on the first press.
+#[test]
+#[ignore = "needs GPUI's headless wgpu renderer; run with --ignored"]
+fn closing_the_overlay_removes_its_window() {
+    let text_system = Arc::new(CosmicTextSystem::new("sans-serif"));
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+
+    let state = cx.update(|app| app.new(|_cx| OverlayState::default()));
+    let geometry = Arc::new(std::sync::Mutex::new(OverlayGeometry::default()));
+    let handle = cx.update(|app| {
+        let bounds = gpui::Bounds::new(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(W as f32), gpui::px(H as f32)),
+        );
+        myuzik::overlay::open_overlay(app, state.clone(), geometry, bounds)
+    });
+    cx.update(|app| app.refresh_windows());
+    cx.run_until_parked();
+    let before = cx.update(|app| app.windows().len());
+    assert!(before > 0, "the overlay window should be open");
+
+    // What the close control does on the first mouse press.
+    let _ = cx.update(|app| handle.update(app, |_view, window, _cx| window.remove_window()));
+    cx.update(|app| app.refresh_windows());
+    cx.run_until_parked();
+
+    let after = cx.update(|app| app.windows().len());
+    assert_eq!(after, before - 1, "the overlay window must be gone");
+    eprintln!("overlay closed on the first press (windows {before} -> {after})");
+}

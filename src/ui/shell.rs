@@ -1392,6 +1392,21 @@ impl Shell {
         self.overlay_handle.is_some()
     }
 
+    /// Drop the handle once the overlay window is gone, so the pin toggles and the
+    /// tray stay in step with what is actually on screen.
+    fn prune_overlay_handle(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(handle) = self.overlay_handle else {
+            return;
+        };
+        if handle.update(cx, |_view, _window, _cx| {}).is_err() {
+            self.overlay_handle = None;
+            if let Some(tray) = self.tray() {
+                tray.set_pinned(false);
+            }
+            cx.notify();
+        }
+    }
+
     pub fn search_query(&self) -> &str {
         &self.search_query
     }
@@ -2168,6 +2183,7 @@ impl Render for Shell {
                     ),
             );
 
+        self.prune_overlay_handle(cx);
         if !self.root_focus_requested {
             window.focus(&self.root_focus, cx);
             self.root_focus_requested = true;
