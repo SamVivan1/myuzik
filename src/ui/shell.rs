@@ -29,6 +29,7 @@ pub struct Shell {
     selected_album: Option<String>,
     album_detail: Option<crate::library::AlbumDetail>,
     album_loading: bool,
+    artist_detail: Option<crate::library::ArtistDetail>,
     search_query: String,
     search_results: Option<crate::library::SearchResults>,
     search_focus: gpui::FocusHandle,
@@ -55,6 +56,7 @@ impl Shell {
         let selected_album = None;
         let album_detail = None;
         let album_loading = false;
+        let artist_detail = None;
         let search_query = String::new();
         let search_results = None;
         let search_focus = cx.focus_handle();
@@ -376,6 +378,7 @@ impl Shell {
             selected_album,
             album_detail,
             album_loading,
+            artist_detail,
             search_query,
             search_results,
             search_focus,
@@ -629,6 +632,73 @@ impl Shell {
         }
     }
 
+    pub fn open_album(&mut self, id: String, cx: &mut gpui::Context<Self>) {
+        self.selected_album = Some(id.clone());
+        self.album_detail = None;
+        self.album_loading = true;
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { client.album(&id) })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, _cx| {
+                    shell.album_loading = false;
+                    if let Ok(d) = res {
+                        shell.album_detail = Some(d);
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub fn select_artist(&mut self, id: String, cx: &mut gpui::Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let detail = cx
+                .background_executor()
+                .spawn(async move { client.artist(&id) })
+                .await;
+            if let Ok(d) = detail {
+                cx.update(|app| {
+                    entity.update(app, |shell, _cx| {
+                        shell.artist_detail = Some(d);
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub fn play_playlist(&mut self, id: String, cx: &mut gpui::Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let detail = cx
+                .background_executor()
+                .spawn(async move { client.playlist(&id) })
+                .await;
+            if let Ok(d) = detail {
+                cx.update(|app| {
+                    entity.update(app, |shell, cx| {
+                        shell.play_tracks(d.songs, 0, cx);
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
     pub fn toggle_album_star(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(detail) = &self.album_detail else {
             return;
@@ -722,6 +792,14 @@ impl Shell {
 
     pub fn favorites_count(&self, cx: &gpui::App) -> usize {
         self.home_state.read(cx).favorites.len()
+    }
+
+    pub fn playlist_count(&self, cx: &gpui::App) -> usize {
+        self.home_state.read(cx).playlists.len()
+    }
+
+    pub fn selected_artist_album_count(&self) -> Option<usize> {
+        self.artist_detail.as_ref().map(|d| d.albums.len())
     }
 
     pub fn close_overlay(&mut self, cx: &mut gpui::App) {
@@ -1782,28 +1860,91 @@ impl Render for Shell {
                             } else if self.route == Route::Settings {
                                 div().child(self.settings_view.clone())
                             } else if self.route == Route::Artists {
-                                let hs = self.home_state.read(cx);
-                                let mut col = div().flex().flex_col().gap(gpui::px(4.0));
-                                for a in &hs.artists {
-                                    col = col.child(
-                                        div()
-                                            .px(gpui::px(12.0))
-                                            .py(gpui::px(9.0))
-                                            .rounded(gpui::px(10.0))
-                                            .bg(t.glass_tint)
-                                            .border_1()
-                                            .border_color(t.glass_border)
-                                            .text_size(gpui::px(12.0))
-                                            .child(a.name.clone()),
-                                    );
+                                if let Some(detail) = &self.artist_detail {
+                                    let albums = detail.albums.clone();
+                                    let artist_name = detail.artist.name.clone();
+                                    let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
+                                    for a in albums.iter() {
+                                        let aid = a.id.clone();
+                                        grid = grid.child(
+                                            album_card(&a.name, &a.artist, None, t)
+                                                .id(format!("artist-album-{}", aid))
+                                                .debug_selector({
+                                                    let d = aid.clone();
+                                                    move || format!("artist-album-{}", d)
+                                                })
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    this.route = Route::Home;
+                                                    this.open_album(aid.clone(), cx);
+                                                })),
+                                        );
+                                    }
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(gpui::px(14.0))
+                                        .child(
+                                            div()
+                                                .id("artist-back")
+                                                .debug_selector(|| "artist-back".to_string())
+                                                .cursor_pointer()
+                                                .text_size(gpui::px(10.0))
+                                                .text_color(t.text_secondary)
+                                                .on_click(cx.listener(|this, _event, _window, _cx| {
+                                                    this.artist_detail = None;
+                                                }))
+                                                .child("← Back to artists"),
+                                        )
+                                        .child(
+                                            div()
+                                                .font_family(theme.display_font)
+                                                .text_size(gpui::px(26.0))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(artist_name),
+                                        )
+                                        .child(grid)
+                                } else {
+                                    let hs = self.home_state.read(cx);
+                                    let mut col = div().flex().flex_col().gap(gpui::px(4.0));
+                                    for a in &hs.artists {
+                                        let aid = a.id.clone();
+                                        col = col.child(
+                                            div()
+                                                .id(format!("artist-{}", aid))
+                                                .debug_selector({
+                                                    let d = aid.clone();
+                                                    move || format!("artist-{}", d)
+                                                })
+                                                .cursor_pointer()
+                                                .px(gpui::px(12.0))
+                                                .py(gpui::px(9.0))
+                                                .rounded(gpui::px(10.0))
+                                                .bg(t.glass_tint)
+                                                .border_1()
+                                                .border_color(t.glass_border)
+                                                .text_size(gpui::px(12.0))
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    this.select_artist(aid.clone(), cx);
+                                                }))
+                                                .child(a.name.clone()),
+                                        );
+                                    }
+                                    col
                                 }
-                                col
                             } else if self.route == Route::Playlists {
                                 let hs = self.home_state.read(cx);
                                 let mut col = div().flex().flex_col().gap(gpui::px(4.0));
                                 for p in &hs.playlists {
+                                    let pid = p.id.clone();
                                     col = col.child(
                                         div()
+                                            .id(format!("playlist-{}", pid))
+                                            .debug_selector({
+                                                let d = pid.clone();
+                                                move || format!("playlist-{}", d)
+                                            })
+                                            .cursor_pointer()
                                             .px(gpui::px(12.0))
                                             .py(gpui::px(9.0))
                                             .rounded(gpui::px(10.0))
@@ -1811,6 +1952,9 @@ impl Render for Shell {
                                             .border_1()
                                             .border_color(t.glass_border)
                                             .text_size(gpui::px(12.0))
+                                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                this.play_playlist(pid.clone(), cx);
+                                            }))
                                             .child(format!("{} · {} tracks", p.name, p.song_count)),
                                     );
                                 }
@@ -1837,28 +1981,7 @@ impl Render for Shell {
                                                 })
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    let aid2 = aid.clone();
-                                                    this.selected_album = Some(aid2.clone());
-                                                    this.album_detail = None;
-                                                    this.album_loading = true;
-                                                    if let Some(client) = this.client.clone() {
-                                                        let entity = cx.entity();
-                                                        let aid3 = aid2.clone();
-                                                        cx.spawn(async move |_, cx| {
-                                                            let client_bg = client.clone();
-                                                            let res = cx.background_executor().spawn(async move {
-                                                                client_bg.album(&aid3)
-                                                            }).await;
-                                                            cx.update(|app| {
-                                                                app.update_entity(&entity, |shell, _cx| {
-                                                                    shell.album_loading = false;
-                                                                    if let Ok(detail) = res {
-                                                                        shell.album_detail = Some(detail);
-                                                                    }
-                                                                });
-                                                            });
-                                                        }).detach();
-                                                    }
+                                                    this.open_album(aid.clone(), cx);
                                                 })),
                                         );
                                     }

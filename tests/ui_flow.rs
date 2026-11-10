@@ -337,3 +337,200 @@ fn search_flow_returns_results(cx: &mut TestAppContext) {
         "search returned no results"
     );
 }
+
+#[gpui::test]
+fn playlist_click_plays_tracks(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":300,"owner":"tester"}]}"#));
+    });
+    let _m4 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylist.view").query_param("id", "pl1");
+        then.status(200).header("content-type", "application/json").body(ok(r#""playlist":{"id":"pl1","name":"Mix","songCount":2,"duration":300,"owner":"tester"},"entry":[{"id":"p1","title":"PL One","artist":"A","album":"Mix","duration":100},{"id":"p2","title":"PL Two","artist":"A","album":"Mix","duration":200}]"#));
+    });
+    let _m5 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getLyricsBySongId.view");
+        then.status(404);
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("playlistflow");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, cmd_rx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            let shell = cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None));
+            TEST_CMD_RX.with(|c| *c.borrow_mut() = Some(cmd_rx));
+            shell
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    // Wait for playlists to load.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.playlist_count(cx)) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let playlists = cx.debug_bounds("nav-playlists").expect("nav-playlists");
+    cx.simulate_click(playlists.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let row = cx.debug_bounds("playlist-pl1").expect("playlist row");
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell
+            .read_with(&cx, |s, cx| s.current_track_title(cx))
+            .as_deref()
+            == Some("PL One")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.current_track_title(cx)),
+        Some("PL One".into())
+    );
+    assert!(
+        drain_cmds()
+            .iter()
+            .any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Play)),
+        "play not sent"
+    );
+}
+
+#[gpui::test]
+fn artist_click_shows_albums(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""artists":{"index":[{"artist":[{"id":"ar1","name":"Artist A","albumCount":1}]}]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    let _m4 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtist.view").query_param("id", "ar1");
+        then.status(200).header("content-type", "application/json").body(ok(r#""artist":{"id":"ar1","name":"Artist A","albumCount":1},"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":1,"duration":100,"year":2026}]"#));
+    });
+    let _m5 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbum.view").query_param("id", "a1");
+        then.status(200).header("content-type", "application/json").body(ok(r#""album":{"id":"a1","name":"Alpha","artist":"Artist A","songCount":1,"duration":100,"year":2026,"song":[{"id":"s1","title":"Only","artist":"Artist A","album":"Alpha","duration":100}]}"#));
+    });
+    let _m6 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getLyricsBySongId.view");
+        then.status(404);
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("artistflow");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, _crx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(_crx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.loaded_artist_count(cx)) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let artists = cx.debug_bounds("nav-artists").expect("nav-artists");
+    cx.simulate_click(artists.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let artist = cx.debug_bounds("artist-ar1").expect("artist row");
+    cx.simulate_click(artist.center(), gpui::Modifiers::default());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.selected_artist_album_count()) == Some(1) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.selected_artist_album_count()),
+        Some(1)
+    );
+
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let album = cx.debug_bounds("artist-album-a1").expect("artist album");
+    cx.simulate_click(album.center(), gpui::Modifiers::default());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.current_album_song_count()) == Some(1) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.current_album_song_count()),
+        Some(1)
+    );
+}
