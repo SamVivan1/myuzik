@@ -1,9 +1,20 @@
 use crate::lyrics::model::LyricsStatus;
+use crate::player::engine::{PlayerCommand, PlayerHandle};
 use crate::theme::midnight_brass;
 use crate::ui::components::LyricsView;
 use gpui::{Context, Render, Window, div, prelude::*};
 
+#[derive(Clone, Copy, Debug)]
+pub enum NowPlayingEvent {
+    PinToggle,
+    OffsetDelta(i64),
+}
+
+impl gpui::EventEmitter<NowPlayingEvent> for NowPlayingView {}
+
 pub struct NowPlayingView {
+    player: PlayerHandle,
+    playing: bool,
     pub lyrics: gpui::Entity<LyricsView>,
     pub title: String,
     pub artist: String,
@@ -11,11 +22,15 @@ pub struct NowPlayingView {
     pub position: f64,
     pub duration: f64,
     pub cover_art: Option<gpui::ImageSource>,
+    source_label: String,
+    offset_ms: i64,
 }
 
 impl NowPlayingView {
-    pub fn new(cx: &mut gpui::App) -> Self {
+    pub fn new(cx: &mut gpui::App, player: PlayerHandle) -> Self {
         Self {
+            player,
+            playing: false,
             lyrics: cx.new(|_cx| LyricsView::new()),
             title: String::new(),
             artist: String::new(),
@@ -23,7 +38,21 @@ impl NowPlayingView {
             position: 0.0,
             duration: 0.0,
             cover_art: None,
+            source_label: "Navidrome / LRCLIB".to_string(),
+            offset_ms: 0,
         }
+    }
+
+    pub fn set_source_label(&mut self, label: String) {
+        self.source_label = label;
+    }
+
+    pub fn set_offset_ms(&mut self, offset: i64) {
+        self.offset_ms = offset;
+    }
+
+    pub fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
     }
 
     pub fn set_cover(&mut self, image: Option<std::sync::Arc<gpui::Image>>) {
@@ -52,7 +81,7 @@ impl NowPlayingView {
 }
 
 impl Render for NowPlayingView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
 
@@ -78,38 +107,64 @@ impl Render for NowPlayingView {
                     .items_center()
                     .gap(gpui::px(16.0))
                     .child(
-                        // Album cover
+                        // Ivory clay frame around the cover
                         div()
-                            .w(gpui::px(300.0))
-                            .h(gpui::px(300.0))
-                            .rounded(gpui::px(26.0))
-                            .bg(t.glass_tint)
-                            .border_2()
-                            .border_color(gpui::rgba(0xFFFFFFFF))
-                            .shadow(vec![gpui::BoxShadow {
-                                color: gpui::hsla(0.0, 0.0, 0.0, 0.4),
-                                offset: gpui::point(gpui::px(0.0), gpui::px(26.0)),
-                                blur_radius: gpui::px(60.0),
-                                spread_radius: gpui::px(0.0),
-                                inset: false,
-                            }])
-                            .overflow_hidden()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if let Some(source) = self.cover_art.clone() {
-                                gpui::img(source)
-                                    .w(gpui::px(300.0))
-                                    .h(gpui::px(300.0))
-                                    .object_fit(gpui::ObjectFit::Cover)
-                                    .into_any_element()
-                            } else {
+                            .p(gpui::px(6.0))
+                            .rounded(gpui::px(30.0))
+                            .bg(gpui::linear_gradient(
+                                145.0,
+                                gpui::linear_color_stop(t.clay_surface, 0.0),
+                                gpui::linear_color_stop(t.clay_shade, 1.0),
+                            ))
+                            .shadow(vec![
+                                gpui::BoxShadow {
+                                    color: gpui::hsla(0.0, 0.0, 0.0, 0.4),
+                                    offset: gpui::point(gpui::px(0.0), gpui::px(26.0)),
+                                    blur_radius: gpui::px(60.0),
+                                    spread_radius: gpui::px(0.0),
+                                    inset: false,
+                                },
+                                gpui::BoxShadow {
+                                    color: gpui::rgba(0xFFFFFFCC).into(),
+                                    offset: gpui::point(gpui::px(2.0), gpui::px(2.0)),
+                                    blur_radius: gpui::px(4.0),
+                                    spread_radius: gpui::px(0.0),
+                                    inset: true,
+                                },
+                                gpui::BoxShadow {
+                                    color: gpui::rgba(0x8C6D3F33).into(),
+                                    offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
+                                    blur_radius: gpui::px(8.0),
+                                    spread_radius: gpui::px(0.0),
+                                    inset: true,
+                                },
+                            ])
+                            .child(
                                 div()
-                                    .text_size(gpui::px(48.0))
-                                    .text_color(t.text_secondary)
-                                    .child("♪")
-                                    .into_any_element()
-                            }),
+                                    .w(gpui::px(288.0))
+                                    .h(gpui::px(288.0))
+                                    .rounded(gpui::px(24.0))
+                                    .bg(t.glass_tint)
+                                    .border_1()
+                                    .border_color(t.glass_border)
+                                    .overflow_hidden()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(if let Some(source) = self.cover_art.clone() {
+                                        gpui::img(source)
+                                            .w(gpui::px(288.0))
+                                            .h(gpui::px(288.0))
+                                            .object_fit(gpui::ObjectFit::Cover)
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .text_size(gpui::px(48.0))
+                                            .text_color(t.text_secondary)
+                                            .child("♪")
+                                            .into_any_element()
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -145,35 +200,60 @@ impl Render for NowPlayingView {
                             .gap(gpui::px(16.0))
                             .child(
                                 div()
+                                    .id("np-prev")
+                                    .debug_selector(|| "np-prev".to_string())
+                                    .aria_label("Previous track")
+                                    .cursor_pointer()
                                     .w(gpui::px(26.0))
                                     .h(gpui::px(26.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .text_color(t.text_secondary)
+                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                        this.player.tx.send(PlayerCommand::Previous).ok();
+                                    }))
                                     .child("⏮"),
                             )
                             .child(
                                 div()
+                                    .id("np-play")
+                                    .debug_selector(|| "np-play".to_string())
+                                    .aria_label(if self.playing { "Pause" } else { "Play" })
+                                    .cursor_pointer()
                                     .w(gpui::px(46.0))
                                     .h(gpui::px(46.0))
                                     .rounded(gpui::px(999.0))
-                                    .bg(t.gold)
+                                    .bg(gpui::linear_gradient(
+                                        145.0,
+                                        gpui::linear_color_stop(t.gold_light, 0.0),
+                                        gpui::linear_color_stop(t.gold, 1.0),
+                                    ))
                                     .text_color(t.clay_ink)
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .text_size(gpui::px(18.0))
-                                    .child("⏸"),
+                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                        this.player.tx.send(PlayerCommand::Toggle).ok();
+                                    }))
+                                    .child(if self.playing { "⏸" } else { "▶" }),
                             )
                             .child(
                                 div()
+                                    .id("np-next")
+                                    .debug_selector(|| "np-next".to_string())
+                                    .aria_label("Next track")
+                                    .cursor_pointer()
                                     .w(gpui::px(26.0))
                                     .h(gpui::px(26.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .text_color(t.text_secondary)
+                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                        this.player.tx.send(PlayerCommand::Next).ok();
+                                    }))
                                     .child("⏭"),
                             ),
                     )
@@ -253,7 +333,10 @@ impl Render for NowPlayingView {
                                         div()
                                             .text_size(gpui::px(9.0))
                                             .text_color(t.text_tertiary)
-                                            .child("LRCLIB · offset 0 ms"),
+                                            .child(format!(
+                                                "{} · offset {} ms",
+                                                self.source_label, self.offset_ms
+                                            )),
                                     ),
                             )
                             .child(
@@ -262,6 +345,9 @@ impl Render for NowPlayingView {
                                     .gap(gpui::px(6.0))
                                     .child(
                                         div()
+                                            .id("np-offset-down")
+                                            .debug_selector(|| "np-offset-down".to_string())
+                                            .cursor_pointer()
                                             .px(gpui::px(9.0))
                                             .py(gpui::px(7.0))
                                             .rounded(gpui::px(9.0))
@@ -269,10 +355,16 @@ impl Render for NowPlayingView {
                                             .text_color(t.clay_ink)
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                                cx.emit(NowPlayingEvent::OffsetDelta(-500));
+                                            }))
                                             .child("-0.5s"),
                                     )
                                     .child(
                                         div()
+                                            .id("np-offset-up")
+                                            .debug_selector(|| "np-offset-up".to_string())
+                                            .cursor_pointer()
                                             .px(gpui::px(9.0))
                                             .py(gpui::px(7.0))
                                             .rounded(gpui::px(9.0))
@@ -280,10 +372,16 @@ impl Render for NowPlayingView {
                                             .text_color(t.clay_ink)
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                                cx.emit(NowPlayingEvent::OffsetDelta(500));
+                                            }))
                                             .child("+0.5s"),
                                     )
                                     .child(
                                         div()
+                                            .id("np-pin")
+                                            .debug_selector(|| "np-pin".to_string())
+                                            .cursor_pointer()
                                             .px(gpui::px(11.0))
                                             .py(gpui::px(7.0))
                                             .rounded(gpui::px(999.0))
@@ -291,6 +389,9 @@ impl Render for NowPlayingView {
                                             .text_color(t.gold_light)
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
+                                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                                cx.emit(NowPlayingEvent::PinToggle);
+                                            }))
                                             .child("Pin to desktop"),
                                     ),
                             ),
@@ -318,7 +419,11 @@ impl Render for NowPlayingView {
                             .text_size(gpui::px(8.0))
                             .text_color(t.text_tertiary)
                             .child(format!("{} — {}", self.title, self.artist))
-                            .child("1:24 / 3:42"),
+                            .child(format!(
+                                "{} / {}",
+                                format_time(self.position),
+                                format_time(self.duration)
+                            )),
                     ),
             )
     }

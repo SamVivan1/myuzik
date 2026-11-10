@@ -140,11 +140,15 @@ pub struct OverlayState {
 
 pub struct PinnedLyricsView {
     state: gpui::Entity<OverlayState>,
+    geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
 }
 
 impl PinnedLyricsView {
-    pub fn new(state: gpui::Entity<OverlayState>) -> Self {
-        Self { state }
+    pub fn new(
+        state: gpui::Entity<OverlayState>,
+        geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
+    ) -> Self {
+        Self { state, geometry }
     }
 }
 
@@ -232,9 +236,18 @@ impl Render for PinnedLyricsView {
                             .id("overlay-close")
                             .aria_label("Close lyrics overlay")
                             .cursor_pointer()
-                            .on_click(
-                                cx.listener(|_this, _event, window, _cx| window.remove_window()),
-                            )
+                            .on_click(cx.listener(|this, _event, window, _cx| {
+                                let bounds = window.bounds();
+                                if let Ok(mut g) = this.geometry.lock() {
+                                    *g = OverlayGeometry {
+                                        x: f32::from(bounds.origin.x) as i32,
+                                        y: f32::from(bounds.origin.y) as i32,
+                                        width: f32::from(bounds.size.width) as u32,
+                                        height: f32::from(bounds.size.height) as u32,
+                                    };
+                                }
+                                window.remove_window();
+                            }))
                             .w(gpui::px(24.0))
                             .h(gpui::px(24.0))
                             .rounded(gpui::px(999.0))
@@ -279,8 +292,11 @@ impl Render for PinnedLyricsView {
 pub fn open_overlay(
     cx: &mut gpui::App,
     state: gpui::Entity<OverlayState>,
+    geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
+    bounds: gpui::Bounds<gpui::Pixels>,
 ) -> gpui::WindowHandle<PinnedLyricsView> {
     let opts = WindowOptions {
+        window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
         window_background: WindowBackgroundAppearance::Blurred,
         window_decorations: None,
         focus: false,
@@ -290,7 +306,7 @@ pub fn open_overlay(
         ..Default::default()
     };
     cx.open_window(opts, move |_window, cx| {
-        cx.new(|_cx| PinnedLyricsView::new(state))
+        cx.new(|_cx| PinnedLyricsView::new(state, geometry))
     })
     .expect("failed to open overlay window")
 }

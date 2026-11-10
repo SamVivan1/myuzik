@@ -37,6 +37,7 @@ pub enum PlayerEvent {
     PreviousRequested,
 }
 
+#[derive(Clone)]
 pub struct PlayerHandle {
     pub tx: Sender<PlayerCommand>,
     pub rx: Receiver<PlayerEvent>,

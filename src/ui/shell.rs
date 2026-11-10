@@ -34,11 +34,13 @@ pub struct Shell {
     search_results: Option<crate::library::SearchResults>,
     search_focus: gpui::FocusHandle,
     now_playing: gpui::Entity<NowPlayingView>,
+    _np_subscription: gpui::Subscription,
     search_view: gpui::Entity<SearchView>,
     settings_view: gpui::Entity<SettingsView>,
     mpris_handle: Option<MprisHandle>,
     overlay_state: gpui::Entity<crate::overlay::OverlayState>,
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
+    overlay_geometry: Arc<std::sync::Mutex<crate::overlay::OverlayGeometry>>,
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
@@ -51,6 +53,8 @@ pub struct Shell {
     setup_connecting: bool,
     setup_focus: gpui::FocusHandle,
     setup_focus_requested: bool,
+    root_focus: gpui::FocusHandle,
+    root_focus_requested: bool,
 }
 
 impl Shell {
@@ -75,11 +79,32 @@ impl Shell {
         let search_query = String::new();
         let search_results = None;
         let search_focus = cx.focus_handle();
-        let now_playing = cx.new(|cx| NowPlayingView::new(cx));
+        let now_playing = cx.new(|cx| NowPlayingView::new(cx, player_handle.clone()));
+        let np_subscription = cx.subscribe(
+            &now_playing,
+            |shell, _np, event: &crate::ui::now_playing::NowPlayingEvent, cx| match event {
+                crate::ui::now_playing::NowPlayingEvent::PinToggle => {
+                    if shell.overlay_handle.is_some() {
+                        shell.close_overlay(cx);
+                    } else {
+                        shell.open_overlay(cx);
+                    }
+                }
+                crate::ui::now_playing::NowPlayingEvent::OffsetDelta(delta) => {
+                    shell.adjust_lyrics_offset(*delta, cx);
+                }
+            },
+        );
         let search_view = cx.new(|_cx| SearchView::new());
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
         let overlay_handle = None;
+        let overlay_geometry = Arc::new(std::sync::Mutex::new(crate::overlay::OverlayGeometry {
+            x: config.overlay_x,
+            y: config.overlay_y,
+            width: config.overlay_width.max(crate::overlay::MIN_WIDTH),
+            height: config.overlay_height.max(crate::overlay::MIN_HEIGHT),
+        }));
         let resize_start = None;
         let toast = None;
         let lyrics_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -96,6 +121,8 @@ impl Shell {
         let setup_connecting = false;
         let setup_focus = cx.focus_handle();
         let setup_focus_requested = false;
+        let root_focus = cx.focus_handle();
+        let root_focus_requested = false;
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password
@@ -150,6 +177,10 @@ impl Shell {
                         cx.update(|app| {
                             state.update(app, |ps, _cx| {
                                 ps.set_status(s);
+                            });
+                            let np = now_playing_for_loop.clone();
+                            app.update_entity(&np, |view, _cx| {
+                                view.set_playing(s == PlaybackStatus::Playing);
                             });
                         });
                         if let Some(mh) = &mpris_for_loop {
@@ -312,10 +343,12 @@ impl Shell {
             search_results,
             search_focus,
             now_playing,
+            _np_subscription: np_subscription,
             search_view,
             settings_view,
             overlay_state,
             overlay_handle,
+            overlay_geometry,
             resize_start,
             toast,
             lyrics_generation,
@@ -328,6 +361,8 @@ impl Shell {
             setup_connecting,
             setup_focus,
             setup_focus_requested,
+            root_focus,
+            root_focus_requested,
             mpris_handle,
         }
     }
@@ -361,15 +396,6 @@ impl Shell {
     }
 
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
-        let opts = gpui::WindowOptions {
-            window_background: gpui::WindowBackgroundAppearance::Blurred,
-            window_decorations: None,
-            focus: false,
-            show: true,
-            app_id: Some(crate::overlay::APP_ID.to_string()),
-            titlebar: None,
-            ..Default::default()
-        };
         if let Some(handle) = self.overlay_handle {
             if handle.update(cx, |_view, _window, _cx| {}).is_err() {
                 self.overlay_handle = None;
@@ -377,9 +403,34 @@ impl Shell {
                 return;
             }
         }
+        self.persist_overlay_geometry();
+        let g = *self.overlay_geometry.lock().unwrap();
+        let bounds = if g.x != 0 || g.y != 0 {
+            gpui::Bounds {
+                origin: gpui::point(gpui::px(g.x as f32), gpui::px(g.y as f32)),
+                size: gpui::size(gpui::px(g.width as f32), gpui::px(g.height as f32)),
+            }
+        } else {
+            gpui::Bounds::centered(
+                None,
+                gpui::size(gpui::px(g.width as f32), gpui::px(g.height as f32)),
+                cx,
+            )
+        };
+        let opts = gpui::WindowOptions {
+            window_background: gpui::WindowBackgroundAppearance::Blurred,
+            window_decorations: None,
+            focus: false,
+            show: true,
+            app_id: Some(crate::overlay::APP_ID.to_string()),
+            titlebar: None,
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
         let state = self.overlay_state.clone();
+        let geometry = self.overlay_geometry.clone();
         let handle = cx.open_window(opts, move |_window, cx| {
-            cx.new(|_cx| crate::overlay::PinnedLyricsView::new(state))
+            cx.new(|_cx| crate::overlay::PinnedLyricsView::new(state, geometry))
         });
         if let Ok(h) = handle {
             h.update(cx, |_view, window, _cx| {
@@ -387,6 +438,16 @@ impl Shell {
             })
             .ok();
             self.overlay_handle = Some(h);
+        }
+    }
+
+    fn persist_overlay_geometry(&mut self) {
+        if let Ok(g) = self.overlay_geometry.lock() {
+            self.config.overlay_x = g.x;
+            self.config.overlay_y = g.y;
+            self.config.overlay_width = g.width.max(crate::overlay::MIN_WIDTH);
+            self.config.overlay_height = g.height.max(crate::overlay::MIN_HEIGHT);
+            let _ = crate::config::save_config(&self.paths, &self.config);
         }
     }
 
@@ -524,6 +585,7 @@ impl Shell {
         let covers_dir = self.paths.covers.clone();
         let hs = self.home_state.clone();
         let mh = self.mpris_handle.clone();
+        let np = self.now_playing.clone();
         let track = track.clone();
         cx.spawn(async move |cx| {
             let c = client.clone();
@@ -550,7 +612,10 @@ impl Shell {
                 });
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
-                        h.covers.insert(cid.clone(), image);
+                        h.covers.insert(cid.clone(), image.clone());
+                    });
+                    app.update_entity(&np, |view, _cx| {
+                        view.set_cover(Some(image.clone()));
                     });
                 });
                 if let Some(mh) = &mh {
@@ -584,6 +649,17 @@ impl Shell {
                 .cover_art_id
                 .as_ref()
                 .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
+            let generation = self
+                .lyrics_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let generation_counter = self.lyrics_generation.clone();
+            let source_label = if self.config.prefer_navidrome_lyrics {
+                "Navidrome first"
+            } else {
+                "LRCLIB first"
+            }
+            .to_string();
             cx.spawn(async move |cx| {
                 let t_bg = t.clone();
                 let p_bg = p.clone();
@@ -594,10 +670,14 @@ impl Shell {
                             .unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
                     })
                     .await;
+                if generation_counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    return;
+                }
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
                         v.set_cover(cover.clone());
+                        v.set_source_label(source_label.clone());
                         v.set_lyrics(cx, status.clone());
                     });
                     app.update_entity(&os, |st, _cx| {
@@ -742,6 +822,7 @@ impl Shell {
         self.persist_config();
         let offset = self.config.lyrics_offset_ms;
         self.now_playing.update(cx, |np, cx| {
+            np.set_offset_ms(offset);
             np.lyrics.update(cx, |view, _cx| view.set_offset_ms(offset));
         });
     }
@@ -895,6 +976,10 @@ impl Shell {
         self.album_detail.as_ref().map(|d| d.album.starred)
     }
 
+    pub fn playback_status(&self, cx: &gpui::App) -> crate::player::state::PlaybackStatus {
+        self.player_state.read(cx).status
+    }
+
     pub fn volume(&self, cx: &gpui::App) -> f32 {
         self.player_state.read(cx).volume
     }
@@ -960,8 +1045,21 @@ impl Shell {
 
     pub fn close_overlay(&mut self, cx: &mut gpui::App) {
         if let Some(handle) = self.overlay_handle.take() {
-            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            let geometry = self.overlay_geometry.clone();
+            let _ = handle.update(cx, move |_view, window, _cx| {
+                let bounds = window.bounds();
+                if let Ok(mut g) = geometry.lock() {
+                    *g = crate::overlay::OverlayGeometry {
+                        x: f32::from(bounds.origin.x) as i32,
+                        y: f32::from(bounds.origin.y) as i32,
+                        width: f32::from(bounds.size.width) as u32,
+                        height: f32::from(bounds.size.height) as u32,
+                    };
+                }
+                window.remove_window();
+            });
         }
+        self.persist_overlay_geometry();
     }
 }
 
@@ -1555,11 +1653,81 @@ impl Render for Shell {
                     ),
             );
 
+        if !self.root_focus_requested {
+            window.focus(&self.root_focus, cx);
+            self.root_focus_requested = true;
+        }
+        let key_entity = cx.entity();
+
         // Glass shell with home content
         div()
             .size_full()
             .bg(t.bg_base)
             .text_color(t.text_primary)
+            .id("app-root")
+            .debug_selector(|| "app-root".to_string())
+            .track_focus(&self.root_focus)
+            .focusable()
+            .on_key_down(move |ev, window, app| {
+                let entity = key_entity.clone();
+                app.update_entity(&entity, |this, cx| {
+                    if this.search_focus.is_focused(window) {
+                        return;
+                    }
+                    let key = ev.keystroke.key.as_str();
+                    let mods = ev.keystroke.modifiers;
+                    match key {
+                        "space" if !mods.control && !mods.alt => {
+                            this.player_state.update(cx, |ps, _cx| ps.toggle());
+                            this.player_handle.tx.send(PlayerCommand::Toggle).ok();
+                        }
+                        "left" if mods.shift => this.play_previous(cx),
+                        "right" if mods.shift => this.play_next(cx),
+                        "left" => {
+                            let pos = this
+                                .player_state
+                                .read(cx)
+                                .position
+                                .saturating_sub(std::time::Duration::from_secs(5));
+                            this.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+                        }
+                        "right" => {
+                            let pos = this
+                                .player_state
+                                .read(cx)
+                                .position
+                                .saturating_add(std::time::Duration::from_secs(5));
+                            this.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+                        }
+                        "up" => {
+                            let v = (this.player_state.read(cx).volume + 0.05).clamp(0.0, 1.0);
+                            this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                            this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                        }
+                        "down" => {
+                            let v = (this.player_state.read(cx).volume - 0.05).clamp(0.0, 1.0);
+                            this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                            this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                        }
+                        "k" if mods.control => {
+                            this.route = Route::Search;
+                            window.focus(&this.search_focus, cx);
+                        }
+                        "p" if mods.control => {
+                            if this.overlay_handle.is_some() {
+                                this.close_overlay(cx);
+                            } else {
+                                this.open_overlay(cx);
+                            }
+                        }
+                        "escape" if this.overlay_handle.is_some() => {
+                            this.close_overlay(cx);
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                });
+            })
             .child(
                 div()
                     .absolute()
@@ -1652,6 +1820,18 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
+                    .child(
+                        // Glass sheen
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(gpui::px(24.0))
+                            .bg(gpui::linear_gradient(
+                                135.0,
+                                gpui::linear_color_stop(gpui::rgba(0xFFFFFF0D), 0.0),
+                                gpui::linear_color_stop(gpui::rgba(0xFFFFFF00), 0.42),
+                            )),
+                    )
                     .child(
                         // Titlebar
                         div()

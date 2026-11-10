@@ -288,6 +288,30 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
     );
     let seeks: Vec<_> = drain_cmds();
     assert!(seeks.iter().any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Seek(d) if *d == Duration::from_secs(40))), "seek +10 not sent: {seeks:?}");
+
+    // Now Playing transport buttons.
+    let np_open = cx.debug_bounds("np-open").expect("np-open");
+    cx.simulate_click(np_open.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let np_play = cx.debug_bounds("np-play").expect("np-play");
+    cx.simulate_click(np_play.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        drain_cmds()
+            .iter()
+            .any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Toggle)),
+        "Now Playing play did not send Toggle"
+    );
+    let np_next = cx.debug_bounds("np-next").expect("np-next");
+    cx.simulate_click(np_next.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        drain_cmds()
+            .iter()
+            .any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Next)),
+        "Now Playing next did not send Next"
+    );
 }
 
 fn drain_cmds() -> Vec<myuzik::player::engine::PlayerCommand> {
@@ -819,3 +843,90 @@ const PNG: &[u8] = &[
     0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0, 3, 1,
     1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+
+#[gpui::test]
+fn global_shortcuts_work(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("shortcuts");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, cmd_rx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            let shell = cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None));
+            TEST_CMD_RX.with(|c| *c.borrow_mut() = Some(cmd_rx));
+            TEST_EVT_TX.with(|c| *c.borrow_mut() = Some(evt_tx));
+            shell
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+
+    send_event(myuzik::player::engine::PlayerEvent::StateChanged(
+        myuzik::player::state::PlaybackStatus::Playing,
+    ));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.playback_status(cx)),
+        myuzik::player::state::PlaybackStatus::Playing
+    );
+    cx.simulate_keystrokes("space");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.playback_status(cx)),
+        myuzik::player::state::PlaybackStatus::Paused
+    );
+    assert!(
+        drain_cmds()
+            .iter()
+            .any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Toggle))
+    );
+
+    let before = shell.read_with(&cx, |s, cx| s.volume(cx));
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    assert!(shell.read_with(&cx, |s, cx| s.volume(cx)) > before);
+
+    send_event(myuzik::player::engine::PlayerEvent::Position(
+        Duration::from_secs(30),
+    ));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    assert!(drain_cmds().iter().any(|c| matches!(c, myuzik::player::engine::PlayerCommand::Seek(d) if *d == Duration::from_secs(35))));
+
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Search);
+}
