@@ -33,20 +33,24 @@ impl Render for SettingsView {
                     .child("Settings"),
             )
             .child(section("Account", t, theme.ui_font, vec![
-                ("Server URL", "https://navidrome.example.com"),
-                ("Username", "samvivan"),
+                ("Server URL", self.config.server_url.as_str()),
+                ("Username", self.config.username.as_str()),
             ]))
             .child(section("Playback", t, theme.ui_font, vec![
-                ("Stream quality", "Original"),
+                ("Stream quality", match self.config.quality {
+                    crate::config::StreamQuality::Original => "Original",
+                    crate::config::StreamQuality::Kbps320 => "320 kbps",
+                    crate::config::StreamQuality::Kbps192 => "192 kbps",
+                }),
                 ("Volume", "80%"),
-                ("Scrobble", "On"),
+                ("Scrobble", if self.config.scrobble { "On" } else { "Off" }),
             ]))
             .child(section("Lyrics", t, theme.ui_font, vec![
                 ("Offset", "0 ms"),
-                ("Source", "Navidrome first"),
+                ("Source", if self.config.prefer_navidrome_lyrics { "Navidrome first" } else { "LRCLIB first" }),
             ]))
             .child(section("Overlay", t, theme.ui_font, vec![
-                ("Status", "Installed"),
+                ("Status", "Available"),
                 ("Opacity", "74%"),
             ]))
             .child(section("Appearance", t, theme.ui_font, vec![

@@ -379,6 +379,8 @@ impl Shell {
             let t = track.clone();
             let np = self.now_playing.clone();
             let os = self.overlay_state.clone();
+            let cover = track.cover_art_id.as_ref()
+                .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
             cx.spawn(async move |cx| {
                 let t_bg = t.clone();
                 let p_bg = p.clone();
@@ -388,6 +390,7 @@ impl Shell {
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
+                        v.set_cover(cover.clone());
                         v.set_lyrics(cx, status.clone());
                     });
                     app.update_entity(&os, |st, _cx| {

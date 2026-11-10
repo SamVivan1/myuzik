@@ -26,6 +26,10 @@ impl NowPlayingView {
         }
     }
 
+    pub fn set_cover(&mut self, image: Option<std::sync::Arc<gpui::Image>>) {
+        self.cover_art = image.map(gpui::ImageSource::Image);
+    }
+
     pub fn set_track(&mut self, title: String, artist: String, album: String) {
         self.title = title;
         self.artist = artist;
@@ -89,15 +93,23 @@ impl Render for NowPlayingView {
                                 spread_radius: gpui::px(0.0),
                                 inset: false,
                             }])
+                            .overflow_hidden()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(
+                            .child(if let Some(source) = self.cover_art.clone() {
+                                gpui::img(source)
+                                    .w(gpui::px(300.0))
+                                    .h(gpui::px(300.0))
+                                    .object_fit(gpui::ObjectFit::Cover)
+                                    .into_any_element()
+                            } else {
                                 div()
                                     .text_size(gpui::px(48.0))
                                     .text_color(t.text_secondary)
-                                    .child("♪"),
-                            ),
+                                    .child("♪")
+                                    .into_any_element()
+                            }),
                     )
                     .child(
                         div()
