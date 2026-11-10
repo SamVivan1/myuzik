@@ -167,6 +167,12 @@ fn unreachable_server_shows_error_toast(cx: &mut TestAppContext) {
         shell.read_with(&cx, |s, _| s.toast_text().is_some()),
         "unreachable server did not produce a toast"
     );
+    // Storing the message is not enough: it has to reach the screen.
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("toast").is_some(),
+        "a failure toast was stored but never rendered: the user sees nothing"
+    );
     // The shell must still render and remain usable.
     assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Home);
 }

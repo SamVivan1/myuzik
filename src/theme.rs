@@ -77,7 +77,7 @@ pub fn midnight_brass() -> Theme {
             glass_border: rgba(0xE8D3A328),
             text_primary: rgb(0xF5EFE4),
             text_secondary: rgb(0xB8B0A2),
-            text_tertiary: rgb(0x7C756A),
+            text_tertiary: rgb(0x847C70),
             gold: rgb(0xC9A86A),
             gold_light: rgb(0xE8D3A3),
             gold_deep: rgb(0x8C6D3F),
@@ -196,5 +196,23 @@ mod tests {
     fn gold_is_not_used_as_large_surface() {
         // Structural guard: no color token is named "gold_background".
         // (Manual review enforces the 5–10% rule.)
+    }
+
+    /// `text_tertiary` is real caption text (track numbers, durations, album
+    /// metadata, footer lines) at 9–11 px, so the 4.5:1 normal-text threshold
+    /// applies. It used to sit at 4.29:1 and no test covered it.
+    #[test]
+    fn tertiary_caption_text_on_glass_passes_aa() {
+        let glass = glass_over(midnight_brass().colors.bg_base);
+        let ratio = contrast_ratio(midnight_brass().colors.text_tertiary, glass);
+        assert!(ratio >= 4.5, "tertiary text contrast {ratio:.2} < 4.5");
+    }
+
+    /// `danger` is the error/toast colour and had no coverage either.
+    #[test]
+    fn danger_text_on_glass_passes_aa() {
+        let glass = glass_over(midnight_brass().colors.bg_base);
+        let ratio = contrast_ratio(midnight_brass().colors.danger, glass);
+        assert!(ratio >= 4.5, "danger text contrast {ratio:.2} < 4.5");
     }
 }

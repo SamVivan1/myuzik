@@ -146,6 +146,10 @@ impl Shell {
             });
         })
         .detach();
+        // Honour the stored accessibility preference from the first frame. The
+        // Settings toggle used to be the only caller, so a user who had turned
+        // reduced motion on got the animations back after every restart.
+        cx.set_reduce_motion(config.reduce_motion);
         let overlay_handle = None;
         let overlay_window_id = None;
         let overlay_geometry = Arc::new(std::sync::Mutex::new(crate::overlay::OverlayGeometry {
@@ -337,8 +341,8 @@ impl Shell {
                         let entity = self_entity.clone();
                         let msg = format!("Playback error: {e:?}");
                         cx.update(|app| {
-                            entity.update(app, |shell, _cx| {
-                                shell.toast = Some(msg);
+                            entity.update(app, |shell, cx| {
+                                shell.show_toast(msg, cx);
                             });
                         });
                     }
@@ -486,6 +490,121 @@ impl Shell {
 
     pub fn set_volume(&self, v: f32) {
         self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+    }
+
+    /// Run the action of whatever control currently has keyboard focus.
+    ///
+    /// gpui at this revision wires `on_click` to the mouse only, so a control
+    /// that is merely focusable stays unreachable without a pointer: Tab could
+    /// reach 25 controls and none of them would respond to Enter. Each arm here
+    /// runs the same code its click handler runs, which is what makes the focus
+    /// ring real instead of decoration (WCAG 2.1.1 Keyboard, level A).
+    fn activate_focused(
+        &mut self,
+        key: &str,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match key {
+            // Sidebar navigation.
+            "nav-home" => self.go(Route::Home),
+            "nav-nowplaying" => self.go(Route::NowPlaying),
+            "nav-search" => self.go(Route::Search),
+            "nav-albums" => self.go(Route::Albums),
+            "nav-artists" => self.go(Route::Artists),
+            "nav-playlists" => self.go(Route::Playlists),
+            "nav-favorites" => self.go(Route::Favorites),
+            "nav-settings" => self.go(Route::Settings),
+            "sidebar-pin-lyrics" | "player-pin-lyrics" => self.toggle_overlay(cx),
+            // Page content.
+            "content-search-shortcut" => self.go(Route::Search),
+            "content-see-all-albums" => self.go(Route::Albums),
+            "album-back" => self.go(Route::Home),
+            "artists-back" => self.go(Route::Artists),
+            "album-play-all" => {
+                if let Some(detail) = self.album_detail.clone() {
+                    self.play_tracks(detail.songs, 0, cx);
+                }
+            }
+            "album-star" => self.toggle_album_star(cx),
+            // Player bar.
+            "player-now-playing" => self.go(Route::NowPlaying),
+            "player-play" => {
+                self.player_state.update(cx, |ps, _cx| ps.toggle());
+                self.player_handle.tx.send(PlayerCommand::Toggle).ok();
+            }
+            "player-prev" => self.play_previous(cx),
+            "player-next" => self.play_next(cx),
+            "player-seek-back" => {
+                let pos = self
+                    .player_state
+                    .read(cx)
+                    .position
+                    .saturating_sub(std::time::Duration::from_secs(10));
+                self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+            }
+            "player-seek-forward" => {
+                let pos = self
+                    .player_state
+                    .read(cx)
+                    .position
+                    .saturating_add(std::time::Duration::from_secs(10));
+                self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
+            }
+            "player-volume-down" => self.adjust_volume(-0.05, cx),
+            "player-volume-up" => self.adjust_volume(0.05, cx),
+            // Settings rows.
+            "settings-quality" => self.cycle_quality(),
+            "settings-scrobble" => self.toggle_scrobble(),
+            "settings-reduce-motion" => self.toggle_reduce_motion(cx),
+            "settings-close-to-tray" => self.toggle_close_to_tray(),
+            "settings-autoplay" => self.toggle_autoplay(),
+            "settings-lyrics-source" => self.toggle_lyrics_source(),
+            "settings-offset-up" => self.adjust_lyrics_offset(500, cx),
+            "settings-offset-down" => self.adjust_lyrics_offset(-500, cx),
+            // Window chrome.
+            "window-close" => self.close_window(window, cx),
+            "window-minimize" => window.minimize_window(),
+            "window-maximize" => window.zoom_window(),
+            // Dynamic content keys: `album:<id>`, `artist:<id>`,
+            // `playlist:<id>` and `track-<index>`.
+            other => {
+                if let Some(id) = other.strip_prefix("album:") {
+                    self.open_album(id.to_string(), cx);
+                } else if let Some(id) = other.strip_prefix("artist:") {
+                    self.select_artist(id.to_string(), cx);
+                } else if let Some(id) = other.strip_prefix("playlist:") {
+                    self.play_playlist(id.to_string(), cx);
+                } else if let Some(index) = other
+                    .strip_prefix("track-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(detail) = self.album_detail.clone() {
+                        self.play_tracks(detail.songs, index, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("search-song-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(songs) = self.search_results.as_ref().map(|r| r.songs.clone())
+                        && index < songs.len()
+                    {
+                        self.play_tracks(songs, index, cx);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Nudge the volume by `delta`, keeping state, engine and MPRIS in step.
+    fn adjust_volume(&mut self, delta: f32, cx: &mut gpui::Context<Self>) {
+        let v = (self.player_state.read(cx).volume + delta).clamp(0.0, 1.0);
+        self.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+        self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+        if let Some(mh) = &self.mpris_handle {
+            mh.update_volume(v);
+        }
     }
 
     // --- Keyboard focus order and focus ring -------------------------------
@@ -1000,7 +1119,7 @@ impl Shell {
                     Err(e) => {
                         tracing::warn!("autoplay radio failed: {e:?}");
                         let msg = format!("Autoplay unavailable: {e:?}");
-                        let _ = weak.update(app, |shell, _cx| shell.toast = Some(msg));
+                        let _ = weak.update(app, |shell, cx| shell.show_toast(msg, cx));
                     }
                 }
             });
@@ -1454,6 +1573,15 @@ impl Shell {
 
     pub fn toast_text(&self) -> Option<&str> {
         self.toast.as_deref()
+    }
+
+    /// Report a failure to the user.
+    ///
+    /// Storing the message is not enough: without `cx.notify()` no repaint
+    /// happens, which is how every asynchronous failure became invisible.
+    fn show_toast(&mut self, message: impl Into<String>, cx: &mut gpui::Context<Self>) {
+        self.toast = Some(message.into());
+        cx.notify();
     }
 
     pub fn overlay_open(&self) -> bool {
@@ -2082,7 +2210,7 @@ impl Render for Shell {
                             .w(gpui::px(320.0))
                             .child(
                                 div()
-                                    .text_size(gpui::px(8.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
                                     .child(format_time(position.as_secs_f64())),
@@ -2103,7 +2231,7 @@ impl Render for Shell {
                             )
                             .child(
                                 div()
-                                    .text_size(gpui::px(8.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
                                     .child(format_time(duration.as_secs_f64())),
@@ -2161,11 +2289,11 @@ impl Render for Shell {
                             .child(
                                 div()
                                     .w(gpui::px(
-                                        (self.player_state.read(cx).volume * 60.0).max(2.0),
+                                        self.player_state.read(cx).volume * 60.0,
                                     ))
                                     .h_full()
                                     .rounded(gpui::px(999.0))
-                                    .bg(t.os_accent),
+                                    .bg(t.gold),
                             ),
                     )
                     .child(
@@ -2224,7 +2352,7 @@ impl Render for Shell {
                                 },
                             ])
                             .text_color(t.gold_light)
-                            .text_size(gpui::px(8.0))
+                            .text_size(gpui::px(10.0))
                             .font_weight(gpui::FontWeight::BOLD)
                             .cursor_pointer()
                             .id("pin-btn")
@@ -2285,6 +2413,16 @@ impl Render for Shell {
                     }
                     if this.search_focus.is_focused(window) {
                         return;
+                    }
+                    // Enter activates the focused control. Space stays the global
+                    // play/pause shortcut (documented in docs/design.md and
+                    // covered by tests), so a keyboard user gets one unambiguous
+                    // activation key for every control in the ring.
+                    if key == "enter" && !mods.control && !mods.alt {
+                        if let Some(focused) = this.focused_control(window) {
+                            this.activate_focused(&focused, window, cx);
+                            return;
+                        }
                     }
                     match key {
                         "space" if !mods.control && !mods.alt => {
@@ -2886,7 +3024,7 @@ impl Render for Shell {
                                 if let Some(results) = &self.search_results {
                                     if !results.songs.is_empty() {
                                         col = col.child(div().text_size(gpui::px(9.0)).font_weight(gpui::FontWeight::BOLD).text_color(t.gold).child("SONGS"));
-                                        let songs = results.songs.clone();
+                                        let songs = std::sync::Arc::new(results.songs.clone());
                                         for (i, tr) in results.songs.iter().take(20).enumerate() {
                                             let songs2 = songs.clone();
                                             let f_search_song =
@@ -2914,7 +3052,7 @@ impl Render for Shell {
                                                     .border_color(t.glass_border)
                                                     .text_size(gpui::px(12.0))
                                                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                        this.play_tracks(songs2.clone(), i, cx);
+                                                        this.play_tracks((*songs2).clone(), i, cx);
                                                     }))
                                                     .child(format!("{} — {}", tr.title, tr.artist)),
                                             );
@@ -3525,7 +3663,7 @@ impl Render for Shell {
                                                 ),
                                         ),
                                 );
-                                let songs = detail.songs.clone();
+                                let songs = std::sync::Arc::new(detail.songs.clone());
                                 let current_id = self.player_state.read(cx).current.as_ref().map(|c| c.id.clone());
                                 // The rows are a list so a screen reader announces the
                                 // track count and lets the user walk the album.
@@ -3569,7 +3707,7 @@ impl Render for Shell {
                                         .aria_label(format!("Play {}", t_.title))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                                            this.play_tracks(songs2.clone(), i, cx);
+                                            this.play_tracks((*songs2).clone(), i, cx);
                                         })),
                                     );
                                 }
@@ -3581,6 +3719,46 @@ impl Render for Shell {
                 ),
             )
             .child(player)
+            // Failure surface. Playback, autoplay and library errors are all
+            // stored in `self.toast`; without this element they were stored and
+            // thrown away, so every async failure was silent.
+            .child(match self.toast.clone() {
+                Some(message) => {
+                    let entity = cx.entity();
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(shadow_size + gpui::px(118.0))
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .id("toast")
+                                .debug_selector(|| "toast".to_string())
+                                .role(gpui::Role::Alert)
+                                .aria_label(message.clone())
+                                .px(gpui::px(14.0))
+                                .py(gpui::px(9.0))
+                                .rounded(gpui::px(999.0))
+                                .bg(t.clay_surface)
+                                .border_1()
+                                .border_color(t.danger)
+                                .text_size(gpui::px(12.0))
+                                .text_color(t.clay_ink)
+                                .cursor_pointer()
+                                .on_click(move |_event, _window, app| {
+                                    app.update_entity(&entity, |this, cx| {
+                                        this.toast = None;
+                                        cx.notify();
+                                    });
+                                })
+                                .child(message),
+                        )
+                        .into_any_element()
+                }
+                None => div().into_any_element(),
+            })
             .child({
                 let grip_entity = cx.entity();
                 div()
@@ -3734,8 +3912,8 @@ fn spawn_home_fetch(
                         h.loading = false;
                         h.error = Some(msg.clone());
                     });
-                    entity.update(app, |shell, _cx| {
-                        shell.toast = Some(msg);
+                    entity.update(app, |shell, cx| {
+                        shell.show_toast(msg, cx);
                     });
                 });
                 return;

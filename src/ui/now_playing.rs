@@ -341,7 +341,7 @@ impl Render for NowPlayingView {
                                 div()
                                     .flex()
                                     .justify_between()
-                                    .text_size(gpui::px(8.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.text_tertiary)
                                     .child(format_time(self.position))
                                     .child(format_time(self.duration)),
@@ -509,7 +509,7 @@ impl Render for NowPlayingView {
                             .py(gpui::px(12.0))
                             .border_t_1()
                             .border_color(t.glass_border)
-                            .text_size(gpui::px(8.0))
+                            .text_size(gpui::px(10.0))
                             .text_color(t.text_tertiary)
                             .child(format!("{} — {}", self.title, self.artist))
                             .child(format!(

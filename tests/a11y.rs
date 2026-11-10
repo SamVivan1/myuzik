@@ -285,6 +285,84 @@ fn shift_tab_reverses_the_focus_order(cx: &mut TestAppContext) {
     );
 }
 
+/// A focused control must be *operable* from the keyboard, not merely
+/// reachable: Enter activates whatever has focus. Without this the whole
+/// focus ring is decoration and WCAG 2.1.1 (Keyboard) fails.
+#[gpui::test]
+fn enter_activates_the_focused_nav_item(cx: &mut TestAppContext) {
+    let (_server, shell, mut vcx) = mock_shell(cx, "enter-nav");
+
+    // The sidebar is the first group in the ring; nav-settings is its 8th stop.
+    for _ in 0..8 {
+        press_tab(&mut vcx);
+    }
+    assert_eq!(
+        focused_control(&mut vcx, &shell).as_deref(),
+        Some("nav-settings"),
+        "focus did not land on the Settings nav item"
+    );
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.route()),
+        Route::Settings,
+        "Enter on the focused Settings nav item did nothing"
+    );
+}
+
+/// Enter on a focused content control (an album card) must open it.
+#[gpui::test]
+fn enter_opens_the_focused_album_card(cx: &mut TestAppContext) {
+    let (_server, shell, mut vcx) = mock_shell(cx, "enter-album");
+
+    // 8 nav stops + pin-lyrics + 2 content controls, then the first album card.
+    for _ in 0..12 {
+        press_tab(&mut vcx);
+    }
+    assert_eq!(
+        focused_control(&mut vcx, &shell).as_deref(),
+        Some("album:a1"),
+        "focus did not land on the first album card"
+    );
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.selected_album_id().map(str::to_owned)),
+        Some("a1".to_string()),
+        "Enter on the focused album card did not open the album"
+    );
+}
+
+/// A stored reduce-motion preference must be honoured from the first frame,
+/// not only after the Settings toggle is touched.
+#[gpui::test]
+fn stored_reduce_motion_is_applied_at_startup(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("motion");
+        let config = AppConfig {
+            reduce_motion: true,
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let _shell = window.root(&mut vcx).unwrap();
+    vcx.run_until_parked();
+
+    assert!(
+        vcx.update(|_window, app| app.reduce_motion()),
+        "config.reduce_motion was true but the app still animates: \
+         set_reduce_motion was never called during Shell::new"
+    );
+}
+
 /// Typing in the search field must not be hijacked by the global transport
 /// shortcuts, and Tab must move focus out of the field.
 #[gpui::test]
