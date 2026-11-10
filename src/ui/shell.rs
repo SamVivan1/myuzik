@@ -1,6 +1,7 @@
 use crate::app::Route;
 use crate::config::{AppConfig, Paths};
 use crate::navidrome::client::NavidromeClient;
+use crate::lyrics::provider::LyricsProvider;
 use std::sync::Arc;
 use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
@@ -20,6 +21,7 @@ pub struct Shell {
     route: Route,
     #[allow(dead_code)]
     client: Option<Arc<NavidromeClient>>,
+    lyrics_provider: Option<Arc<LyricsProvider>>,
     home_state: gpui::Entity<HomeState>,
     selected_album: Option<String>,
     album_detail: Option<crate::library::AlbumDetail>,
@@ -48,6 +50,16 @@ impl Shell {
         let client = if !config.server_url.is_empty() {
             password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok()).map(Arc::new)
         } else { None };
+        let lyrics_provider = client.as_ref().map(|_| {
+            let pw = crate::config::load_password(&paths).unwrap_or_default();
+            let owned = NavidromeClient::new(&config.server_url, &config.username, &pw)
+                .expect("client already validated");
+            Arc::new(LyricsProvider::new(
+                owned,
+                crate::lyrics::cache::LyricsCache::new(paths.lyrics.clone()),
+                config.prefer_navidrome_lyrics,
+            ))
+        });
         let route = if client.is_none() { Route::Setup } else { Route::Home };
         // Poll player events in background
         let state = player_state.clone();
@@ -193,6 +205,7 @@ impl Shell {
             paths,
             route,
             client,
+            lyrics_provider,
             home_state,
             selected_album,
             album_detail,
@@ -352,16 +365,16 @@ impl Shell {
             self.player_handle.tx.send(PlayerCommand::Load { uri, track_id: track.id.clone() }).ok();
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
-        if let Some(client) = &self.client {
-            let c = client.clone();
+        if let Some(provider) = &self.lyrics_provider {
+            let p = provider.clone();
             let t = track.clone();
             let np = self.now_playing.clone();
             let os = self.overlay_state.clone();
             cx.spawn(async move |cx| {
                 let t_bg = t.clone();
-                let c_bg = c.clone();
+                let p_bg = p.clone();
                 let status = cx.background_executor().spawn(async move {
-                    c_bg.lyrics(&t_bg.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                    p_bg.fetch(&t_bg).unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
                 }).await;
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
@@ -472,6 +485,9 @@ impl Render for Shell {
         let is_playing = status == PlaybackStatus::Playing;
         let current_title = self.player_state.read(cx).current.as_ref().map(|t| t.title.clone()).unwrap_or_default();
         let current_artist = self.player_state.read(cx).current.as_ref().map(|t| t.artist.clone()).unwrap_or_default();
+        let current_cover = self.player_state.read(cx).current.as_ref()
+            .and_then(|t| t.cover_art_id.clone())
+            .and_then(|cid| self.home_state.read(cx).covers.get(&cid).cloned());
         let position = self.player_state.read(cx).position;
         let duration = self.player_state.read(cx).duration.unwrap_or(std::time::Duration::ZERO);
 
@@ -522,7 +538,24 @@ impl Render for Shell {
                             .rounded(gpui::px(14.0))
                             .bg(t.glass_tint)
                             .border_1()
-                            .border_color(t.glass_border),
+                            .border_color(t.glass_border)
+                            .overflow_hidden()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if let Some(image) = current_cover.clone() {
+                                gpui::img(gpui::ImageSource::Image(image))
+                                    .w(gpui::px(52.0))
+                                    .h(gpui::px(52.0))
+                                    .object_fit(gpui::ObjectFit::Cover)
+                                    .into_any_element()
+                            } else {
+                                gpui::div()
+                                    .text_size(gpui::px(18.0))
+                                    .text_color(t.clay_ink)
+                                    .child("♪")
+                                    .into_any_element()
+                            }),
                     )
                     .child(
                         div()
