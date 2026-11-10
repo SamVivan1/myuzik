@@ -42,6 +42,7 @@ pub struct Shell {
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
+    scrobble_enabled: Arc<std::sync::atomic::AtomicBool>,
     setup_server: String,
     setup_user: String,
     setup_pass: String,
@@ -82,6 +83,7 @@ impl Shell {
         let resize_start = None;
         let toast = None;
         let lyrics_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let scrobble_enabled = Arc::new(std::sync::atomic::AtomicBool::new(config.scrobble));
         let setup_server = if config.server_url.is_empty() {
             "https://".to_string()
         } else {
@@ -124,6 +126,7 @@ impl Shell {
         let now_playing_for_loop = now_playing.clone();
         let self_entity = cx.entity();
         let scrobble_client = client.clone();
+        let scrobble_enabled_for_loop = scrobble_enabled.clone();
         let overlay_for_loop = overlay_state.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
@@ -157,7 +160,8 @@ impl Shell {
                         }
                         let delta = pos.saturating_sub(last_pos);
                         last_pos = pos;
-                        if delta < std::time::Duration::from_secs(2)
+                        if scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
+                            && delta < std::time::Duration::from_secs(2)
                             && delta > std::time::Duration::ZERO
                             && scrobble.tick(delta, track_duration)
                             && let Some(id) = &scrobble_track
@@ -237,7 +241,9 @@ impl Shell {
                                 mh.update_metadata(&track, None);
                             }
                         }
-                        if let Some(client) = &scrobble_client {
+                        if scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
+                            && let Some(client) = &scrobble_client
+                        {
                             let client = client.clone();
                             let now_ms = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -295,6 +301,7 @@ impl Shell {
             resize_start,
             toast,
             lyrics_generation,
+            scrobble_enabled,
             setup_server,
             setup_user,
             setup_pass,
@@ -627,6 +634,67 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    fn persist_config(&self) {
+        let _ = crate::config::save_config(&self.paths, &self.config);
+    }
+
+    pub fn cycle_quality(&mut self) {
+        self.config.quality = match self.config.quality {
+            crate::config::StreamQuality::Original => crate::config::StreamQuality::Kbps320,
+            crate::config::StreamQuality::Kbps320 => crate::config::StreamQuality::Kbps192,
+            crate::config::StreamQuality::Kbps192 => crate::config::StreamQuality::Original,
+        };
+        self.persist_config();
+    }
+
+    pub fn toggle_scrobble(&mut self) {
+        self.config.scrobble = !self.config.scrobble;
+        self.scrobble_enabled
+            .store(self.config.scrobble, std::sync::atomic::Ordering::Relaxed);
+        self.persist_config();
+    }
+
+    pub fn toggle_lyrics_source(&mut self) {
+        self.config.prefer_navidrome_lyrics = !self.config.prefer_navidrome_lyrics;
+        self.persist_config();
+    }
+
+    pub fn adjust_lyrics_offset(&mut self, delta: i64, cx: &mut gpui::Context<Self>) {
+        self.config.lyrics_offset_ms =
+            (self.config.lyrics_offset_ms + delta).clamp(-10_000, 10_000);
+        self.persist_config();
+        let offset = self.config.lyrics_offset_ms;
+        self.now_playing.update(cx, |np, cx| {
+            np.lyrics.update(cx, |view, _cx| view.set_offset_ms(offset));
+        });
+    }
+
+    pub fn toggle_reduce_motion(&mut self, cx: &mut gpui::Context<Self>) {
+        self.config.reduce_motion = !self.config.reduce_motion;
+        cx.set_reduce_motion(self.config.reduce_motion);
+        self.persist_config();
+    }
+
+    pub fn quality_label(&self) -> &'static str {
+        match self.config.quality {
+            crate::config::StreamQuality::Original => "Original",
+            crate::config::StreamQuality::Kbps320 => "320 kbps",
+            crate::config::StreamQuality::Kbps192 => "192 kbps",
+        }
+    }
+
+    pub fn lyrics_offset(&self) -> i64 {
+        self.config.lyrics_offset_ms
+    }
+
+    pub fn prefer_navidrome_lyrics(&self) -> bool {
+        self.config.prefer_navidrome_lyrics
+    }
+
+    pub fn scrobble_on(&self) -> bool {
+        self.config.scrobble
     }
 
     pub fn open_album(&mut self, id: String, cx: &mut gpui::Context<Self>) {
@@ -1958,7 +2026,120 @@ impl Render for Shell {
                                 }
                                 col
                             } else if self.route == Route::Settings {
-                                div().child(self.settings_view.clone())
+                                let mut col = div().flex().flex_col().gap(gpui::px(8.0));
+                                col = col
+                                    .child(settings_section("Account", t))
+                                    .child(setting_row("Server URL", &self.config.server_url, t))
+                                    .child(setting_row("Username", &self.config.username, t))
+                                    .child(settings_section("Playback", t))
+                                    .child(
+                                        setting_row("Stream quality", self.quality_label(), t)
+                                            .id("set-quality").debug_selector(|| "set-quality".to_string())
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _event, _window, _cx| {
+                                                this.cycle_quality();
+                                            })),
+                                    )
+                                    .child(
+                                        setting_row(
+                                            "Scrobble",
+                                            if self.config.scrobble { "On" } else { "Off" },
+                                            t,
+                                        )
+                                        .id("set-scrobble").debug_selector(|| "set-scrobble".to_string())
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                                            this.toggle_scrobble();
+                                        })),
+                                    )
+                                    .child(setting_row(
+                                        "Volume",
+                                        &format!(
+                                            "{}%",
+                                            (self.player_state.read(cx).volume * 100.0) as i32
+                                        ),
+                                        t,
+                                    ))
+                                    .child(settings_section("Lyrics", t))
+                                    .child(setting_row(
+                                        "Offset",
+                                        &format!("{} ms", self.config.lyrics_offset_ms),
+                                        t,
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap(gpui::px(8.0))
+                                            .child(
+                                                div()
+                                                    .id("offset-down").debug_selector(|| "offset-down".to_string())
+                                                    .cursor_pointer()
+                                                    .px(gpui::px(12.0))
+                                                    .py(gpui::px(6.0))
+                                                    .rounded(gpui::px(999.0))
+                                                    .bg(gpui::rgba(0xFFFFFF0A))
+                                                    .border_1()
+                                                    .border_color(t.glass_border)
+                                                    .text_size(gpui::px(10.0))
+                                                    .on_click(cx.listener(
+                                                        |this, _event, _window, cx| {
+                                                            this.adjust_lyrics_offset(-500, cx);
+                                                        },
+                                                    ))
+                                                    .child("−500 ms"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("offset-up").debug_selector(|| "offset-up".to_string())
+                                                    .cursor_pointer()
+                                                    .px(gpui::px(12.0))
+                                                    .py(gpui::px(6.0))
+                                                    .rounded(gpui::px(999.0))
+                                                    .bg(gpui::rgba(0xFFFFFF0A))
+                                                    .border_1()
+                                                    .border_color(t.glass_border)
+                                                    .text_size(gpui::px(10.0))
+                                                    .on_click(cx.listener(
+                                                        |this, _event, _window, cx| {
+                                                            this.adjust_lyrics_offset(500, cx);
+                                                        },
+                                                    ))
+                                                    .child("+500 ms"),
+                                            ),
+                                    )
+                                    .child(
+                                        setting_row(
+                                            "Source",
+                                            if self.config.prefer_navidrome_lyrics {
+                                                "Navidrome first"
+                                            } else {
+                                                "LRCLIB first"
+                                            },
+                                            t,
+                                        )
+                                        .id("set-lyrics-source").debug_selector(|| "set-lyrics-source".to_string())
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                                            this.toggle_lyrics_source();
+                                        })),
+                                    )
+                                    .child(settings_section("Appearance", t))
+                                    .child(
+                                        setting_row(
+                                            "Reduce motion",
+                                            if self.config.reduce_motion { "On" } else { "Off" },
+                                            t,
+                                        )
+                                        .id("set-reduce-motion").debug_selector(|| "set-reduce-motion".to_string())
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.toggle_reduce_motion(cx);
+                                        })),
+                                    )
+                                    .child(settings_section("About", t))
+                                    .child(setting_row("Version", "0.1.0", t))
+                                    .child(setting_row("License", "MIT", t));
+                                col
                             } else if self.route == Route::Artists {
                                 if let Some(detail) = &self.artist_detail {
                                     let albums = detail.albums.clone();
@@ -2402,6 +2583,41 @@ fn spawn_home_fetch(
         }
     })
     .detach();
+}
+
+fn settings_section(title: &str, t: &crate::theme::Colors) -> gpui::Div {
+    div()
+        .mt(gpui::px(6.0))
+        .text_size(gpui::px(9.0))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(t.gold)
+        .child(title.to_uppercase())
+}
+
+fn setting_row(label: &str, value: &str, t: &crate::theme::Colors) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(gpui::px(12.0))
+        .py(gpui::px(9.0))
+        .rounded(gpui::px(10.0))
+        .bg(t.glass_tint)
+        .border_1()
+        .border_color(t.glass_border)
+        .child(
+            div()
+                .text_size(gpui::px(11.0))
+                .text_color(t.text_secondary)
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_size(gpui::px(11.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(t.text_primary)
+                .child(value.to_string()),
+        )
 }
 
 fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {

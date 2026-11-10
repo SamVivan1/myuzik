@@ -225,3 +225,63 @@ fn setup_form_validates_and_types(cx: &mut TestAppContext) {
         "invalid URL not rejected"
     );
 }
+
+#[gpui::test]
+fn settings_controls_update_config(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("settings");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+
+    let settings = cx.debug_bounds("nav-settings").expect("nav-settings");
+    cx.simulate_click(settings.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let quality = cx.debug_bounds("set-quality").expect("set-quality");
+    cx.simulate_click(quality.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.quality_label()), "320 kbps");
+
+    let scrobble = cx.debug_bounds("set-scrobble").expect("set-scrobble");
+    cx.simulate_click(scrobble.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!shell.read_with(&cx, |s, _| s.scrobble_on()));
+
+    let offset = cx.debug_bounds("offset-up").expect("offset-up");
+    cx.simulate_click(offset.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.lyrics_offset()), 500);
+
+    let source = cx
+        .debug_bounds("set-lyrics-source")
+        .expect("set-lyrics-source");
+    cx.simulate_click(source.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!shell.read_with(&cx, |s, _| s.prefer_navidrome_lyrics()));
+
+    let motion = cx
+        .debug_bounds("set-reduce-motion")
+        .expect("set-reduce-motion");
+    cx.simulate_click(motion.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.update(|_window, cx| cx.reduce_motion()));
+
+    // Config is persisted to disk.
+    let paths = temp_paths("settings");
+    let text = std::fs::read_to_string(&paths.config).expect("config saved");
+    assert!(text.contains("quality") && text.contains("kbps320"));
+}
