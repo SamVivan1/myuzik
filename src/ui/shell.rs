@@ -587,6 +587,18 @@ impl Shell {
         cx.notify();
     }
 
+    /// Push the queue to MPRIS so it can advertise LoopStatus, Shuffle and
+    /// whether Next/Previous are usable.
+    ///
+    /// Without this the media widget shows Next/Previous permanently disabled:
+    /// MPRIS cannot guess a queue it was never told about.
+    fn sync_mpris_queue(&self, cx: &mut gpui::App) {
+        if let Some(mh) = &self.mpris_handle {
+            let queue = self.player_state.read(cx).queue.clone();
+            mh.update_queue(&queue);
+        }
+    }
+
     /// Nudge the volume by `delta`, keeping state, engine and MPRIS in step.
     fn adjust_volume(&mut self, delta: f32, cx: &mut gpui::Context<Self>) {
         let v = (self.player_state.read(cx).volume + delta).clamp(0.0, 1.0);
@@ -813,6 +825,7 @@ impl Shell {
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(vec![track.clone()], 0);
         });
+        self.sync_mpris_queue(cx);
         // A single track leaves nothing queued, so autoplay has to seed itself
         // from this track while it plays.
         {
@@ -841,12 +854,14 @@ impl Shell {
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(tracks.clone(), start);
         });
+        self.sync_mpris_queue(cx);
         self.radio.lock().unwrap_or_else(|e| e.into_inner()).reset();
         self.load_and_play(&tracks[start], cx);
     }
 
     pub fn play_next(&mut self, cx: &mut gpui::App) {
         let next = self.player_state.update(cx, |ps, _cx| ps.next());
+        self.sync_mpris_queue(cx);
         match next {
             Some(track) => self.load_and_play(&track, cx),
             None => {
@@ -861,6 +876,7 @@ impl Shell {
 
     pub fn play_previous(&mut self, cx: &mut gpui::App) {
         let prev = self.player_state.update(cx, |ps, _cx| ps.previous());
+        self.sync_mpris_queue(cx);
         if let Some(track) = prev {
             self.load_and_play(&track, cx);
         }
@@ -1112,11 +1128,13 @@ impl Shell {
                                     shell.load_and_play(&track, cx);
                                 });
                             }
+                            let _ = weak.update(app, |shell, cx| shell.sync_mpris_queue(cx));
                         } else {
                             ps.update(app, |ps, _| {
                                 ps.queue.append(tracks);
                                 ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
                             });
+                            let _ = weak.update(app, |shell, cx| shell.sync_mpris_queue(cx));
                         }
                     }
                     Ok(_) => {}

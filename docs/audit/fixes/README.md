@@ -44,7 +44,7 @@ perubahan murni kosmetik tanpa perilaku (ukuran font, warna) yang diverifikasi l
 | **FL-15** field `scrobble_submitted` mati | dihapus |
 | **FL-17** Previous mati setelah queue habis | restart track terakhir (termasuk varian shuffle) |
 | **INT-03** MPRIS `Volume` basi | volume awal dari config |
-| **INT-04** MPRIS tanpa `LoopStatus`/`Shuffle` | dipetakan dari `RepeatMode`/`shuffle`; `can_go_next/previous` dari queue |
+| **INT-04** MPRIS tanpa `LoopStatus`/`Shuffle` | dipetakan dari `RepeatMode`/`shuffle`; `can_go_next/previous` dari queue; shell mendorong queue ke MPRIS (`sync_mpris_queue`) di 6 titik mutasi queue |
 | **INT-05** ikon tray tak pernah daftar ulang | `NameOwnerChanged` + retry backoff terbatas |
 | **INT-09** file kredensial 0644 lalu chmod | dibuat `0600` sejak awal, error tidak ditelan |
 | **INT-10** error tampil sebagai `Debug` mentah | `NavidromeError::user_message()/hint()` dipakai di shell |
@@ -102,6 +102,12 @@ Semua perilaku runtime yang butuh mesin nyata: tray di GNOME Shell sungguhan, di
 Secret Service (hanya lewat test `#[ignore]`), DBus/MPRIS dari client nyata, GStreamer,
 timing frame pertama, dan efek visual (tidak ada GUI yang dijalankan). Angka performa tetap
 estimasi statis.
+
+Dua bagian yang **tidak** punya test otomatis, hanya verifikasi kompilasi + review kode:
+(a) `sync_mpris_queue` — `MprisHandle` butuh bus sesi nyata, jadi jalur ini tidak bisa
+dijalankan headless (bagian murninya, `queue_state`/`repeat_mode_to_loop_status`, diuji);
+(b) pengukuran tinggi panel lirik lewat `on_children_prepainted` — harness headless tidak
+memberi ukuran panel yang berarti.
 
 ## Capability
 
