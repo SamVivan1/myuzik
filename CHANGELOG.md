@@ -21,6 +21,11 @@
   wallpaper), and the default window grew from 392x180 to 620x330 to hold the layout.
 - Overlay artwork reuses the cached cover, and the lyric state is read without cloning the whole
   lyric list on every frame.
+- The lyric band now scrolls instead of swapping a fixed slice: every line is laid out once and the
+  column glides (380 ms, ease-out) so the line being sung stays centred, with the surrounding lines
+  clipped at the edges — the behaviour of the media widget in `device-tweak/Widget`. Rows use one
+  uniform height and type size, so emphasis comes from brightness rather than from changing sizes,
+  and reduced motion is honoured automatically.
 
 ### Fixed
 - **The pinned lyric overlay is now readable.** It used to render *every* line of the song into a

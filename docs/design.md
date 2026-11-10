@@ -140,10 +140,14 @@ The app window uses the glass shell: warm-black translucent background with nati
 - Borderless, transparent, native blur, draggable by its surface; size ~392 × 160–220 px depending on lyric wrapping; position/size persisted.
 - Content: **two columns**, 620 × 330 default (min 520 × 280). Left: artwork (160 px, rounded,
   hairline border), title in Fraunces, artist, and a real progress bar with elapsed/total time.
-  Right: **a seven-line lyric band** (three before the active line, three after) in four tiers —
-  active (gold, semibold, 20 px), next (17 px), far (16 px), dim (15.5 px) — because a 70-line
-  lyric sheet must never be squeezed into a small window. A close control sits in the top-right
-  corner. Unsynced transcripts follow progress through the track, never highlight a fake active
+  Right: **the lyric band scrolls**, following the media widget in `device-tweak/Widget`: every line
+  is laid out once in a clipping box and the whole column glides so the line being sung stays
+  vertically centred (380 ms, ease-out, `AnimationExt`, which honours reduced motion by painting the
+  end state and scheduling no frames). Rows are a uniform 30 px high with one type size (16 px), so
+  the position is arithmetic rather than measured, and emphasis is carried by brightness — active in
+  gold semibold at full opacity, then 0.78 / 0.52 / 0.30 — instead of by size, which keeps the
+  rhythm steady while the band moves. Resizing re-targets the glide. A close control sits in the
+  top-right corner. Unsynced transcripts follow progress through the track, never highlight a fake active
   line, and carry a small "UNSYNCED" chip. Loading/instrumental/not-found/error states show a
   message and a hint instead of an empty box.
 - Material: the window gets no backdrop blur from Mutter, so the panel carries its own surface — a

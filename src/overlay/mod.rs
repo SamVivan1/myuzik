@@ -14,7 +14,10 @@
 #![allow(clippy::items_after_test_module)]
 
 use crate::theme::midnight_brass;
-use gpui::{Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*};
+use gpui::{
+    AnimationExt as _, Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div,
+    prelude::*,
+};
 
 pub const DEFAULT_WIDTH: u32 = 620;
 pub const DEFAULT_HEIGHT: u32 = 330;
@@ -28,6 +31,12 @@ pub const BAND_BEFORE: usize = 3;
 pub const BAND_AFTER: usize = 3;
 /// Width of the left column (artwork, title, artist, progress).
 const LEFT_COLUMN: f32 = 160.0;
+/// Every lyric row is the same height, so the band can be positioned by
+/// arithmetic instead of measuring laid-out text. Uniform rows also match the
+/// reference widget, where emphasis comes from brightness, not size.
+const ROW_HEIGHT: f32 = 30.0;
+/// How long the band takes to glide to the next line (the reference uses 380 ms).
+const SCROLL_MS: u64 = 380;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayGeometry {
@@ -290,6 +299,44 @@ impl OverlayState {
         self.visible_rows().first().map(|row| row.text.clone())
     }
 
+    /// Every line, with its tier. The window glides through all of them, so the
+    /// reader keeps the whole song for context instead of a moving slice.
+    pub fn all_rows(&self) -> Vec<VisibleRow> {
+        match &self.lyrics {
+            OverlayLyrics::Message => Vec::new(),
+            OverlayLyrics::Synced { lines, active } => lines
+                .iter()
+                .enumerate()
+                .map(|(i, line)| VisibleRow {
+                    text: line.text.clone(),
+                    tier: LineTier::of(i, *active),
+                })
+                .collect(),
+            OverlayLyrics::Plain { lines, index } => {
+                let active = (*index).min(lines.len().saturating_sub(1));
+                lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| VisibleRow {
+                        text: text.clone(),
+                        tier: LineTier::of(i, Some(active)),
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// The index of the line being sung, for the scroll position.
+    pub fn active_row(&self) -> Option<usize> {
+        match &self.lyrics {
+            OverlayLyrics::Synced { active, .. } => *active,
+            OverlayLyrics::Plain { index, lines } => {
+                Some((*index).min(lines.len().saturating_sub(1)))
+            }
+            OverlayLyrics::Message => None,
+        }
+    }
+
     /// The band of rows to draw: at most `BAND_BEFORE + 1 + BAND_AFTER` of them.
     pub fn visible_rows(&self) -> Vec<VisibleRow> {
         match &self.lyrics {
@@ -375,6 +422,12 @@ pub struct PinnedLyricsView {
     geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
     /// Focus handle for the overlay's close control.
     close_focus: gpui::FocusHandle,
+    /// Scroll animation: where the band currently is, where it is going, and the
+    /// `(active, len)` key that starts a new glide.
+    scroll_from: f32,
+    scroll_to: f32,
+    scroll_key: (usize, usize, usize),
+    scroll_started: bool,
 }
 
 impl PinnedLyricsView {
@@ -387,6 +440,10 @@ impl PinnedLyricsView {
             state,
             geometry,
             close_focus: cx.focus_handle().tab_stop(true).tab_index(0),
+            scroll_from: 0.0,
+            scroll_to: 0.0,
+            scroll_key: (0, 0, 0),
+            scroll_started: false,
         }
     }
 }
@@ -398,7 +455,7 @@ impl Render for PinnedLyricsView {
 
         // Read once, copy only what is drawn: the old code cloned every lyric
         // line about ten times a second just to draw six of them.
-        let (title, artist, cover, unsynced, message, rows, progress, elapsed, total) = {
+        let (title, artist, cover, unsynced, message, progress, elapsed, total) = {
             let state = self.state.read(cx);
             (
                 state.title.clone(),
@@ -406,7 +463,6 @@ impl Render for PinnedLyricsView {
                 state.cover.clone(),
                 state.unsynced,
                 state.message.clone(),
-                state.visible_rows(),
                 state.progress_fraction(),
                 fmt_time(state.position),
                 state
@@ -540,65 +596,129 @@ impl Render for PinnedLyricsView {
             .child(div().flex_1());
 
         // ---- right column: the lyric band ----
-        let mut lines = div()
-            .flex_1()
-            .h_full()
+        //
+        // Following the reference widget: every line is rendered once inside a
+        // clipping box and the whole column glides so that the line being sung
+        // stays vertically centred. Uniform row height means the target position
+        // is arithmetic — no measuring laid-out text, and no reflow pass.
+        let rows_all = self.state.read(cx).all_rows();
+        let active_row = self.state.read(cx).active_row();
+
+        let viewport_h = f32::from(window.bounds().size.height) - 40.0;
+        let center = viewport_h / 2.0;
+        let target = match active_row {
+            Some(index) if !rows_all.is_empty() => center - (index as f32 + 0.5) * ROW_HEIGHT,
+            _ => 0.0,
+        };
+
+        // A new glide starts when the active line or the song changes.
+        let key = (
+            active_row.unwrap_or(0),
+            rows_all.len(),
+            viewport_h.max(0.0) as usize,
+        );
+        if !self.scroll_started {
+            self.scroll_started = true;
+            self.scroll_from = target;
+            self.scroll_to = target;
+            self.scroll_key = key;
+        } else if key != self.scroll_key {
+            self.scroll_from = self.scroll_to;
+            self.scroll_to = target;
+            self.scroll_key = key;
+        }
+        let (glide_from, glide_to) = (self.scroll_from, self.scroll_to);
+
+        let mut column = div()
+            .absolute()
+            .left_0()
+            .right_0()
             .flex()
             .flex_col()
-            .justify_center()
-            .items_center()
-            .gap(gpui::px(17.0))
             .px(gpui::px(6.0))
             // Room for the close control, so it never sits on a lyric.
-            .pr(gpui::px(38.0))
-            .overflow_hidden();
+            .pr(gpui::px(38.0));
 
-        if rows.is_empty() {
-            lines = lines.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(gpui::px(4.0))
-                    .child(
-                        div()
-                            .text_size(gpui::px(14.0))
-                            .font_family(theme.ui_font)
-                            .text_color(t.text_secondary)
-                            .child(message),
-                    )
-                    .child(
-                        div()
-                            .text_size(gpui::px(10.5))
-                            .font_family(theme.ui_font)
-                            .text_color(t.text_tertiary)
-                            .child("Lyrics come from Navidrome and LRCLIB"),
-                    ),
-            );
-        } else {
-            for row in rows {
-                let (size, color, weight, opacity) = match row.tier {
-                    LineTier::Active => (20.0, t.gold_light, gpui::FontWeight::SEMIBOLD, 1.0),
-                    LineTier::Next => (16.5, t.text_primary, gpui::FontWeight::MEDIUM, 0.94),
-                    LineTier::Far => (16.0, t.text_primary, gpui::FontWeight::NORMAL, 0.72),
-                    LineTier::Dim => (15.5, t.text_secondary, gpui::FontWeight::NORMAL, 0.52),
-                };
-                lines = lines.child(
+        if rows_all.is_empty() {
+            // Nothing to scroll: sit the message in the middle of the box.
+            let message = message.clone();
+            let hint = "Lyrics come from Navidrome and LRCLIB";
+            column = column
+                .top(gpui::px(center - 26.0))
+                .items_center()
+                .justify_center()
+                .child(
                     div()
                         .w_full()
                         .text_center()
-                        .text_size(gpui::px(size))
-                        .line_height(gpui::px(size * 1.34))
+                        .text_size(gpui::px(14.0))
                         .font_family(theme.ui_font)
-                        .font_weight(weight)
-                        .text_color(color)
-                        .opacity(opacity)
-                        .child(row.text),
+                        .text_color(t.text_secondary)
+                        .child(message),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .text_center()
+                        .mt(gpui::px(4.0))
+                        .text_size(gpui::px(10.5))
+                        .font_family(theme.ui_font)
+                        .text_color(t.text_tertiary)
+                        .child(hint),
+                );
+        } else {
+            for row in rows_all {
+                // Uniform type size, like the reference: the emphasis is carried
+                // by colour and opacity, so the band keeps one steady rhythm
+                // while it moves.
+                let (color, weight, opacity) = match row.tier {
+                    LineTier::Active => (t.gold_light, gpui::FontWeight::SEMIBOLD, 1.0),
+                    LineTier::Next => (t.text_primary, gpui::FontWeight::MEDIUM, 0.78),
+                    LineTier::Far => (t.text_primary, gpui::FontWeight::NORMAL, 0.52),
+                    LineTier::Dim => (t.text_secondary, gpui::FontWeight::NORMAL, 0.30),
+                };
+                column = column.child(
+                    div()
+                        .w_full()
+                        .h(gpui::px(ROW_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .w_full()
+                                .text_center()
+                                .text_size(gpui::px(16.0))
+                                .line_height(gpui::px(21.0))
+                                .font_family(theme.ui_font)
+                                .font_weight(weight)
+                                .text_color(color)
+                                .opacity(opacity)
+                                .child(row.text),
+                        ),
                 );
             }
         }
 
-        let right = div().flex_1().h_full().child(lines);
+        // No motion when the user asked for none: jump straight to the target.
+        // `with_animation` already honours `App::reduce_motion`: when motion is
+        // reduced it paints the end state and schedules no frames.
+        let animation = gpui::Animation::new(std::time::Duration::from_millis(SCROLL_MS))
+            .with_easing(gpui::ease_out_quint());
+        let scrolling = div().relative().h_full().flex_1().overflow_hidden().child(
+            column
+                .with_animation(
+                    format!("lyric-scroll-{}-{}-{}", key.0, key.1, key.2),
+                    animation,
+                    move |column, t| {
+                        let y = glide_from + (glide_to - glide_from) * t;
+                        column.top(gpui::px(y))
+                    },
+                )
+                .into_any_element(),
+        );
+
+        let right = div().flex_1().h_full().child(scrolling);
 
         let ambient = div()
             .absolute()
@@ -879,6 +999,40 @@ mod band_tests {
             ]
         );
         assert_eq!(rows[3].text, "line 60");
+    }
+
+    #[test]
+    fn all_rows_keeps_the_whole_song_for_the_scrolling_window() {
+        // The band glides through every line (like the reference widget), so the
+        // full set is handed to the view while the tier still marks the singer.
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Synced(synced(70)));
+        state.sync_position(Duration::from_secs(300), 0, None);
+        let rows = state.all_rows();
+        assert_eq!(rows.len(), 70, "every line is available to scroll through");
+        assert_eq!(
+            rows.iter().filter(|r| r.tier.is_active()).count(),
+            1,
+            "exactly one line is the active one"
+        );
+        assert_eq!(state.active_row(), Some(60));
+        assert_eq!(rows[60].tier, LineTier::Active);
+        assert_eq!(rows[61].tier, LineTier::Next);
+        assert_eq!(rows[59].tier, LineTier::Far);
+        assert_eq!(rows[0].tier, LineTier::Dim);
+    }
+
+    #[test]
+    fn the_scrolling_window_has_no_active_row_without_lyrics() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::NotFound);
+        assert!(state.all_rows().is_empty());
+        assert_eq!(state.active_row(), None);
+
+        // Plain transcripts still scroll with the song's progress.
+        state.set_status(&LyricsStatus::Plain("a\nb\nc".to_string()));
+        assert_eq!(state.all_rows().len(), 3);
+        assert_eq!(state.active_row(), Some(0));
     }
 
     #[test]
