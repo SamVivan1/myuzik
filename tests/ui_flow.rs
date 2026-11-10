@@ -56,7 +56,7 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
     });
     let _m6 = server.mock(|when, then| {
         when.method(GET).path("/rest/getLyricsBySongId.view");
-        then.status(404);
+        then.status(200).header("content-type", "application/json").body(ok(r#""lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":1000,"value":"one"},{"start":2000,"value":"two"}]}]}"#));
     });
     let now_playing = server.mock(|when, then| {
         when.method(GET)
@@ -147,6 +147,29 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
     assert_eq!(
         shell.read_with(&cx, |s, cx| s.current_track_title(cx)),
         Some("First".into())
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.overlay_line_count(cx)) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.overlay_line_count(cx)),
+        2,
+        "lyrics did not reach overlay"
+    );
+    send_event(myuzik::player::engine::PlayerEvent::Position(
+        Duration::from_secs(2),
+    ));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.overlay_active(cx)),
+        Some(1),
+        "overlay active line wrong"
     );
 
     let cmds = drain_cmds();

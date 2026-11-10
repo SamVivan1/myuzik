@@ -50,9 +50,60 @@ fn main() {
             }),
             ..Default::default()
         };
-        cx.open_window(opts, |_window, cx| {
-            cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle))
-        })
-        .expect("failed to open window");
+        let handle = cx
+            .open_window(opts, |_window, cx| {
+                cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle))
+            })
+            .expect("failed to open window");
+
+        if let Ok(mode) = std::env::var("MYUZIK_WINDOW_TEST") {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                match mode.as_str() {
+                    "close" => {
+                        tracing::info!("window test: closing");
+                        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+                    }
+                    "resize" => {
+                        let _ = handle.update(cx, |_view, window, _cx| {
+                            window.resize(gpui::size(gpui::px(1000.0), gpui::px(700.0)))
+                        });
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(700))
+                            .await;
+                        let size = handle
+                            .update(cx, |_view, window, _cx| window.viewport_size())
+                            .ok();
+                        tracing::info!("window test: resized size={size:?}");
+                    }
+                    "minimize" => {
+                        let _ = handle.update(cx, |_view, window, _cx| window.minimize_window());
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(600))
+                            .await;
+                        let visibility = handle
+                            .update(cx, |_view, window, _cx| window.visibility())
+                            .ok();
+                        tracing::info!("window test: visibility={visibility:?}");
+                    }
+                    _ => {
+                        let _ = handle.update(cx, |_view, window, _cx| window.zoom_window());
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(700))
+                            .await;
+                        let maximized = handle
+                            .update(cx, |_view, window, _cx| window.is_maximized())
+                            .unwrap_or(false);
+                        let size = handle
+                            .update(cx, |_view, window, _cx| window.viewport_size())
+                            .ok();
+                        tracing::info!("window test: maximized={maximized} size={size:?}");
+                    }
+                }
+            })
+            .detach();
+        }
     });
 }

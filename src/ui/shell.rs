@@ -763,6 +763,14 @@ impl Shell {
         self.player_state.read(cx).position
     }
 
+    pub fn overlay_line_count(&self, cx: &gpui::App) -> usize {
+        self.overlay_state.read(cx).lines.len()
+    }
+
+    pub fn overlay_active(&self, cx: &gpui::App) -> Option<usize> {
+        self.overlay_state.read(cx).active
+    }
+
     pub fn current_track_title(&self, cx: &gpui::App) -> Option<String> {
         self.player_state
             .read(cx)
@@ -1438,7 +1446,7 @@ impl Render for Shell {
                                     .gap(gpui::px(8.0))
                                     .child(
                                         div()
-                                            .id("win-close")
+                                            .id("win-close").debug_selector(|| "win-close".to_string())
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1451,7 +1459,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-min")
+                                            .id("win-min").debug_selector(|| "win-min".to_string())
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1464,7 +1472,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-max")
+                                            .id("win-max").debug_selector(|| "win-max".to_string())
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))

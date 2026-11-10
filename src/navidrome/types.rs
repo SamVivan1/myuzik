@@ -168,8 +168,16 @@ pub struct SearchResult3 {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LyricsDto {
-    #[serde(rename = "structuredLyrics")]
-    pub structured: Option<Vec<StructuredLyrics>>,
+    #[serde(rename = "lyricsList")]
+    pub lyrics_list: Option<LyricsList>,
+    #[serde(rename = "structuredLyrics", default)]
+    pub structured: Vec<StructuredLyrics>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct LyricsList {
+    #[serde(rename = "structuredLyrics", default)]
+    pub structured: Vec<StructuredLyrics>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -285,7 +293,13 @@ pub fn search_results_from_dto(s: SearchResult3) -> SearchResults {
 
 pub fn lyrics_from_dto(dto: LyricsDto) -> Option<crate::lyrics::model::LyricsStatus> {
     use crate::lyrics::model::LyricsStatus;
-    let sl = dto.structured.into_iter().flatten().next()?;
+    let sl = dto
+        .lyrics_list
+        .map(|l| l.structured)
+        .unwrap_or_default()
+        .into_iter()
+        .chain(dto.structured)
+        .next()?;
     // OpenSubsonic lines: start is ms, value is text.
     let mut lines: Vec<crate::lyrics::model::LyricLine> = sl
         .lines
@@ -309,6 +323,36 @@ pub fn lyrics_from_dto(dto: LyricsDto) -> Option<crate::lyrics::model::LyricsSta
             Some(LyricsStatus::NotFound)
         } else {
             Some(LyricsStatus::Plain(plain))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_lyrics_list_wrapper() {
+        let json = r#"{"lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":1000,"value":"one"},{"start":2000,"value":"two"}]}]}}"#;
+        let dto: LyricsDto = serde_json::from_str(json).unwrap();
+        match lyrics_from_dto(dto) {
+            Some(crate::lyrics::model::LyricsStatus::Synced(lines)) => {
+                assert_eq!(lines.len(), 2);
+                assert_eq!(lines[1].text, "two");
+            }
+            other => panic!("expected synced, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_legacy_structured_lyrics() {
+        let json = r#"{"structuredLyrics":[{"synced":false,"line":[{"start":0,"value":"plain a"},{"start":0,"value":"plain b"}]}]}"#;
+        let dto: LyricsDto = serde_json::from_str(json).unwrap();
+        match lyrics_from_dto(dto) {
+            Some(crate::lyrics::model::LyricsStatus::Plain(text)) => {
+                assert!(text.contains("plain a") && text.contains("plain b"));
+            }
+            other => panic!("expected plain, got {other:?}"),
         }
     }
 }

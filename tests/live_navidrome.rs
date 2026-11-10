@@ -116,6 +116,31 @@ fn live_stream_url_fetches_audio() {
 
 #[test]
 #[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
+fn live_navidrome_lyrics_list_shape() {
+    if live_client().is_none() {
+        return;
+    }
+    let (_paths, c, _cfg) = setup();
+    let albums = c.album_list(AlbumListKind::Newest, 5, 0).expect("albums");
+    let mut seen = false;
+    for album in albums {
+        let detail = c.album(&album.id).expect("detail");
+        for track in &detail.songs {
+            if let Ok(Some(LyricsStatus::Synced(lines))) = c.lyrics(&track.id) {
+                assert!(!lines.is_empty());
+                seen = true;
+                break;
+            }
+        }
+        if seen {
+            break;
+        }
+    }
+    assert!(seen, "no Navidrome-served synced lyrics found");
+}
+
+#[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_lyrics_pipeline() {
     if live_client().is_none() {
         return;
