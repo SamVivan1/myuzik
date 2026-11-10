@@ -1021,14 +1021,21 @@ impl Render for Shell {
                                 if let Some(results) = &self.search_results {
                                     if !results.songs.is_empty() {
                                         col = col.child(div().text_size(gpui::px(9.0)).font_weight(gpui::FontWeight::BOLD).text_color(t.gold).child("SONGS"));
-                                        for tr in results.songs.iter().take(20) {
+                                        let songs = results.songs.clone();
+                                        for (i, tr) in results.songs.iter().take(20).enumerate() {
+                                            let songs2 = songs.clone();
                                             col = col.child(
                                                 div()
+                                                    .id(format!("search-song-{}", i))
+                                                    .cursor_pointer()
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(8.0))
                                                     .rounded(gpui::px(10.0))
                                                     .bg(t.glass_tint)
                                                     .text_size(gpui::px(12.0))
+                                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                        this.play_tracks(songs2.clone(), i, cx);
+                                                    }))
                                                     .child(format!("{} — {}", tr.title, tr.artist)),
                                             );
                                         }
