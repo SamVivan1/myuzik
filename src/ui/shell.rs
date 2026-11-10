@@ -806,9 +806,9 @@ impl Render for Shell {
                     .w(gpui::px(820.0))
                     .h(gpui::px(620.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0xC9A86A22))
+                    .bg(gpui::rgba(0xC9A86A3A))
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0xC9A86A38).into(),
+                        color: gpui::rgba(0xC9A86A55).into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                         blur_radius: gpui::px(260.0),
                         spread_radius: gpui::px(0.0),
@@ -823,9 +823,9 @@ impl Render for Shell {
                     .w(gpui::px(760.0))
                     .h(gpui::px(560.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0x2F6B631C))
+                    .bg(gpui::rgba(0x2F6B6330))
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0x2F6B6330).into(),
+                        color: gpui::rgba(0x2F6B6348).into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                         blur_radius: gpui::px(240.0),
                         spread_radius: gpui::px(0.0),
@@ -840,9 +840,9 @@ impl Render for Shell {
                     .w(gpui::px(560.0))
                     .h(gpui::px(480.0))
                     .rounded(gpui::px(999.0))
-                    .bg(gpui::rgba(0x7A4A5518))
+                    .bg(gpui::rgba(0x7A4A5528))
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0x7A4A5528).into(),
+                        color: gpui::rgba(0x7A4A5540).into(),
                         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                         blur_radius: gpui::px(220.0),
                         spread_radius: gpui::px(0.0),
@@ -856,8 +856,8 @@ impl Render for Shell {
                     .rounded(gpui::px(24.0))
                     .bg(gpui::linear_gradient(
                         135.0,
-                        gpui::linear_color_stop(gpui::rgba(0x0A0A0DB8), 0.0),
-                        gpui::linear_color_stop(gpui::rgba(0x14100AA6), 1.0),
+                        gpui::linear_color_stop(gpui::rgba(0x0A0A0DA8), 0.0),
+                        gpui::linear_color_stop(gpui::rgba(0x14100A96), 1.0),
                     ))
                     .border_1()
                     .border_color(t.glass_border)
@@ -1597,7 +1597,7 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
         .rounded(gpui::px(12.0))
         .bg(bg)
         .border_1()
-        .border_color(if active { gpui::rgba(0xC9A86A38) } else { t.glass_border })
+        .border_color(if active { gpui::rgba(0xC9A86A55) } else { t.glass_border })
         .child(
             gpui::div()
                 .w(gpui::px(15.0))
