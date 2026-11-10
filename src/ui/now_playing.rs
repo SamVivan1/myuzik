@@ -497,6 +497,26 @@ impl Render for NowPlayingView {
                             .overflow_hidden()
                             .px(gpui::px(24.0))
                             .py(gpui::px(16.0))
+                            // The centring arithmetic needs the panel's real
+                            // height, and it used to assume 400 px for every
+                            // window size. The child bounds are the honest
+                            // measurement; deferring keeps the entity update out
+                            // of the prepaint that produced it.
+                            .on_children_prepainted({
+                                let lyrics = self.lyrics.clone();
+                                move |bounds, _window, app| {
+                                    let Some(bounds) = bounds.first() else {
+                                        return;
+                                    };
+                                    let height = bounds.size.height.as_f32();
+                                    let lyrics = lyrics.clone();
+                                    app.defer(move |app| {
+                                        lyrics.update(app, |view, _cx| {
+                                            view.set_viewport_height(height);
+                                        });
+                                    });
+                                }
+                            })
                             .child(self.lyrics.clone()),
                     )
                     .child(
