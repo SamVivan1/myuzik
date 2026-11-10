@@ -128,9 +128,16 @@ impl Shell {
         let scrobble_client = client.clone();
         let scrobble_enabled_for_loop = scrobble_enabled.clone();
         let overlay_for_loop = overlay_state.clone();
+        let covers_for_loop = paths.covers.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
-            spawn_home_fetch(client, home_state.clone(), self_entity.clone(), cx);
+            spawn_home_fetch(
+                client,
+                home_state.clone(),
+                self_entity.clone(),
+                paths.covers.clone(),
+                cx,
+            );
         }
         cx.spawn(async move |_, cx| {
             let mut scrobble = crate::player::scrobble::ScrobbleTracker::new();
@@ -238,7 +245,18 @@ impl Shell {
                         if let Some(mh) = &mpris_for_loop {
                             let current = cx.update(|app| state.read(app).current.clone());
                             if let Some(track) = current {
-                                mh.update_metadata(&track, None);
+                                let art = track.cover_art_id.as_ref().and_then(|cid| {
+                                    let jpg = covers_for_loop.join(format!("{cid}.jpg"));
+                                    let png = covers_for_loop.join(format!("{cid}.png"));
+                                    if jpg.exists() {
+                                        Some(format!("file://{}", jpg.display()))
+                                    } else if png.exists() {
+                                        Some(format!("file://{}", png.display()))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                mh.update_metadata(&track, art);
                             }
                         }
                         if scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
@@ -493,6 +511,56 @@ impl Shell {
         }
     }
 
+    fn cache_track_cover(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
+        let Some(cid) = track.cover_art_id.clone() else {
+            return;
+        };
+        if self.home_state.read(cx).covers.contains_key(&cid) {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let covers_dir = self.paths.covers.clone();
+        let hs = self.home_state.clone();
+        let mh = self.mpris_handle.clone();
+        let track = track.clone();
+        cx.spawn(async move |cx| {
+            let c = client.clone();
+            let cid2 = cid.clone();
+            if let Ok(bytes) = cx
+                .background_executor()
+                .spawn(async move { c.cover_bytes(&cid2, 512) })
+                .await
+            {
+                let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+                let ext = if is_png { "png" } else { "jpg" };
+                let _ = std::fs::create_dir_all(&covers_dir);
+                let path = covers_dir.join(format!("{cid}.{ext}"));
+                let _ = std::fs::write(&path, &bytes);
+                let format = if is_png {
+                    gpui::ImageFormat::Png
+                } else {
+                    gpui::ImageFormat::Jpeg
+                };
+                let image = std::sync::Arc::new(gpui::Image {
+                    format,
+                    bytes,
+                    id: fxhash_id(&cid),
+                });
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| {
+                        h.covers.insert(cid.clone(), image);
+                    });
+                });
+                if let Some(mh) = &mh {
+                    mh.update_metadata(&track, Some(format!("file://{}", path.display())));
+                }
+            }
+        })
+        .detach();
+    }
+
     fn load_and_play(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
         if let Some(client) = &self.client
             && let Ok(uri) = client.stream_url(&track.id, self.config.quality)
@@ -506,6 +574,7 @@ impl Shell {
                 .ok();
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
+        self.cache_track_cover(track, cx);
         if let Some(provider) = &self.lyrics_provider {
             let p = provider.clone();
             let t = track.clone();
@@ -623,7 +692,13 @@ impl Shell {
                             )));
                             shell.route = Route::Home;
                             if let Some(client) = shell.client.clone() {
-                                spawn_home_fetch(client, shell.home_state.clone(), cx.entity(), cx);
+                                spawn_home_fetch(
+                                    client,
+                                    shell.home_state.clone(),
+                                    cx.entity(),
+                                    shell.paths.covers.clone(),
+                                    cx,
+                                );
                             }
                         }
                         Err(e) => {
@@ -2469,6 +2544,7 @@ fn spawn_home_fetch(
     client: Arc<NavidromeClient>,
     hs: gpui::Entity<HomeState>,
     entity: gpui::Entity<Shell>,
+    covers_dir: std::path::PathBuf,
     cx: &mut gpui::Context<Shell>,
 ) {
     cx.spawn(async move |_, cx| {
@@ -2553,6 +2629,14 @@ fn spawn_home_fetch(
                         bytes,
                         id: fxhash_id(cover_id),
                     });
+                    let ext = if matches!(format, gpui::ImageFormat::Png) {
+                        "png"
+                    } else {
+                        "jpg"
+                    };
+                    let _ = std::fs::create_dir_all(&covers_dir);
+                    let _ =
+                        std::fs::write(covers_dir.join(format!("{cover_id}.{ext}")), &image.bytes);
                     let cid = cover_id.clone();
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {

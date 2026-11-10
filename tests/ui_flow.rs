@@ -27,7 +27,7 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
         format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
     };
     let albums = ok(
-        r#""albumList2":{"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":2,"duration":300,"year":2026},{"id":"a2","name":"Beta","artist":"Artist B","songCount":1,"duration":200,"year":2025}]}"#,
+        r#""albumList2":{"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":2,"duration":300,"year":2026,"coverArt":"cov1"},{"id":"a2","name":"Beta","artist":"Artist B","songCount":1,"duration":200,"year":2025}]}"#,
     );
     let _m1 = server.mock(|when, then| {
         when.method(GET)
@@ -53,11 +53,27 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
     });
     let _m5 = server.mock(|when, then| {
         when.method(GET).path("/rest/getAlbum.view").query_param("id", "a1");
-        then.status(200).header("content-type", "application/json").body(ok(r#""album":{"id":"a1","name":"Alpha","artist":"Artist A","songCount":2,"duration":300,"year":2026,"song":[{"id":"s1","title":"First","artist":"Artist A","album":"Alpha","duration":120},{"id":"s2","title":"Second","artist":"Artist A","album":"Alpha","duration":180}]}"#));
+        then.status(200).header("content-type", "application/json").body(ok(r#""album":{"id":"a1","name":"Alpha","artist":"Artist A","songCount":2,"duration":300,"year":2026,"song":[{"id":"s1","title":"First","artist":"Artist A","album":"Alpha","duration":120,"coverArt":"scov1"},{"id":"s2","title":"Second","artist":"Artist A","album":"Alpha","duration":180}]}"#));
     });
     let _m6 = server.mock(|when, then| {
         when.method(GET).path("/rest/getLyricsBySongId.view");
         then.status(200).header("content-type", "application/json").body(ok(r#""lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":1000,"value":"one"},{"start":2000,"value":"two"}]}]}"#));
+    });
+    let _cover = server.mock(|when, then| {
+        when.method(GET)
+            .path("/rest/getCoverArt.view")
+            .query_param("id", "cov1");
+        then.status(200)
+            .header("content-type", "image/png")
+            .body(PNG.to_vec());
+    });
+    let _track_cover = server.mock(|when, then| {
+        when.method(GET)
+            .path("/rest/getCoverArt.view")
+            .query_param("id", "scov1");
+        then.status(200)
+            .header("content-type", "image/png")
+            .body(PNG.to_vec());
     });
     let now_playing = server.mock(|when, then| {
         when.method(GET)
@@ -112,6 +128,17 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
         2,
         "albums did not load"
     );
+    let paths = temp_paths("flow");
+    let cover_file = paths.covers.join("cov1.png");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if cover_file.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(cover_file.exists(), "cover art was not cached to disk");
     assert_eq!(
         shell.read_with(&cx, |s, cx| s.favorites_count(cx)),
         1,
@@ -149,6 +176,16 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
         shell.read_with(&cx, |s, cx| s.current_track_title(cx)),
         Some("First".into())
     );
+    let track_cover = paths.covers.join("scov1.png");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if track_cover.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(track_cover.exists(), "track cover was not cached");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -776,3 +813,9 @@ fn setup_form_connects_and_saves(cx: &mut TestAppContext) {
     }
     assert_eq!(shell.read_with(&cx, |s, cx| s.loaded_album_count(cx)), 1);
 }
+
+const PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
+    0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0, 3, 1,
+    1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
