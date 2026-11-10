@@ -219,6 +219,52 @@ impl Shell {
         }
     }
 
+    pub fn play_tracks(&mut self, tracks: Vec<crate::library::Track>, start: usize, cx: &mut gpui::App) {
+        if tracks.is_empty() || start >= tracks.len() {
+            return;
+        }
+        self.player_state.update(cx, |ps, _cx| {
+            ps.play_now(tracks.clone(), start);
+        });
+        self.load_and_play(&tracks[start], cx);
+    }
+
+    pub fn play_next(&mut self, cx: &mut gpui::App) {
+        let next = self.player_state.update(cx, |ps, _cx| ps.next());
+        if let Some(track) = next {
+            self.load_and_play(&track, cx);
+        }
+    }
+
+    pub fn play_previous(&mut self, cx: &mut gpui::App) {
+        let prev = self.player_state.update(cx, |ps, _cx| ps.previous());
+        if let Some(track) = prev {
+            self.load_and_play(&track, cx);
+        }
+    }
+
+    fn load_and_play(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
+        if let Some(client) = &self.client
+            && let Ok(uri) = client.stream_url(&track.id, self.config.quality) {
+            self.player_handle.tx.send(PlayerCommand::Load { uri, track_id: track.id.clone() }).ok();
+            self.player_handle.tx.send(PlayerCommand::Play).ok();
+        }
+        if let Some(client) = &self.client {
+            let c = client.clone();
+            let t = track.clone();
+            let np = self.now_playing.clone();
+            cx.spawn(async move |cx| {
+                let status = c.lyrics(&t.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound);
+                cx.update(|app| {
+                    app.update_entity(&np, |v, cx| {
+                        v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
+                        v.set_lyrics(cx, status);
+                    });
+                });
+            }).detach();
+        }
+    }
+
     pub fn close_overlay(&mut self, _cx: &mut gpui::App) {}
 }
 
@@ -268,6 +314,11 @@ impl Render for Shell {
                     .items_center()
                     .gap(gpui::px(12.0))
                     .w(gpui::px(260.0))
+                    .cursor_pointer()
+                    .id("np-open")
+                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                        this.route = Route::NowPlaying;
+                    }))
                     .child(
                         div()
                             .w(gpui::px(52.0))
@@ -319,6 +370,11 @@ impl Render for Shell {
                                     .items_center()
                                     .justify_center()
                                     .text_color(t.clay_ink)
+                                    .cursor_pointer()
+                                    .id("prev-btn")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.play_previous(cx);
+                                    }))
                                     .child("⏮"),
                             )
                             .child(
@@ -334,7 +390,8 @@ impl Render for Shell {
                                     .text_size(gpui::px(16.0))
                                     .cursor_pointer()
                                     .id("play-btn")
-                                    .on_click(cx.listener(|this, _event, _window, _cx| {
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.player_state.update(cx, |ps, _cx| ps.toggle());
                                         this.player_handle.tx.send(PlayerCommand::Toggle).ok();
                                     }))
                                     .child(if is_playing { "⏸" } else { "▶" }),
@@ -347,6 +404,11 @@ impl Render for Shell {
                                     .items_center()
                                     .justify_center()
                                     .text_color(t.clay_ink)
+                                    .cursor_pointer()
+                                    .id("next-btn")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.play_next(cx);
+                                    }))
                                     .child("⏭"),
                             ),
                     )
@@ -678,8 +740,9 @@ impl Render for Shell {
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(detail.album.name.clone()),
                                 );
+                                let songs = detail.songs.clone();
                                 for (i, t_) in detail.songs.iter().enumerate() {
-                                    let track = t_.clone();
+                                    let songs2 = songs.clone();
                                     col = col.child(
                                         track_row(
                                             &format!("{:02}", i + 1),
@@ -692,7 +755,7 @@ impl Render for Shell {
                                         .id(format!("track-{}", i))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                                            this.play_track(track.clone(), cx);
+                                            this.play_tracks(songs2.clone(), i, cx);
                                         })),
                                     );
                                 }
