@@ -542,7 +542,7 @@ fn artist_click_shows_albums(cx: &mut TestAppContext) {
     });
     let _m4 = server.mock(|when, then| {
         when.method(GET).path("/rest/getArtist.view").query_param("id", "ar1");
-        then.status(200).header("content-type", "application/json").body(ok(r#""artist":{"id":"ar1","name":"Artist A","albumCount":1},"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":1,"duration":100,"year":2026}]"#));
+        then.status(200).header("content-type", "application/json").body(ok(r#""artist":{"id":"ar1","name":"Artist A","albumCount":1,"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":1,"duration":100,"year":2026}]}"#));
     });
     let _m5 = server.mock(|when, then| {
         when.method(GET).path("/rest/getAlbum.view").query_param("id", "a1");

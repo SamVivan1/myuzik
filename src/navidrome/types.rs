@@ -111,6 +111,8 @@ pub struct ArtistDto {
     pub album_count: Option<u32>,
     #[serde(rename = "coverArt")]
     pub cover_art: Option<String>,
+    #[serde(default)]
+    pub album: Vec<AlbumDto>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -354,5 +356,19 @@ mod tests {
             }
             other => panic!("expected plain, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod artist_tests {
+    use super::*;
+
+    #[test]
+    fn parses_albums_nested_inside_artist() {
+        let json = r#"{"artist":{"id":"ar1","name":".Feast","albumCount":1,"album":[{"id":"a1","name":"Membangun","songCount":2}]}}"#;
+        let data: ArtistDetailData = serde_json::from_str(json).unwrap();
+        let artist = data.artist.unwrap();
+        assert_eq!(artist.album.len(), 1);
+        assert_eq!(artist.album[0].name, "Membangun");
     }
 }

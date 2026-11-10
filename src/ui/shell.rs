@@ -1333,6 +1333,8 @@ impl Render for Shell {
                     .debug_selector(|| "np-open".to_string())
                     .on_click(cx.listener(|this, _event, _window, _cx| {
                         this.route = Route::NowPlaying;
+                        this.album_detail = None;
+                        this.selected_album = None;
                     }))
                     .child(
                         div()
@@ -1723,7 +1725,7 @@ impl Render for Shell {
                             this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
                         }
                         "k" if mods.control => {
-                            this.route = Route::Search;
+                            this.route = Route::Search; this.album_detail = None; this.selected_album = None;
                             window.focus(&this.search_focus, cx);
                         }
                         "p" if mods.control => {
@@ -1994,13 +1996,13 @@ impl Render for Shell {
                                     .flex_col()
                                     .gap(gpui::px(4.0))
                                     .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").debug_selector(|| "nav-home".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
-                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; window.focus(&this.search_focus, cx); })))
-                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
-                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
-                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; })))
-                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; }))),
+                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
+                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
                             )
                             .child(
                                 div()
@@ -2151,7 +2153,7 @@ impl Render for Shell {
                                             .text_color(t.clay_ink)
                                             .text_size(gpui::px(11.0))
                                             .on_click(cx.listener(|this, _event, window, cx| {
-                                                this.route = Route::Search;
+                                                this.route = Route::Search; this.album_detail = None; this.selected_album = None;
                                                 window.focus(&this.search_focus, cx);
                                             }))
                                             .child("Search your library…")
@@ -2187,7 +2189,7 @@ impl Render for Shell {
                                             .text_size(gpui::px(10.0))
                                             .text_color(t.text_secondary)
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; }))
+                                            .on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; }))
                                             .child("See all"),
                                     )
                             })
@@ -2550,7 +2552,7 @@ impl Render for Shell {
                                 }
                                 grid
                             })
-                            .child(if let Some(detail) = &self.album_detail {
+                            .child(if self.route == Route::Home && let Some(detail) = &self.album_detail {
                                 let mut col = div().flex().flex_col().gap(gpui::px(6.0));
                                 let songs_all = detail.songs.clone();
                                 let album_name = detail.album.name.clone();

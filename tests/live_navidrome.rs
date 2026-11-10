@@ -141,6 +141,26 @@ fn live_navidrome_lyrics_list_shape() {
 
 #[test]
 #[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
+fn live_artist_albums_nested() {
+    if live_client().is_none() {
+        return;
+    }
+    let (_paths, c, _cfg) = setup();
+    let artists = c.artists().expect("artists");
+    let mut checked = 0;
+    for artist in artists.iter().take(30) {
+        if let Ok(detail) = c.artist(&artist.id)
+            && !detail.albums.is_empty()
+        {
+            checked += 1;
+            break;
+        }
+    }
+    assert!(checked > 0, "no artist returned nested albums");
+}
+
+#[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_lyrics_pipeline() {
     if live_client().is_none() {
         return;

@@ -163,7 +163,12 @@ impl NavidromeClient {
         let resp: SubsonicResponse<ArtistDetailData> = self.get_json("getArtist", &[("id", id)])?;
         Self::check_status(&resp)?;
         let artist = resp.data.artist.ok_or(NavidromeError::NotFound)?;
-        Ok(artist_detail_from_dto(artist, resp.data.album))
+        let albums = if artist.album.is_empty() {
+            resp.data.album
+        } else {
+            artist.album.clone()
+        };
+        Ok(artist_detail_from_dto(artist, albums))
     }
 
     pub fn album(&self, id: &str) -> Result<AlbumDetail, NavidromeError> {
