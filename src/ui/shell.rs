@@ -774,29 +774,14 @@ impl Render for Shell {
                                     .flex()
                                     .flex_col()
                                     .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; })))
+                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
+                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; })))
                                     .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Search; })))
                                     .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
                                     .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
                                     .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; }))),
-                            )
-                            .child(
-                                div()
-                                    .mt(gpui::px(8.0))
-                                    .text_size(gpui::px(9.0))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(t.text_tertiary)
-                                    .child("YOUR PLAYLISTS"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(gpui::px(2.0))
-                                    .child(playlist_item("Late night drive", t))
-                                    .child(playlist_item("Focus / no vocals", t))
-                                    .child(playlist_item("Sunday morning", t)),
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; })))
+                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; }))),
                             )
                             .child(
                                 div()
@@ -886,7 +871,8 @@ impl Render for Shell {
                                             }),
                                     ),
                             )
-                            .child(if self.selected_album.is_some() {
+                            .child(if self.selected_album.is_some()
+                                || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings) {
                                 div()
                             } else {
                                 div()
@@ -910,6 +896,10 @@ impl Render for Shell {
                             })
                             .child(if self.route == Route::NowPlaying {
                                 div().child(self.now_playing.clone())
+                            } else if self.route == Route::Search {
+                                div().child(self.search_view.clone())
+                            } else if self.route == Route::Settings {
+                                div().child(self.settings_view.clone())
                             } else if self.selected_album.is_some() {
                                 div()
                             } else {
@@ -1059,21 +1049,6 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
     }
 }
 
-fn playlist_item(label: &str, t: &crate::theme::Colors) -> gpui::Div {
-    gpui::div()
-        .flex()
-        .items_center()
-        .gap(gpui::px(8.0))
-        .text_size(gpui::px(11.0))
-        .text_color(t.text_secondary)
-        .child(
-            gpui::div()
-                .w(gpui::px(4.0))
-                .h(gpui::px(4.0))
-                .bg(t.gold_deep),
-        )
-        .child(label.to_string())
-}
 
 fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Image>>, t: &crate::theme::Colors) -> gpui::Div {
     let initial = title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".to_string());
