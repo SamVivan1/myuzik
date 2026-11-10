@@ -517,7 +517,11 @@ impl Render for Shell {
             .bottom(gpui::px(16.0))
             .h(gpui::px(88.0))
             .rounded(gpui::px(30.0))
-            .bg(t.clay_surface)
+            .bg(gpui::linear_gradient(
+                145.0,
+                gpui::linear_color_stop(gpui::rgb(0xF7F0E4), 0.0),
+                gpui::linear_color_stop(gpui::rgb(0xEADCC4), 1.0),
+            ))
             .border_1()
             .border_color(gpui::rgba(0xFFFFFFFF))
             .shadow(vec![gpui::BoxShadow {
@@ -770,8 +774,12 @@ impl Render for Shell {
                 div()
                     .absolute()
                     .inset(gpui::px(24.0))
-                    .rounded(gpui::px(theme.radii.glass))
-                    .bg(t.glass_tint)
+                    .rounded(gpui::px(24.0))
+                    .bg(gpui::linear_gradient(
+                        135.0,
+                        gpui::linear_color_stop(gpui::rgba(0x0A0A0DCC), 0.0),
+                        gpui::linear_color_stop(gpui::rgba(0x100E0CB0), 1.0),
+                    ))
                     .border_1()
                     .border_color(t.glass_border)
                     .shadow(vec![
@@ -791,7 +799,55 @@ impl Render for Shell {
                         },
                     ])
                     .flex()
+                    .flex_col()
                     .overflow_hidden()
+                    .child(
+                        // Titlebar
+                        div()
+                            .h(gpui::px(38.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(gpui::px(10.0))
+                            .px(gpui::px(15.0))
+                            .bg(gpui::rgba(0xFFFFFF06))
+                            .border_b_1()
+                            .border_color(gpui::rgba(0xE8D3A314))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(gpui::px(4.0))
+                                    .child(div().w(gpui::px(5.0)).h(gpui::px(5.0)).rounded(gpui::px(999.0)).bg(t.gold_deep))
+                                    .child(div().w(gpui::px(5.0)).h(gpui::px(5.0)).rounded(gpui::px(999.0)).bg(t.gold))
+                                    .child(div().w(gpui::px(5.0)).h(gpui::px(5.0)).rounded(gpui::px(999.0)).bg(t.os_accent)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .justify_center()
+                                    .text_size(gpui::px(10.0))
+                                    .text_color(t.text_tertiary)
+                                    .child("myuzik"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(gpui::px(12.0))
+                                    .text_size(gpui::px(11.0))
+                                    .text_color(t.text_tertiary)
+                                    .child(div().id("win-min").cursor_pointer().on_click(cx.listener(|_this, _event, window, _cx| window.minimize_window())).child("—"))
+                                    .child(div().id("win-max").cursor_pointer().on_click(cx.listener(|_this, _event, window, _cx| window.zoom_window())).child("□"))
+                                    .child(div().id("win-close").cursor_pointer().on_click(cx.listener(|_this, _event, window, _cx| window.remove_window())).child("×")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .overflow_hidden()
                     .child(
                         // Sidebar
                         div()
@@ -888,51 +944,90 @@ impl Render for Shell {
                             .child(
                                 div()
                                     .flex()
-                                    .flex_col()
-                                    .gap(gpui::px(4.0))
+                                    .items_start()
+                                    .justify_between()
+                                    .gap(gpui::px(16.0))
                                     .child(
                                         div()
-                                            .text_size(gpui::px(9.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(t.gold)
-                                            .child(match self.route {
-                                                crate::app::Route::Home => "YOUR LIBRARY",
-                                                crate::app::Route::Search => "SEARCH",
-                                                crate::app::Route::NowPlaying => "NOW PLAYING",
-                                                crate::app::Route::Settings => "SETTINGS",
-                                                _ => "MYUZIK",
-                                            }),
+                                            .flex()
+                                            .flex_col()
+                                            .gap(gpui::px(4.0))
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(9.0))
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(t.gold)
+                                                    .child(match self.route {
+                                                        crate::app::Route::Home => "YOUR LIBRARY",
+                                                        crate::app::Route::Search => "SEARCH",
+                                                        crate::app::Route::NowPlaying => "NOW PLAYING",
+                                                        crate::app::Route::Settings => "SETTINGS",
+                                                        _ => "MYUZIK",
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_family(theme.display_font)
+                                                    .text_size(gpui::px(38.0))
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child(match self.route {
+                                                        crate::app::Route::Home => "Good evening",
+                                                        crate::app::Route::Search => "Search",
+                                                        crate::app::Route::NowPlaying => "Now Playing",
+                                                        crate::app::Route::Settings => "Settings",
+                                                        crate::app::Route::Setup => "Setup",
+                                                        _ => "Myuzik",
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(9.0))
+                                                    .text_color(t.text_tertiary)
+                                                    .child({
+                                                        let hs = self.home_state.read(cx);
+                                                        if hs.loading {
+                                                            "Loading library…".to_string()
+                                                        } else if let Some(e) = &hs.error {
+                                                            format!("Library error: {}", e)
+                                                        } else if hs.albums.is_empty() {
+                                                            "No albums loaded".to_string()
+                                                        } else {
+                                                            format!("{} albums loaded", hs.albums.len())
+                                                        }
+                                                    }),
+                                            ),
                                     )
                                     .child(
                                         div()
-                                            .font_family(theme.display_font)
-                                            .text_size(gpui::px(30.0))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(match self.route {
-                                                crate::app::Route::Home => "Good evening",
-                                                crate::app::Route::Search => "Search",
-                                                crate::app::Route::NowPlaying => "Now Playing",
-                                                crate::app::Route::Settings => "Settings",
-                                                crate::app::Route::Setup => "Setup",
-                                                _ => "Myuzik",
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(gpui::px(9.0))
-                                            .text_color(t.text_tertiary)
-                                            .child({
-                                                let hs = self.home_state.read(cx);
-                                                if hs.loading {
-                                                    "Loading library…".to_string()
-                                                } else if let Some(e) = &hs.error {
-                                                    format!("Library error: {}", e)
-                                                } else if hs.albums.is_empty() {
-                                                    "No albums loaded".to_string()
-                                                } else {
-                                                    format!("{} albums loaded", hs.albums.len())
-                                                }
-                                            }),
+                                            .id("home-search")
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap(gpui::px(8.0))
+                                            .w(gpui::px(252.0))
+                                            .px(gpui::px(14.0))
+                                            .py(gpui::px(10.0))
+                                            .rounded(gpui::px(999.0))
+                                            .bg(gpui::linear_gradient(
+                                                145.0,
+                                                gpui::linear_color_stop(t.clay_surface, 0.0),
+                                                gpui::linear_color_stop(t.clay_shade, 1.0),
+                                            ))
+                                            .text_color(t.clay_ink)
+                                            .text_size(gpui::px(11.0))
+                                            .on_click(cx.listener(|this, _event, window, cx| {
+                                                this.route = Route::Search;
+                                                window.focus(&this.search_focus, cx);
+                                            }))
+                                            .child("Search your library…")
+                                            .child(div().flex_1())
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(9.0))
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(t.os_accent)
+                                                    .child("Ctrl K"),
+                                            ),
                                     ),
                             )
                             .child(if self.selected_album.is_some()
@@ -946,7 +1041,7 @@ impl Render for Shell {
                                     .child(
                                         div()
                                             .font_family(theme.display_font)
-                                            .text_size(gpui::px(16.0))
+                                            .text_size(gpui::px(18.0))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child("Recently added"),
                                     )
@@ -1221,6 +1316,7 @@ impl Render for Shell {
                                 div()
                             }),
                     ),
+                ),
             )
             .child(player)
     }
@@ -1296,7 +1392,27 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
                         .opacity(0.85)
                         .child(initial)
                         .into_any_element()
-                }),
+                })
+                .child(
+                    gpui::div()
+                        .absolute()
+                        .right(gpui::px(8.0))
+                        .bottom(gpui::px(8.0))
+                        .w(gpui::px(33.0))
+                        .h(gpui::px(33.0))
+                        .rounded(gpui::px(999.0))
+                        .bg(gpui::linear_gradient(
+                            145.0,
+                            gpui::linear_color_stop(t.gold_light, 0.0),
+                            gpui::linear_color_stop(t.gold, 1.0),
+                        ))
+                        .text_color(t.clay_ink)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(gpui::px(11.0))
+                        .child("▶"),
+                ),
         )
         .child(
             gpui::div()
@@ -1316,8 +1432,8 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
 }
 
 fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
-    let bg = if active { t.gold } else { t.glass_tint };
-    let text_color = if active { t.clay_ink } else { t.text_primary };
+    let bg = if active { gpui::rgba(0xC9A86A12) } else { t.glass_tint };
+    let text_color = t.text_primary;
     gpui::div()
         .flex()
         .items_center()
@@ -1326,11 +1442,13 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
         .py(gpui::px(7.0))
         .rounded(gpui::px(12.0))
         .bg(bg)
+        .border_1()
+        .border_color(if active { gpui::rgba(0xC9A86A38) } else { t.glass_border })
         .child(
             gpui::div()
                 .w(gpui::px(15.0))
                 .text_size(gpui::px(9.0))
-                .text_color(if active { t.clay_ink } else { t.text_tertiary })
+                .text_color(if active { t.gold } else { t.text_tertiary })
                 .child(idx.to_string()),
         )
         .child(
@@ -1357,14 +1475,14 @@ fn track_row(idx: &str, title: &str, artist: &str, dur: &str, active: bool, t: &
                 .child(
                     gpui::div()
                         .text_size(gpui::px(8.0))
-                        .text_color(if active { t.clay_ink } else { t.text_secondary })
+                        .text_color(t.text_secondary)
                         .child(artist.to_string()),
                 ),
         )
         .child(
             gpui::div()
                 .text_size(gpui::px(9.0))
-                .text_color(if active { t.clay_ink } else { t.text_tertiary })
+                .text_color(if active { t.gold } else { t.text_tertiary })
                 .child(dur.to_string()),
         )
 }
