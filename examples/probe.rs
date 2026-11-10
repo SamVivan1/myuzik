@@ -13,6 +13,12 @@ fn main() {
                     Ok(d) => println!("detail {}: {} songs", d.album.name, d.songs.len()),
                     Err(e) => println!("detail err: {e:?}"),
                 }
+                if let Some(cid) = &first.cover_art_id {
+                    match c.cover_bytes(cid, 512) {
+                        Ok(b) => println!("cover bytes: {} magic: {:02x?}", b.len(), &b[..4.min(b.len())]),
+                        Err(e) => println!("cover err: {e:?}"),
+                    }
+                }
             }
         }
         Err(e) => println!("album err: {e:?}"),

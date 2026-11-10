@@ -9,7 +9,7 @@ use crate::ui::search::SearchView;
 use crate::ui::settings::SettingsView;
 use crate::player::state::{PlayerState, PlaybackStatus};
 use crate::theme::midnight_brass;
-use gpui::{Context, Render, Window, div, prelude::*};
+use gpui::{Context, InteractiveElement, Render, StatefulInteractiveElement, Window, div, prelude::*};
 
 #[allow(dead_code)]
 pub struct Shell {
@@ -62,16 +62,56 @@ impl Shell {
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| { h.loading = true; });
                 });
-                let res = client.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0);
+                let client_bg = client.clone();
+                let res = cx.background_executor().spawn(async move {
+                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0)
+                }).await;
+                let albums = match res {
+                    Ok(a) => a,
+                    Err(e) => {
+                        cx.update(|app| {
+                            app.update_entity(&hs, |h, _| {
+                                h.loading = false;
+                                h.error = Some(format!("{:?}", e));
+                            });
+                        });
+                        return;
+                    }
+                };
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
                         h.loading = false;
-                        match res {
-                            Ok(albums) => h.albums = albums,
-                            Err(e) => h.error = Some(format!("{:?}", e)),
-                        }
+                        h.albums = albums.clone();
                     });
                 });
+                // Fetch covers for the first 8 albums
+                for album in albums.iter().take(8) {
+                    if let Some(cover_id) = &album.cover_art_id {
+                        let cid_bg = cover_id.clone();
+                        let client_bg = client.clone();
+                        let fetched = cx.background_executor().spawn(async move {
+                            client_bg.cover_bytes(&cid_bg, 512)
+                        }).await;
+                        if let Ok(bytes) = fetched {
+                            let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                                gpui::ImageFormat::Png
+                            } else {
+                                gpui::ImageFormat::Jpeg
+                            };
+                            let image = std::sync::Arc::new(gpui::Image {
+                                format,
+                                bytes,
+                                id: fxhash_id(cover_id),
+                            });
+                            let cid = cover_id.clone();
+                            cx.update(|app| {
+                                app.update_entity(&hs, |h, _| {
+                                    h.covers.insert(cid, image);
+                                });
+                            });
+                        }
+                    }
+                }
             }).detach();
         }
         cx.spawn(async move |cx| {
@@ -221,7 +261,10 @@ impl Shell {
             if let Some(client) = self.client.clone() {
                 let hs = self.home_state.clone();
                 cx.spawn(async move |cx| {
-                    let res = client.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0);
+                    let client_bg = client.clone();
+                let res = cx.background_executor().spawn(async move {
+                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0)
+                }).await;
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {
                             h.loading = false;
@@ -254,7 +297,11 @@ impl Shell {
             let _ps = self.player_state.clone();
             let np = self.now_playing.clone();
             cx.spawn(async move |cx| {
-                let status = c.lyrics(&t.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound);
+                let t_bg = t.clone();
+                let c_bg = c.clone();
+                let status = cx.background_executor().spawn(async move {
+                    c_bg.lyrics(&t_bg.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                }).await;
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
@@ -301,7 +348,11 @@ impl Shell {
             let np = self.now_playing.clone();
             let os = self.overlay_state.clone();
             cx.spawn(async move |cx| {
-                let status = c.lyrics(&t.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound);
+                let t_bg = t.clone();
+                let c_bg = c.clone();
+                let status = cx.background_executor().spawn(async move {
+                    c_bg.lyrics(&t_bg.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                }).await;
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
@@ -783,6 +834,8 @@ impl Render for Shell {
                             .px(gpui::px(26.0))
                             .py(gpui::px(20.0))
                             .pb(gpui::px(118.0))
+                            .id("main-scroll")
+                            .overflow_y_scroll()
                             .child(
                                 div()
                                     .flex()
@@ -859,12 +912,13 @@ impl Render for Shell {
                                 let hs = self.home_state.read(cx);
                                 let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
                                 if hs.albums.is_empty() {
-                                    grid = grid.child(album_card("No albums", "Connect a server", t));
+                                    grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
                                     for a in hs.albums.iter().take(8) {
                                         let aid = a.id.clone();
+                                        let cover = a.cover_art_id.as_ref().and_then(|cid| hs.covers.get(cid)).cloned();
                                         grid = grid.child(
-                                            album_card(&a.name, &a.artist, t)
+                                            album_card(&a.name, &a.artist, cover, t)
                                                 .id(format!("album-{}", aid))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -876,7 +930,10 @@ impl Render for Shell {
                                                         let entity = cx.entity();
                                                         let aid3 = aid2.clone();
                                                         cx.spawn(async move |_, cx| {
-                                                            let res = client.album(&aid3);
+                                                            let client_bg = client.clone();
+                                                            let res = cx.background_executor().spawn(async move {
+                                                                client_bg.album(&aid3)
+                                                            }).await;
                                                             cx.update(|app| {
                                                                 app.update_entity(&entity, |shell, _cx| {
                                                                     shell.album_loading = false;
@@ -903,15 +960,17 @@ impl Render for Shell {
                                         .child(detail.album.name.clone()),
                                 );
                                 let songs = detail.songs.clone();
+                                let current_id = self.player_state.read(cx).current.as_ref().map(|c| c.id.clone());
                                 for (i, t_) in detail.songs.iter().enumerate() {
                                     let songs2 = songs.clone();
+                                    let is_current = current_id.as_deref() == Some(t_.id.as_str());
                                     col = col.child(
                                         track_row(
                                             &format!("{:02}", i + 1),
                                             &t_.title,
                                             &t_.artist,
                                             &format_time(t_.duration.as_secs_f64()),
-                                            false,
+                                            is_current,
                                             t,
                                         )
                                         .id(format!("track-{}", i))
@@ -969,7 +1028,7 @@ fn playlist_item(label: &str, t: &crate::theme::Colors) -> gpui::Div {
         .child(label.to_string())
 }
 
-fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div {
+fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Image>>, t: &crate::theme::Colors) -> gpui::Div {
     let initial = title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".to_string());
     gpui::div()
         .flex()
@@ -998,15 +1057,23 @@ fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div 
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
+                .overflow_hidden()
+                .child(if let Some(image) = cover {
+                    gpui::img(gpui::ImageSource::Image(image))
+                        .w(gpui::px(168.0))
+                        .h(gpui::px(168.0))
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .into_any_element()
+                } else {
                     gpui::div()
                         .font_family("Fraunces")
                         .text_size(gpui::px(54.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.clay_ink)
                         .opacity(0.85)
-                        .child(initial),
-                ),
+                        .child(initial)
+                        .into_any_element()
+                }),
         )
         .child(
             gpui::div()
@@ -1090,4 +1157,15 @@ pub struct HomeState {
     pub albums: Vec<crate::library::Album>,
     pub loading: bool,
     pub error: Option<String>,
+    pub covers: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
+}
+
+
+fn fxhash_id(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }

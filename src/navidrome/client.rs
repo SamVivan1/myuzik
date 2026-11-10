@@ -213,6 +213,19 @@ impl NavidromeClient {
         Ok(url.to_string())
     }
 
+    pub fn cover_bytes(&self, cover_id: &str, size: u32) -> Result<Vec<u8>, NavidromeError> {
+        let url = self.cover_url(cover_id, size)?;
+        let resp = self.agent.get(&url).call().map_err(NavidromeError::from)?;
+        let mut bytes = Vec::new();
+        use std::io::Read;
+        resp.into_body()
+            .into_reader()
+            .take(8 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map_err(NavidromeError::from)?;
+        Ok(bytes)
+    }
+
     pub fn set_starred(&self, id: &str, starred: bool) -> Result<(), NavidromeError> {
         let endpoint = if starred { "star" } else { "unstar" };
         let resp: SubsonicResponse<PingData> = self.get_json(endpoint, &[("id", id)])?;
