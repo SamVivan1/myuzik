@@ -41,6 +41,7 @@ pub struct Shell {
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
+    lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Shell {
@@ -52,6 +53,11 @@ impl Shell {
         mpris_handle: Option<MprisHandle>,
     ) -> Self {
         let player_state = cx.new(|_cx| PlayerState::new());
+        player_state.update(cx, |ps, _cx| ps.set_volume(config.volume));
+        player_handle
+            .tx
+            .send(PlayerCommand::SetVolume(config.volume))
+            .ok();
         let home_state = cx.new(|_cx| HomeState::default());
         let selected_album = None;
         let album_detail = None;
@@ -67,6 +73,7 @@ impl Shell {
         let overlay_handle = None;
         let resize_start = None;
         let toast = None;
+        let lyrics_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password
@@ -389,6 +396,7 @@ impl Shell {
             overlay_handle,
             resize_start,
             toast,
+            lyrics_generation,
             mpris_handle,
         }
     }
@@ -769,6 +777,14 @@ impl Shell {
 
     pub fn overlay_active(&self, cx: &gpui::App) -> Option<usize> {
         self.overlay_state.read(cx).active
+    }
+
+    pub fn overlay_first_line(&self, cx: &gpui::App) -> Option<String> {
+        self.overlay_state
+            .read(cx)
+            .lines
+            .first()
+            .map(|l| l.text.clone())
     }
 
     pub fn current_track_title(&self, cx: &gpui::App) -> Option<String> {

@@ -136,3 +136,56 @@ fn overlay_opens_and_closes(cx: &mut TestAppContext) {
         "overlay did not close"
     );
 }
+
+#[gpui::test]
+fn unreachable_server_shows_error_toast(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("badsrv");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.toast_text().is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        shell.read_with(&cx, |s, _| s.toast_text().is_some()),
+        "unreachable server did not produce a toast"
+    );
+    // The shell must still render and remain usable.
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Home);
+}
+
+#[gpui::test]
+fn configured_volume_is_applied(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("volume");
+        let config = AppConfig {
+            volume: 0.35,
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, cx| s.volume(cx)), 0.35);
+}

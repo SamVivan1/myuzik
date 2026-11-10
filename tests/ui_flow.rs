@@ -557,3 +557,116 @@ fn artist_click_shows_albums(cx: &mut TestAppContext) {
         Some(1)
     );
 }
+
+#[gpui::test]
+fn stale_lyrics_response_is_discarded(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""albumList2":{"album":[{"id":"a1","name":"Alpha","artist":"A","songCount":2,"duration":200,"year":2026}]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    let _m4 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbum.view").query_param("id", "a1");
+        then.status(200).header("content-type", "application/json").body(ok(r#""album":{"id":"a1","name":"Alpha","artist":"A","songCount":2,"duration":200,"year":2026,"song":[{"id":"s1","title":"Slow","artist":"A","album":"Alpha","duration":100},{"id":"s2","title":"Fast","artist":"A","album":"Alpha","duration":100}]}"#));
+    });
+    let slow = server.mock(|when, then| {
+        when.method(GET).path("/rest/getLyricsBySongId.view").query_param("id", "s1");
+        then.delay(Duration::from_secs(2))
+            .status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":0,"value":"slow lyrics"}]}]}"#));
+    });
+    let _fast = server.mock(|when, then| {
+        when.method(GET).path("/rest/getLyricsBySongId.view").query_param("id", "s2");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":0,"value":"fast lyrics"}]}]}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("stalelyrics");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, _crx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(_crx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.loaded_album_count(cx)) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let album = cx.debug_bounds("album-a1").expect("album");
+    cx.simulate_click(album.center(), gpui::Modifiers::default());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.current_album_song_count()) == Some(2) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let slow_track = cx.debug_bounds("track-0").expect("track 0");
+    cx.simulate_click(slow_track.center(), gpui::Modifiers::default());
+    let fast_track = cx.debug_bounds("track-1").expect("track 1");
+    cx.simulate_click(fast_track.center(), gpui::Modifiers::default());
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell
+            .read_with(&cx, |s, cx| s.overlay_first_line(cx))
+            .as_deref()
+            == Some("fast lyrics")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Wait past the slow request's completion and ensure it did not overwrite.
+    std::thread::sleep(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.overlay_first_line(cx)),
+        Some("fast lyrics".to_string()),
+        "stale lyrics overwrote newer lyrics"
+    );
+    assert!(slow.calls() >= 1);
+}
