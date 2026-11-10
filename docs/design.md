@@ -219,7 +219,15 @@ The app window uses the glass shell: warm-black translucent background with nati
 
 - Rounded line icons, 1.8 px stroke, 24 px viewBox; inline SVGs / assets. No emoji as icons.
 - Icon-only buttons require an accessible label and tooltip.
-- Logo: brass clay tile with a Fraunces "M", used at 30–32 px.
+- Logo (app icon): a brass "M" whose valley descends into a tilted stylus, inside a single brass
+  ring on a warm near-black plate. One unioned path, no text and no font dependency, so it renders
+  the same on every system. Source of truth
+  `packaging/icons/hicolor/scalable/apps/io.github.samvivan1.Myuzik.svg`; the PNG sizes come from
+  `scripts/render-icons.sh`. Rationale and rejected directions:
+  [superpowers/specs/2026-11-10-logo-design.md](superpowers/specs/2026-11-10-logo-design.md).
+- In-app sidebar mark: brass clay tile with a Fraunces "M", used at 30–32 px. It still renders a
+  font glyph, so it matches the app icon's idea rather than its exact contours; unifying the two
+  is a UI change tracked in the logo design doc.
 
 ### 6.6 Accessibility
 

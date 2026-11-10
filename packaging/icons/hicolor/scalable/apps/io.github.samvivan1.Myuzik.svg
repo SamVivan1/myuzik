@@ -1,12 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Myuzik application icon - "M in a brass disc", Midnight Brass.
+
+  MIT. Path-only by design: no text elements, no font attributes, no external references,
+  so the mark renders identically on any system, with or without the bundled fonts.
+
+  The monogram and the stylus are ONE contour on purpose. Drawn as two overlapping shapes
+  they leave a visible ledge where the needle meets the valley of the M, so the outline is
+  unioned once and committed as path data:
+    stroke M at width 10.5 (round join, butt caps), stems x=34 and x=94, top y=46,
+    baseline y=76, valley vertex (64,74); plus a needle wedge with a full-width base
+    (58.75,74)-(69.25,74) tapering to (69.5,93); then
+    Inkscape: select all / object-stroke-to-path / path-union.
+  To change the monogram, rebuild that union rather than nudging these numbers.
+
+  The PNG set is generated from this file: scripts/render-icons.sh
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128"
+     role="img" aria-label="Myuzik">
+  <title>Myuzik</title>
   <defs>
+    <linearGradient id="plate" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#1A1610"/>
+      <stop offset="1" stop-color="#0C0B0E"/>
+    </linearGradient>
     <linearGradient id="brass" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#E8D3A3"/>
       <stop offset="1" stop-color="#C9A86A"/>
     </linearGradient>
   </defs>
-  <rect width="128" height="128" rx="28" fill="#0B0B0E"/>
-  <rect x="20" y="20" width="88" height="88" rx="20" fill="url(#brass)"/>
-  <text x="64" y="86" font-family="Georgia, serif" font-size="56" font-weight="600"
-        text-anchor="middle" fill="#2A241C">M</text>
+
+  <!-- Warm near-black plate, with the champagne hairline the app uses on glass edges. -->
+  <rect width="128" height="128" rx="28" fill="url(#plate)"/>
+  <rect x="1.5" y="1.5" width="125" height="125" rx="26.5" fill="none"
+        stroke="#E8D3A3" stroke-opacity="0.22" stroke-width="1.5"/>
+
+  <!-- The record: a single ring, no grooves. It is the part that survives 16 px. -->
+  <circle cx="64" cy="64" r="46" fill="none" stroke="url(#brass)"
+          stroke-opacity="0.6" stroke-width="3.5"/>
+
+  <!-- Monogram whose valley descends into the disc as a tilted stylus. -->
+  <path fill="url(#brass)" d="M 33.878906 40.751953 A 5.250525 5.250525 0 0 0 31.908203 41.185547 A 5.250525 5.250525 0 0 0 28.75 46 L 28.75 76 L 39.25 76 L 39.25 58.082031 L 60.417969 77.837891 A 5.250525 5.250525 0 0 0 61.294922 78.5 L 61.296875 78.5 L 69.5 93 L 69.279297 76.253906 L 88.75 58.082031 L 88.75 76 L 99.25 76 L 99.25 46 A 5.250525 5.250525 0 0 0 90.417969 42.162109 L 64 66.818359 L 37.582031 42.162109 A 5.250525 5.250525 0 0 0 33.878906 40.751953 z"/>
 </svg>

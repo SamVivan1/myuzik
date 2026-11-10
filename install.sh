@@ -3,8 +3,8 @@
 # Myuzik — single-command installer.
 #
 # Builds the release binary and installs everything into the user's home
-# (no sudo): binary, desktop entry, icon, AppStream metadata, desktop/icon
-# caches, and optionally the GNOME pin extension for the lyrics overlay.
+# (no sudo): binary, desktop entry, icons (SVG + eight PNG sizes + symbolic),
+# AppStream metadata, desktop/icon caches, and optionally the GNOME pin extension.
 #
 #   ./install.sh                 install (builds first)
 #   ./install.sh --no-extension  skip the GNOME pin extension
@@ -33,12 +33,17 @@ PREFIX="${PREFIX:-$HOME/.local}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_DIR="$PREFIX/bin"
 APPS_DIR="$DATA_HOME/applications"
-ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
+ICON_ROOT="$DATA_HOME/icons/hicolor"
 METAINFO_DIR="$DATA_HOME/metainfo"
 
 DESKTOP_SRC="packaging/$APP_ID.desktop"
-ICON_SRC="packaging/icons/hicolor/scalable/apps/$APP_ID.svg"
+ICON_SVG_SRC="packaging/icons/hicolor/scalable/apps/$APP_ID.svg"
+ICON_SYMBOLIC_SRC="packaging/icons/hicolor/symbolic/apps/$APP_ID-symbolic.svg"
 METAINFO_SRC="packaging/$APP_ID.metainfo.xml"
+# The PNG sizes are generated from ICON_SVG_SRC by scripts/render-icons.sh and committed,
+# so installing never needs Inkscape. The scalable SVG is what GNOME Shell draws; the PNGs
+# serve launchers, file managers and AppStream consumers that do not read SVG.
+ICON_SIZES="16 24 32 48 64 128 256 512"
 
 BUILD=1
 EXTENSION=1
@@ -71,7 +76,11 @@ if [ "$BUILD" = 1 ]; then
   command -v cargo >/dev/null 2>&1 || die "cargo not found (install Rust, or pass --skip-build)"
 fi
 [ -f "$DESKTOP_SRC" ]  || die "missing $DESKTOP_SRC"
-[ -f "$ICON_SRC" ]     || die "missing $ICON_SRC"
+[ -f "$ICON_SVG_SRC" ] || die "missing $ICON_SVG_SRC"
+for size in $ICON_SIZES; do
+  [ -f "packaging/icons/hicolor/${size}x${size}/apps/$APP_ID.png" ] \
+    || die "missing the ${size}px icon — run ./scripts/render-icons.sh"
+done
 
 step "Building release binary"
 if [ "$BUILD" = 1 ]; then
@@ -98,9 +107,20 @@ sed "s|^Exec=.*|Exec=$EXEC_VALUE|" "$DESKTOP_SRC" > "$APPS_DIR/$APP_ID.desktop"
 chmod 644 "$APPS_DIR/$APP_ID.desktop"
 say "$APPS_DIR/$APP_ID.desktop  (Exec=$EXEC_VALUE)"
 
-step "Installing icon and AppStream metadata"
-install -Dm644 "$ICON_SRC" "$ICON_DIR/$APP_ID.svg"
-say "$ICON_DIR/$APP_ID.svg"
+step "Installing icons and AppStream metadata"
+install -Dm644 "$ICON_SVG_SRC" "$ICON_ROOT/scalable/apps/$APP_ID.svg"
+say "$ICON_ROOT/scalable/apps/$APP_ID.svg"
+for size in $ICON_SIZES; do
+  install -Dm644 "packaging/icons/hicolor/${size}x${size}/apps/$APP_ID.png" \
+    "$ICON_ROOT/${size}x${size}/apps/$APP_ID.png"
+  say "$ICON_ROOT/${size}x${size}/apps/$APP_ID.png"
+done
+if [ -f "$ICON_SYMBOLIC_SRC" ]; then
+  install -Dm644 "$ICON_SYMBOLIC_SRC" "$ICON_ROOT/symbolic/apps/$APP_ID-symbolic.svg"
+  say "$ICON_ROOT/symbolic/apps/$APP_ID-symbolic.svg"
+else
+  warn "missing $ICON_SYMBOLIC_SRC; installing without the symbolic icon"
+fi
 if [ -f "$METAINFO_SRC" ]; then
   mkdir -p "$METAINFO_DIR"
   install -m644 "$METAINFO_SRC" "$METAINFO_DIR/$APP_ID.metainfo.xml"

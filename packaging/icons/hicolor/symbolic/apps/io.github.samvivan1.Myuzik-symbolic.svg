@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Myuzik symbolic icon: monogram and stylus only.
+
+  MIT. GTK recolours a "-symbolic" icon from its own palette, so this is one opaque
+  silhouette on a 16 px grid: no plate, no ring, no gradient. The ring is dropped on
+  purpose - at 16 px it turns the silhouette into grey mush.
+
+  Same construction as the coloured icon: monogram and stylus are one unioned contour,
+  so no ledge shows where they meet.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"
+     role="img" aria-label="Myuzik">
+  <title>Myuzik</title>
+  <path fill="#000000" d="M 3 3.3007812 A 1.20012 1.20012 0 0 0 2.5410156 3.390625 A 1.20012 1.20012 0 0 0 1.8007812 4.5 L 1.8007812 12.5 L 4.1992188 12.5 L 4.1992188 7.3945312 L 7.1523438 10.347656 A 1.20012 1.20012 0 0 0 7.3710938 10.519531 L 9.1503906 13.699219 L 9.1933594 10.001953 L 11.800781 7.3945312 L 11.800781 12.5 L 14.199219 12.5 L 14.199219 4.5 A 1.20012 1.20012 0 0 0 12.152344 3.6523438 L 8 7.8046875 L 3.8476562 3.6523438 A 1.20012 1.20012 0 0 0 3 3.3007812 z"/>
+</svg>

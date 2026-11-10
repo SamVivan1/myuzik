@@ -2,8 +2,8 @@
 #
 # Myuzik — single-command uninstaller.
 #
-# Removes everything ./install.sh created: the binary, desktop entry, icon,
-# AppStream metadata, the GNOME pin extension and the refreshed caches.
+# Removes everything ./install.sh created: the binary, desktop entry, icons (SVG, PNG
+# sizes, symbolic), AppStream metadata, the GNOME pin extension and the refreshed caches.
 #
 #   ./uninstall.sh              remove the app and the extension
 #   ./uninstall.sh --keep-extension   keep the GNOME pin extension
@@ -24,7 +24,8 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 BIN_DIR="$PREFIX/bin"
 APPS_DIR="$DATA_HOME/applications"
-ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
+ICON_ROOT="$DATA_HOME/icons/hicolor"
+ICON_SIZES="16 24 32 48 64 128 256 512"
 METAINFO_DIR="$DATA_HOME/metainfo"
 
 DRY=0
@@ -72,7 +73,11 @@ REMOVED=0
 step "Removing Myuzik"
 remove_path "$BIN_DIR/myuzik" "binary" && REMOVED=1
 remove_path "$APPS_DIR/$APP_ID.desktop" "desktop entry" && REMOVED=1
-remove_path "$ICON_DIR/$APP_ID.svg" "icon" && REMOVED=1
+remove_path "$ICON_ROOT/scalable/apps/$APP_ID.svg" "icon (scalable)" && REMOVED=1
+remove_path "$ICON_ROOT/symbolic/apps/$APP_ID-symbolic.svg" "icon (symbolic)" && REMOVED=1
+for size in $ICON_SIZES; do
+  remove_path "$ICON_ROOT/${size}x${size}/apps/$APP_ID.png" "icon (${size}px)" && REMOVED=1
+done
 remove_path "$METAINFO_DIR/$APP_ID.metainfo.xml" "AppStream metadata" && REMOVED=1
 
 if [ "$KEEP_EXTENSION" = 0 ]; then
