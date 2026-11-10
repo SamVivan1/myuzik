@@ -64,7 +64,7 @@ impl Shell {
                 });
                 let client_bg = client.clone();
                 let res = cx.background_executor().spawn(async move {
-                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0)
+                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 100, 0)
                 }).await;
                 let albums = match res {
                     Ok(a) => a,
@@ -84,8 +84,18 @@ impl Shell {
                         h.albums = albums.clone();
                     });
                 });
+                let client_bg = client.clone();
+                let artists = cx.background_executor().spawn(async move { client_bg.artists() }).await.unwrap_or_default();
+                let client_bg = client.clone();
+                let playlists = cx.background_executor().spawn(async move { client_bg.playlists() }).await.unwrap_or_default();
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| {
+                        h.artists = artists;
+                        h.playlists = playlists;
+                    });
+                });
                 // Fetch covers for the first 8 albums
-                for album in albums.iter().take(8) {
+                for album in albums.iter().take(24) {
                     if let Some(cover_id) = &album.cover_art_id {
                         let cid_bg = cover_id.clone();
                         let client_bg = client.clone();
@@ -263,7 +273,7 @@ impl Shell {
                 cx.spawn(async move |cx| {
                     let client_bg = client.clone();
                 let res = cx.background_executor().spawn(async move {
-                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0)
+                    client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 100, 0)
                 }).await;
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {
@@ -872,7 +882,7 @@ impl Render for Shell {
                                     ),
                             )
                             .child(if self.selected_album.is_some()
-                                || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings) {
+                                || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings | Route::Artists | Route::Playlists | Route::Favorites) {
                                 div()
                             } else {
                                 div()
@@ -900,6 +910,40 @@ impl Render for Shell {
                                 div().child(self.search_view.clone())
                             } else if self.route == Route::Settings {
                                 div().child(self.settings_view.clone())
+                            } else if self.route == Route::Artists {
+                                let hs = self.home_state.read(cx);
+                                let mut col = div().flex().flex_col().gap(gpui::px(4.0));
+                                for a in &hs.artists {
+                                    col = col.child(
+                                        div()
+                                            .px(gpui::px(12.0))
+                                            .py(gpui::px(9.0))
+                                            .rounded(gpui::px(10.0))
+                                            .bg(t.glass_tint)
+                                            .border_1()
+                                            .border_color(t.glass_border)
+                                            .text_size(gpui::px(12.0))
+                                            .child(a.name.clone()),
+                                    );
+                                }
+                                col
+                            } else if self.route == Route::Playlists {
+                                let hs = self.home_state.read(cx);
+                                let mut col = div().flex().flex_col().gap(gpui::px(4.0));
+                                for p in &hs.playlists {
+                                    col = col.child(
+                                        div()
+                                            .px(gpui::px(12.0))
+                                            .py(gpui::px(9.0))
+                                            .rounded(gpui::px(10.0))
+                                            .bg(t.glass_tint)
+                                            .border_1()
+                                            .border_color(t.glass_border)
+                                            .text_size(gpui::px(12.0))
+                                            .child(format!("{} · {} tracks", p.name, p.song_count)),
+                                    );
+                                }
+                                col
                             } else if self.selected_album.is_some() {
                                 div()
                             } else {
@@ -908,7 +952,8 @@ impl Render for Shell {
                                 if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
-                                    for a in hs.albums.iter().take(8) {
+                                    let limit = if self.route == Route::Albums { hs.albums.len() } else { 8 };
+                                    for a in hs.albums.iter().take(limit) {
                                         let aid = a.id.clone();
                                         let cover = a.cover_art_id.as_ref().and_then(|cid| hs.covers.get(cid)).cloned();
                                         grid = grid.child(
@@ -1180,6 +1225,8 @@ pub struct HomeState {
     pub loading: bool,
     pub error: Option<String>,
     pub covers: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
+    pub artists: Vec<crate::library::Artist>,
+    pub playlists: Vec<crate::library::Playlist>,
 }
 
 
