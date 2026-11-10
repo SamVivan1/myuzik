@@ -1277,7 +1277,7 @@ impl Render for Shell {
             .absolute()
             .left(gpui::px(18.0))
             .right(gpui::px(18.0))
-            .bottom(gpui::px(16.0))
+            .bottom(gpui::px(18.0))
             .h(gpui::px(88.0))
             .rounded(gpui::px(30.0))
             .bg(gpui::linear_gradient(
@@ -1669,7 +1669,6 @@ impl Render for Shell {
         // Glass shell with home content
         div()
             .size_full()
-            .bg(t.bg_base)
             .text_color(t.text_primary)
             .id("app-root")
             .debug_selector(|| "app-root".to_string())
@@ -1739,67 +1738,6 @@ impl Render for Shell {
                 div()
                     .absolute()
                     .inset_0()
-                    .bg(gpui::linear_gradient(
-                        135.0,
-                        gpui::linear_color_stop(t.bg_gradient_start, 0.0),
-                        gpui::linear_color_stop(t.bg_gradient_end, 1.0),
-                    )),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(gpui::px(-220.0))
-                    .left(gpui::px(-100.0))
-                    .w(gpui::px(820.0))
-                    .h(gpui::px(620.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(t.gold_glow)
-                    .shadow(vec![gpui::BoxShadow {
-                        color: t.gold_glow_border.into(),
-                        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
-                        blur_radius: gpui::px(260.0),
-                        spread_radius: gpui::px(0.0),
-                        inset: false,
-                    }]),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(gpui::px(-240.0))
-                    .right(gpui::px(-120.0))
-                    .w(gpui::px(760.0))
-                    .h(gpui::px(560.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(t.ambient_teal)
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0x2F6B6348).into(),
-                        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
-                        blur_radius: gpui::px(240.0),
-                        spread_radius: gpui::px(0.0),
-                        inset: false,
-                    }]),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(gpui::px(80.0))
-                    .right(gpui::px(-160.0))
-                    .w(gpui::px(560.0))
-                    .h(gpui::px(480.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(t.ambient_rose)
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0x7A4A5540).into(),
-                        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
-                        blur_radius: gpui::px(220.0),
-                        spread_radius: gpui::px(0.0),
-                        inset: false,
-                    }]),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .inset(gpui::px(24.0))
                     .rounded(gpui::px(24.0))
                     .bg(gpui::linear_gradient(
                         135.0,
@@ -1826,7 +1764,68 @@ impl Render for Shell {
                     ])
                     .flex()
                     .flex_col()
-                    .overflow_hidden()
+                    .overflow_hidden()                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .bg(gpui::linear_gradient(
+                                135.0,
+                                gpui::linear_color_stop(t.bg_gradient_start, 0.0),
+                                gpui::linear_color_stop(t.bg_gradient_end, 1.0),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(gpui::px(-220.0))
+                            .left(gpui::px(-100.0))
+                            .w(gpui::px(820.0))
+                            .h(gpui::px(620.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(t.gold_glow)
+                            .shadow(vec![gpui::BoxShadow {
+                                color: t.gold_glow_border.into(),
+                                offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                                blur_radius: gpui::px(260.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: false,
+                            }]),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom(gpui::px(-240.0))
+                            .right(gpui::px(-120.0))
+                            .w(gpui::px(760.0))
+                            .h(gpui::px(560.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(t.ambient_teal)
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::rgba(0x2F6B6348).into(),
+                                offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                                blur_radius: gpui::px(240.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: false,
+                            }]),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(gpui::px(80.0))
+                            .right(gpui::px(-160.0))
+                            .w(gpui::px(560.0))
+                            .h(gpui::px(480.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(t.ambient_rose)
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::rgba(0x7A4A5540).into(),
+                                offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                                blur_radius: gpui::px(220.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: false,
+                            }]),
+                    )
+
                     .child(
                         // Glass sheen
                         div()

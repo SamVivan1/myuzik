@@ -18,8 +18,10 @@ window traffic-light semantics (red/yellow/green) and transparent shadows.
 
 ## Glass / clay hierarchy
 
-- **Glass**: shell panel (gradient + champagne border + inset top highlight + sheen),
-  sidebar (thin translucent layer), lyrics panel, settings rows, search field, album covers frame.
+- **Glass**: the shell fills the window with 24 px rounded corners (gradient + champagne border +
+  inset top highlight + sheen), sidebar (thin translucent layer), lyrics panel, settings rows,
+  search field, album covers frame. The outer window margin was removed so there is no square
+  frame around the rounded shell; the player bar floats inside the shell with 18 px margins.
 - **Clay**: player bar (ivory gradient + inset highlight/shade), active nav pill, logo mark,
   gold play/play-all buttons, dark "Pin lyrics" pills, search pill.
 - **Not mixed**: clay is used for controls/player; glass for surfaces. Gold is state, not decoration.
@@ -41,6 +43,8 @@ window traffic-light semantics (red/yellow/green) and transparent shadows.
 
 - **No compositor blur**: Mutter does not implement `ext-background-effect-v1`. Glass is simulated
   with a translucent gradient + ambient color + inset highlights.
+- **Full-window shell**: the mockup floats the shell 24 px inside the window; the app fills the
+  window with the rounded shell and keeps the player bar inside it, avoiding a square frame.
 - **Window controls**: macOS-style colored dots on the right (explicit user request), replacing the
   mockup's `— □ ×` actions.
 - **Nav icons**: text labels only (no icon set bundled yet).
