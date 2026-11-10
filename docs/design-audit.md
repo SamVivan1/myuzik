@@ -96,6 +96,9 @@ the brass gradient placeholder in those captures; the real app renders the cover
 
 ## Remaining review items
 
-- Full keyboard focus ring on every control (nav items, cards, transport).
+- ~~Full keyboard focus ring on every control (nav items, cards, transport).~~ Done: every
+  control is a tab stop with a 2 px OS-accent ring, and the ring is only drawn while focused
+  (controls keep their previous resting border), so the design is unchanged at rest. Verified
+  by regenerating `docs/screenshots/` and comparing.
 - Overlay screenshot and 1920×1080 captures.
 - 200% scaling pass.

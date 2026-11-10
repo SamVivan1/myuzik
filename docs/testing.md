@@ -7,7 +7,9 @@ Run the full suite:
 ```
 
 This runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and all tests serially
-(GPUI tests share process-global state, so `--test-threads=1` is required).
+(GPUI tests share process-global state, so `--test-threads=1` is required). The default run is
+79 tests (31 unit + 48 integration); 9 more (`live_navidrome` ×7, `live_player` ×1,
+`screenshots` ×1) are `#[ignore]`d because they need a real server or a GPU renderer.
 
 ## Live server tests
 
@@ -23,6 +25,12 @@ They are `#[ignore]` by default and cover:
   playlists, search, stream URL fetch, Navidrome `lyricsList` parsing, lyrics provider pipeline.
 - `tests/live_player.rs`: GStreamer play, position advance, duration, seek, pause.
 
+## Unit tests (inline in `src/`)
+
+31 tests, run by the same `cargo test`: config defaults/round-trip (2), LRC parsing and
+offsets (6), Subsonic DTO parsing incl. lyrics shapes (3), overlay geometry clamping (4),
+OS accent mapping (3), log redaction (2), scrobble thresholds (6), theme contrast (5).
+
 ## Mocked UI/integration tests
 
 - `tests/ui_flow.rs`: a full mocked Navidrome drives the real `Shell` headlessly —
@@ -35,6 +43,26 @@ They are `#[ignore]` by default and cover:
   (quality, scrobble, lyric offset/source, reduced motion) persisting to disk.
 - `tests/mpris_metadata.rs`: MPRIS metadata mapping and microsecond positions.
 - `tests/lyrics_view.rs`: active-line centering math.
+- `tests/a11y.rs`: 7 tests for keyboard accessibility — Tab walks nav → content → player bar →
+  chrome over gpui's real tab-stop map, Shift+Tab retraces it, typing in the search field is not
+  hijacked by the transport shortcuts, the persistent chrome stays tabbable on every route, and
+  every icon-only control carries a role, a focus handle and an `aria_label` (checked against the
+  rendering code, because accesskit's tree is not built in the headless harness — see
+  [accessibility.md](accessibility.md)).
+- `tests/queue.rs`: queue semantics, repeat/shuffle, and rapid next/previous.
+- `tests/cover_lru.rs`: cover cache eviction and no growth on re-insert.
+- `tests/navidrome_auth.rs`: Subsonic token/salt and auth parameters.
+- `tests/stress.rs`: 6 capacity tests — a 20 000-track library (DTO mapping and windowed
+  paging), 200 searches through the generation guard, 8 concurrent out-of-order responses,
+  500 cover-LRU inserts against `COVER_CACHE_CAP`, and a 20 000-track queue under rapid
+  next/previous. Headless and offline; bounds are in [performance.md](performance.md).
+
+## Performance measurement
+
+`scripts/measure-ram.sh` launches the built binary and reports RSS, CPU, threads, fds,
+startup time and cache sizes; `--strict` exits non-zero when a budget is exceeded. See
+[performance.md](performance.md).
+
 
 ## Screenshots
 

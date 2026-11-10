@@ -4,9 +4,9 @@ A low-RAM, native Linux music player for a self-hosted **Navidrome** server, wit
 and a desktop-pinned lyric overlay. Built with Rust, [GPUI](https://github.com/zed-industries/zed),
 and GStreamer.
 
-> Pre-alpha / v0.1.0. The core library, playback, lyrics, overlay, search, settings, scrobbling,
-> and MPRIS flows work. Playlist editing, offline downloads, gapless playback, and Flatpak are not
-> in this version.
+> v0.1.0. The core library, playback, lyrics, overlay, search, settings, scrobbling, and MPRIS
+> flows work, with full keyboard navigation. Playlist editing, offline downloads, gapless
+> playback, and Flatpak are not in this version.
 
 ## Features
 
@@ -21,6 +21,8 @@ and GStreamer.
 - Debounced, keyboard-driven **search**.
 - **Settings** for stream quality, scrobbling, lyric offset/source, reduced motion, accent.
 - Midnight Brass design: warm black glass, ivory clay, champagne gold, OS accent focus rings.
+- **Keyboard accessible**: tab order across sidebar → content → player bar → window chrome,
+  OS-accent focus rings, accesskit roles/labels on every icon-only control, reduced motion.
 - Bundled Fraunces + Inter fonts (OFL).
 - No telemetry. Credentials in the Secret Service, with a 0600 file fallback.
 
@@ -71,7 +73,9 @@ scripts/install-extension.sh
 ```
 
 Log out/in after the first extension install, then enable **Myuzik Pin** in GNOME Extensions.
-Without the extension the overlay still opens as a normal window.
+Without the extension the overlay still opens as a normal window. Remove it with
+`scripts/uninstall-extension.sh`. Compatibility matrix, what pinning does and does not do, and
+troubleshooting: [docs/gnome-extension.md](docs/gnome-extension.md).
 
 ## Keyboard and controls
 
@@ -89,16 +93,20 @@ Measured with the release binary on GNOME 51 Wayland, AMD Radeon 760M:
 
 | State | RSS |
 |---|---|
-| Idle (library loaded) | ~125 MB |
-| Playing (48 kHz stream, covers loaded) | ~159 MB |
+| Idle (library loaded) | ~133 MB peak |
+| Playing (48 kHz stream, covers loaded) | ~160–184 MB |
+| Startup to a usable window | 1.12 s cold / 0.33 s warm |
 
-Budgets: idle ≤ 200 MB, playing + overlay ≤ 250 MB.
+Budgets: idle ≤ 200 MB, playing + overlay ≤ 250 MB, startup ≤ 1.5 s. Measure your own build
+with `scripts/measure-ram.sh`; method and per-test bounds are in
+[docs/performance.md](docs/performance.md).
 
 ## Testing
 
 ```bash
-./scripts/test-all.sh                 # fmt + clippy + unit/UI tests
-MYUZIK_LIVE=1 ./scripts/test-all.sh   # also live Navidrome + GStreamer tests
+./scripts/test-all.sh                 # fmt + clippy + 79 tests (31 unit + 48 headless UI)
+MYUZIK_LIVE=1 ./scripts/test-all.sh   # also live Navidrome (7) + GStreamer (1) tests
+scripts/measure-ram.sh                # RSS / CPU / startup of the release binary
 ```
 
 See [docs/testing.md](docs/testing.md) for the coverage map and manual smoke-test commands.
@@ -139,6 +147,9 @@ See [docs/troubleshooting.md](docs/troubleshooting.md). Common issues:
 - Flatpak/AppImage packaging.
 - Pixel theme (Midnight Brass only).
 - Last.fm (Navidrome handles scrobbling).
+- Accesskit tree-level assertions, forced-colors/high-contrast and a 200% scaling review
+  (the first two need APIs the pinned gpui revision does not expose; see
+  [docs/accessibility.md](docs/accessibility.md)).
 
 ## License
 
