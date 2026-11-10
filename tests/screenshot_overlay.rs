@@ -143,6 +143,13 @@ fn capture(name: &str, cx: &mut HeadlessAppContext, window: AnyWindowHandle, lig
     });
     match cx.capture_screenshot(window) {
         Ok(shot) => {
+            // Report the real alpha of the window's corner, before compositing:
+            // this is what decides whether the frame looks rounded on the desktop.
+            let corner = shot.get_pixel(1, 1);
+            eprintln!(
+                "raw corner pixel of {name}: rgba({}, {}, {}, {})",
+                corner.0[0], corner.0[1], corner.0[2], corner.0[3]
+            );
             // The headless renderer runs at 2x, so size the backdrop from the real
             // capture instead of the logical window size.
             let mut canvas = backdrop(shot.width(), shot.height(), light);

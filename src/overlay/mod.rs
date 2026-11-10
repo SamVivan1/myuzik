@@ -537,13 +537,6 @@ impl Render for PinnedLyricsView {
             .overflow_hidden()
             .border_1()
             .border_color(gpui::rgba(0xFFFFFF40))
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::rgba(0x00000066).into(),
-                offset: gpui::point(gpui::px(0.0), gpui::px(10.0)),
-                blur_radius: gpui::px(24.0),
-                spread_radius: gpui::px(0.0),
-                inset: false,
-            }])
             .child(match &cover {
                 Some(image) => div()
                     .size_full()
@@ -808,45 +801,15 @@ impl Render for PinnedLyricsView {
 
         let right = div().flex_1().h_full().child(scrolling);
 
-        let ambient = div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .absolute()
-                    .left(gpui::px(-70.0))
-                    .top(gpui::px(-60.0))
-                    .w(gpui::px(300.0))
-                    .h(gpui::px(300.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(gpui::linear_gradient(
-                        150.0,
-                        gpui::linear_color_stop(gpui::rgba(0xC9A86A5C), 0.0),
-                        gpui::linear_color_stop(gpui::rgba(0x00000000), 0.62),
-                    )),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right(gpui::px(-90.0))
-                    .bottom(gpui::px(-80.0))
-                    .w(gpui::px(320.0))
-                    .h(gpui::px(320.0))
-                    .rounded(gpui::px(999.0))
-                    .bg(gpui::linear_gradient(
-                        330.0,
-                        gpui::linear_color_stop(gpui::rgba(0x2F6B6340), 0.0),
-                        gpui::linear_color_stop(gpui::rgba(0x00000000), 0.58),
-                    )),
-            );
-
         div()
             .size_full()
             .rounded(gpui::px(22.0))
             .overflow_hidden()
+            // The warm light that used to be an ambient layer is part of the
+            // surface now, so it can never paint outside the rounded shape.
             .bg(gpui::linear_gradient(
-                155.0,
-                gpui::linear_color_stop(gpui::rgb(0x1B1614), 0.0),
+                150.0,
+                gpui::linear_color_stop(gpui::rgb(0x2A2018), 0.0),
                 gpui::linear_color_stop(gpui::rgb(0x0C0B0F), 1.0),
             ))
             .border_1()
@@ -858,7 +821,7 @@ impl Render for PinnedLyricsView {
                     offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
                     blur_radius: gpui::px(1.0),
                     spread_radius: gpui::px(0.0),
-                    inset: false,
+                    inset: true,
                 },
                 gpui::BoxShadow {
                     color: t.shadow_warm.into(),
@@ -874,7 +837,6 @@ impl Render for PinnedLyricsView {
                 gpui::MouseButton::Left,
                 cx.listener(|_this, _event, window, _cx| window.start_window_move()),
             )
-            .child(ambient)
             .child(
                 div()
                     .size_full()
