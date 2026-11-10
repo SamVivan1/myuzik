@@ -85,6 +85,29 @@ fn synced_lines() -> Vec<LyricLine> {
         .collect()
 }
 
+/// Long lines that must wrap: the case where a fixed row height used to make
+/// neighbouring lines overlap.
+fn wrapping_lines() -> Vec<LyricLine> {
+    const TEXT: [&str; 7] = [
+        "bring another day, my bloody hoes and all the things I never said out loud",
+        "Sleepin', you're on your tippy-toes and I am not the one to tell you so",
+        "Creepin' around like no one knows exactly what you did behind the door",
+        "Think you're so criminal",
+        "Bruises on both my knees for you and every single promise that you broke",
+        "Don't say thank you or please, I do what I want when I'm wanting to",
+        "So cynical",
+    ];
+    (0..40)
+        .map(|i| LyricLine {
+            time: Duration::from_secs(i as u64 * 20),
+            text: match i {
+                0..=6 => TEXT[i as usize].to_string(),
+                _ => format!("another line of the song, number {i}"),
+            },
+        })
+        .collect()
+}
+
 fn backdrop(w: u32, h: u32, light: bool) -> image::RgbaImage {
     let (w, h) = (w + PAD * 2, h + PAD * 2);
     let mut img = image::RgbaImage::new(w, h);
@@ -186,6 +209,36 @@ fn capture_overlay_states() {
         capture("overlay", &mut cx, any, false);
         // Same frame on a bright desktop, to prove the glass works either way.
         capture("overlay-light", &mut cx, any, true);
+    }
+
+    // ---- 1b. the smallest window the clamp allows (footer must still fit) ----
+    {
+        let st = state.clone();
+        let cover = cover.clone();
+        cx.update(move |app| {
+            st.update(app, |s, _| {
+                s.begin("Bad Guy".to_string(), "Billie Eilish".to_string());
+                s.set_status(&LyricsStatus::Synced(wrapping_lines()));
+                s.set_cover(Some(cover.clone()));
+                s.sync_position(Duration::from_secs(60), 0, Some(Duration::from_secs(214)));
+            });
+        });
+        cx.update(|app| app.refresh_windows());
+        let any = cx.update(|app| {
+            app.windows()
+                .iter()
+                .find(|w| w.downcast::<myuzik::overlay::PinnedLyricsView>().is_some())
+                .copied()
+        });
+        if let Some(any) = any {
+            let _ = cx.update_window(any, |_view, window, _cx| {
+                window.resize(gpui::size(
+                    gpui::px(myuzik::overlay::MIN_WIDTH as f32),
+                    gpui::px(myuzik::overlay::MIN_HEIGHT as f32),
+                ));
+            });
+            capture("overlay-min", &mut cx, any, false);
+        }
     }
 
     // ---- 2. unsynced transcript ----

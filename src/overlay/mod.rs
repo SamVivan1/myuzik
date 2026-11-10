@@ -22,7 +22,7 @@ use gpui::{
 pub const DEFAULT_WIDTH: u32 = 620;
 pub const DEFAULT_HEIGHT: u32 = 330;
 pub const MIN_WIDTH: u32 = 520;
-pub const MIN_HEIGHT: u32 = 280;
+pub const MIN_HEIGHT: u32 = 300;
 
 /// Lyric rows drawn: three above the active line, three below. The outermost
 /// rows sit under the edge fade, so the band reads as a continuous lyric stream
@@ -31,10 +31,15 @@ pub const BAND_BEFORE: usize = 3;
 pub const BAND_AFTER: usize = 3;
 /// Width of the left column (artwork, title, artist, progress).
 const LEFT_COLUMN: f32 = 160.0;
-/// Every lyric row is the same height, so the band can be positioned by
-/// arithmetic instead of measuring laid-out text. Uniform rows also match the
-/// reference widget, where emphasis comes from brightness, not size.
-const ROW_HEIGHT: f32 = 30.0;
+/// Line height of one wrapped lyric line, and the padding around a row. A row
+/// that wraps takes a multiple of the line height, estimated from the column
+/// width — the reference widget measures allocated boxes after layout, which a
+/// single render pass cannot do, so the estimate keeps the band's maths exact
+/// without a reflow pass.
+const LYRIC_LINE_HEIGHT: f32 = 21.0;
+const LYRIC_ROW_PADDING: f32 = 9.0;
+/// Room kept clear on the right for the close control.
+const CLOSE_GUTTER: f32 = 38.0;
 /// How long the band takes to glide to the next line (the reference uses 380 ms).
 const SCROLL_MS: u64 = 380;
 
@@ -434,8 +439,12 @@ impl PinnedLyricsView {
     pub fn new(
         state: gpui::Entity<OverlayState>,
         geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
-        cx: &mut gpui::App,
+        cx: &mut Context<Self>,
     ) -> Self {
+        // Every position tick and lyric update must repaint the overlay. Without
+        // this observer the window only redrew when it was activated, so the band
+        // appeared frozen until it was clicked.
+        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
         Self {
             state,
             geometry,
@@ -606,8 +615,33 @@ impl Render for PinnedLyricsView {
 
         let viewport_h = f32::from(window.bounds().size.height) - 40.0;
         let center = viewport_h / 2.0;
+
+        // Estimate each row's height first, so the glide target accounts for
+        // lines that wrap to two or three rows instead of assuming one height.
+        let panel_w = f32::from(window.bounds().size.width);
+        // The lyric column is everything left after the panel padding, the
+        // artwork column and the gutter. The rows get this width explicitly.
+        let right_w = (panel_w - 40.0 - LEFT_COLUMN - 24.0).max(120.0);
+        // Keep clear of the close button on the right.
+        let text_w = (right_w - CLOSE_GUTTER).max(80.0);
+        let chars_per_line = (text_w / (16.0 * 0.5)).max(8.0);
+        let mut heights = Vec::with_capacity(rows_all.len());
+        let mut offsets = Vec::with_capacity(rows_all.len());
+        let mut acc = 0.0f32;
+        for row in &rows_all {
+            let lines = (row.text.chars().count() as f32 / chars_per_line)
+                .ceil()
+                .max(1.0);
+            let height = lines * LYRIC_LINE_HEIGHT + LYRIC_ROW_PADDING;
+            offsets.push(acc);
+            heights.push(height);
+            acc += height;
+        }
+
         let target = match active_row {
-            Some(index) if !rows_all.is_empty() => center - (index as f32 + 0.5) * ROW_HEIGHT,
+            Some(index) if index < offsets.len() => {
+                center - (offsets[index] + heights[index] / 2.0)
+            }
             _ => 0.0,
         };
 
@@ -632,12 +666,9 @@ impl Render for PinnedLyricsView {
         let mut column = div()
             .absolute()
             .left_0()
-            .right_0()
+            .w(gpui::px(right_w))
             .flex()
-            .flex_col()
-            .px(gpui::px(6.0))
-            // Room for the close control, so it never sits on a lyric.
-            .pr(gpui::px(38.0));
+            .flex_col();
 
         if rows_all.is_empty() {
             // Nothing to scroll: sit the message in the middle of the box.
@@ -646,10 +677,9 @@ impl Render for PinnedLyricsView {
             column = column
                 .top(gpui::px(center - 26.0))
                 .items_center()
-                .justify_center()
                 .child(
                     div()
-                        .w_full()
+                        .w(gpui::px(text_w))
                         .text_center()
                         .text_size(gpui::px(14.0))
                         .font_family(theme.ui_font)
@@ -658,7 +688,7 @@ impl Render for PinnedLyricsView {
                 )
                 .child(
                     div()
-                        .w_full()
+                        .w(gpui::px(text_w))
                         .text_center()
                         .mt(gpui::px(4.0))
                         .text_size(gpui::px(10.5))
@@ -667,7 +697,7 @@ impl Render for PinnedLyricsView {
                         .child(hint),
                 );
         } else {
-            for row in rows_all {
+            for (index, row) in rows_all.into_iter().enumerate() {
                 // Uniform type size, like the reference: the emphasis is carried
                 // by colour and opacity, so the band keeps one steady rhythm
                 // while it moves.
@@ -679,17 +709,17 @@ impl Render for PinnedLyricsView {
                 };
                 column = column.child(
                     div()
-                        .w_full()
-                        .h(gpui::px(ROW_HEIGHT))
+                        .w(gpui::px(text_w))
+                        .h(gpui::px(heights[index]))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .w_full()
+                                .w(gpui::px(text_w))
                                 .text_center()
                                 .text_size(gpui::px(16.0))
-                                .line_height(gpui::px(21.0))
+                                .line_height(gpui::px(LYRIC_LINE_HEIGHT))
                                 .font_family(theme.ui_font)
                                 .font_weight(weight)
                                 .text_color(color)

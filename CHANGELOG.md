@@ -21,6 +21,13 @@
   wallpaper), and the default window grew from 392x180 to 620x330 to hold the layout.
 - Overlay artwork reuses the cached cover, and the lyric state is read without cloning the whole
   lyric list on every frame.
+- The overlay repaints on every state change again (an observer on the lyric state), so the band
+  stays live while the window is unfocused instead of only updating when it was clicked.
+- Long lines wrap inside the lyric column instead of running past the panel edge, and each row's
+  height is estimated from the wrap so neighbouring lines no longer overlap; the scroll target adds
+  those heights up, keeping the active line centred.
+- The minimum overlay size is 520x300 so the footer (progress bar and both timestamps) always fits,
+  and a saved small geometry from an older version is clamped up to it.
 - The lyric band now scrolls instead of swapping a fixed slice: every line is laid out once and the
   column glides (380 ms, ease-out) so the line being sung stays centred, with the surrounding lines
   clipped at the edges — the behaviour of the media widget in `device-tweak/Widget`. Rows use one

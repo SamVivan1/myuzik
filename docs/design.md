@@ -147,7 +147,10 @@ The app window uses the glass shell: warm-black translucent background with nati
   the position is arithmetic rather than measured, and emphasis is carried by brightness — active in
   gold semibold at full opacity, then 0.78 / 0.52 / 0.30 — instead of by size, which keeps the
   rhythm steady while the band moves. Resizing re-targets the glide. A close control sits in the
-  top-right corner. Unsynced transcripts follow progress through the track, never highlight a fake active
+  top-right corner. A view observer on the lyric state repaints the window on every position tick,
+  so the band runs while the window is unfocused; long lines wrap inside an explicit text width
+  (estimated heights keep wrapped rows from colliding) and the minimum window is 520x300 so the
+  footer always fits. Unsynced transcripts follow progress through the track, never highlight a fake active
   line, and carry a small "UNSYNCED" chip. Loading/instrumental/not-found/error states show a
   message and a hint instead of an empty box.
 - Material: the window gets no backdrop blur from Mutter, so the panel carries its own surface — a
