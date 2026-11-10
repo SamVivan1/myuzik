@@ -895,42 +895,51 @@ impl Shell {
         cx.spawn(async move |cx| {
             let c = client.clone();
             let cid2 = cid.clone();
-            if let Ok(bytes) = cx
+            // Decoding the cover, masking its corners into a fresh PNG and
+            // writing it to disk are all CPU/IO work. They used to run inside
+            // `cx.spawn`, which gpui polls on the main thread, so every track
+            // change paid for a decode + per-pixel loop + PNG encode on the UI
+            // thread. All of it now happens on the background executor.
+            let prepared = cx
                 .background_executor()
-                .spawn(async move { c.cover_bytes(&cid2, 512) })
-                .await
-            {
-                let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                let ext = if is_png { "png" } else { "jpg" };
-                let _ = std::fs::create_dir_all(&covers_dir);
-                let path = covers_dir.join(format!("{cid}.{ext}"));
-                let _ = std::fs::write(&path, &bytes);
-                let format = if is_png {
-                    gpui::ImageFormat::Png
-                } else {
-                    gpui::ImageFormat::Jpeg
-                };
-                let image = std::sync::Arc::new(gpui::Image {
-                    format,
-                    bytes,
-                    id: fxhash_id(&cid),
-                });
-                cx.update(|app| {
-                    app.update_entity(&hs, |h, _| {
-                        h.insert_cover(cid.clone(), image.clone());
-                    });
-                    app.update_entity(&np, |view, _cx| {
-                        view.set_cover(Some(image.clone()));
+                .spawn(async move {
+                    let bytes = c.cover_bytes(&cid2, 512).ok()?;
+                    let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+                    let ext = if is_png { "png" } else { "jpg" };
+                    let _ = std::fs::create_dir_all(&covers_dir);
+                    let path = covers_dir.join(format!("{cid2}.{ext}"));
+                    let _ = std::fs::write(&path, &bytes);
+                    let format = if is_png {
+                        gpui::ImageFormat::Png
+                    } else {
+                        gpui::ImageFormat::Jpeg
+                    };
+                    let image = std::sync::Arc::new(gpui::Image {
+                        format,
+                        bytes,
+                        id: fxhash_id(&cid2),
                     });
                     let rounded = crate::overlay::rounded_cover(&image);
-                    app.update_entity(&os_for_cover, |state, cx| {
-                        state.set_cover(Some(rounded));
-                        cx.notify();
-                    });
+                    Some((image, rounded, path))
+                })
+                .await;
+            let Some((image, rounded, path)) = prepared else {
+                return;
+            };
+            cx.update(|app| {
+                app.update_entity(&hs, |h, _| {
+                    h.insert_cover(cid.clone(), image.clone());
                 });
-                if let Some(mh) = &mh {
-                    mh.update_metadata(&track, Some(format!("file://{}", path.display())));
-                }
+                app.update_entity(&np, |view, _cx| {
+                    view.set_cover(Some(image.clone()));
+                });
+                app.update_entity(&os_for_cover, |state, cx| {
+                    state.set_cover(Some(rounded.clone()));
+                    cx.notify();
+                });
+            });
+            if let Some(mh) = &mh {
+                mh.update_metadata(&track, Some(format!("file://{}", path.display())));
             }
         })
         .detach();
