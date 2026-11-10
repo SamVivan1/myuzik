@@ -3,53 +3,61 @@
 Last updated: 2026-11-10
 
 ## Status legend
-- [x] Done
-- [~] In progress
+- [x] Done and tested
+- [~] Partial
 - [ ] Not started
 
 ## Phase 0 — Walking Skeleton
-- [x] Task 1: Repo scaffold, licenses, CI skeleton
-- [x] Task 2: Feasibility spike (blur, second window, extension)
+- [x] Task 1: Repo scaffold, licenses (MIT), CI skeleton
+- [x] Task 2: Feasibility spike (second window, overlay, GNOME pin extension)
 
 ## Phase 1 — Foundations
 - [x] Task 3: Midnight Brass theme tokens + contrast tests
-- [x] Task 4: Config, paths, credential store
-- [x] Task 5: Navidrome client, auth, typed errors
-- [x] Task 6: Domain models, LRU cache, pagination helpers
+- [x] Task 4: Config, XDG paths, credential store
+- [x] Task 5: Navidrome client, token auth, typed errors
+- [x] Task 6: Domain models, caches, browse helpers
 
 ## Phase 2 — Shell and Library UI
-- [~] Task 7: App root, routes, setup screen, shell skeleton (shell exists, routes defined, setup not yet)
-- [ ] Task 8: Home screen, album cards, cover cache, track rows
-- [ ] Task 9: Album, artist, playlist, favorites screens
-- [ ] Task 10: Search with debounce and cancellation
+- [x] Task 7: App root, routes, interactive setup form, shell
+- [x] Task 8: Home screen, real covers, album cards, track rows
+- [x] Task 9: Album, artist, playlist, favorites screens
+- [x] Task 10: Keyboard search with stale-response protection
 
 ## Phase 3 — Playback and MPRIS
-- [x] Task 11: Player engine thread + state machine (engine written, not yet wired to UI)
-- [x] Task 12: Queue, shuffle, repeat, next/previous
-- [ ] Task 13: Player bar UI and keyboard shortcuts (shell has placeholder)
-- [ ] Task 14: MPRIS server (metadata mapping done, thread pending)
+- [x] Task 11: GStreamer player thread + state machine (wired)
+- [x] Task 12: Queue, shuffle, repeat, next/previous, EOS auto-advance
+- [~] Task 13: Player bar, seek ±10s, volume; global keyboard shortcuts pending
+- [x] Task 14: MPRIS (metadata, status, next/prev, seek, volume)
 
 ## Phase 4 — Lyrics
 - [x] Task 15: LRC parser, active line, offset
-- [x] Task 16: Lyrics provider, cache, prefetch
-- [ ] Task 17: Shared lyrics view + Now Playing screen
+- [x] Task 16: Navidrome `lyricsList` + LRCLIB fallback + cache
+- [x] Task 17: Shared lyrics view + Now Playing screen with cover
 
 ## Phase 5 — Pinned Overlay
-- [ ] Task 18: Overlay window, view, toggle, persistence
-- [ ] Task 19: Finalize GNOME pin extension
+- [~] Task 18: Overlay window/view/toggle implemented; geometry persistence pending
+- [~] Task 19: GNOME extension present; install script; version matrix notes pending
 
 ## Phase 6 — Settings, Polish, Integrity
-- [ ] Task 20: Settings, OS accent, reduced motion
-- [ ] Task 21: Scrobble, favorites, queue actions
-- [ ] Task 22: Error handling, logging redaction, accessibility
+- [x] Task 20: Settings (quality, scrobble, lyrics offset/source, reduced motion, accent)
+- [x] Task 21: Scrobbling (now-playing + submit), favorites, queue actions
+- [~] Task 22: Error toasts + setup errors; log redaction + accessibility audit pending
 - [ ] Task 23: Design polish and anti-slop audit
-- [ ] Task 24: Performance, memory, reliability
+- [~] Task 24: Memory measured (idle 125 MB, playing 159 MB); stress tests pending
 
 ## Phase 7 — Packaging, Docs, Release
-- [ ] Task 25: Packaging, desktop integration, README, CI
-- [ ] Task 26: Final acceptance and v0.1.0 release
+- [x] Task 25: Desktop file, AppStream metainfo, icon, install script, README, CI
+- [ ] Task 26: Final acceptance matrix and v0.1.0 tag/release
 
-## Notes
-- Audio dev packages installed (libgstreamer1.0-dev). cargo build (default features) passes.
-- All 24 unit/integration tests pass.
-- Next priority: lyrics view + Now Playing (core differentiator), then overlay.
+## Testing
+- `./scripts/test-all.sh` — fmt, clippy, 56 unit/UI tests (serial).
+- `MYUZIK_LIVE=1 ./scripts/test-all.sh` — live Navidrome + GStreamer suites.
+- See `docs/testing.md` for the coverage map.
+
+## Known gaps
+- Keyboard shortcuts (Space, arrows, Ctrl+K) are not bound globally.
+- Overlay geometry is not persisted across restarts.
+- Playlist/artist detail screens are read/play only; no editing.
+- MPRIS art URL is not populated (covers are in-memory only).
+- Log redaction tests and the accessibility audit are not written yet.
+- Stress tests (20k tracks, rapid skips, 24 h idle) are not automated.
