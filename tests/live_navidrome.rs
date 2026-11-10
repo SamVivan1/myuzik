@@ -276,3 +276,113 @@ fn live_radio_sources() {
         );
     }
 }
+
+/// Lyrics quality on real tracks: whatever the provider resolves must be usable
+/// in the pinned overlay — a real band of timed lines, never a wall of text and
+/// never all-zero timings.
+#[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
+fn live_lyrics_quality_in_the_overlay() {
+    if live_client().is_none() {
+        eprintln!("skipped: MYUZIK_LIVE not set or no credentials");
+        return;
+    }
+    use myuzik::lyrics::cache::LyricsCache;
+    use myuzik::lyrics::model::LyricsStatus;
+    use myuzik::lyrics::provider::LyricsProvider;
+    use myuzik::overlay::OverlayState;
+
+    let (paths, c, cfg) = setup();
+    let cache = LyricsCache::new(paths.lyrics.join("live-test"));
+    let pw = load_password(&paths).expect("credentials file missing");
+    let provider_client =
+        NavidromeClient::new(&cfg.server_url, &cfg.username, &pw).expect("client");
+    let provider = LyricsProvider::new(provider_client, cache, cfg.prefer_navidrome_lyrics);
+
+    let albums = c
+        .album_list(AlbumListKind::Newest, 8, 10)
+        .expect("album list");
+
+    let mut resolved = 0usize;
+    let mut synced = 0usize;
+    for album in albums.iter().take(6) {
+        let detail = match c.album(&album.id) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skip album {}: {e:?}", album.id);
+                continue;
+            }
+        };
+        let Some(track) = detail.songs.first() else {
+            continue;
+        };
+        let status = provider.fetch(track).expect("lyrics fetch");
+        let kind = match &status {
+            LyricsStatus::Synced(_) => "synced",
+            LyricsStatus::Plain(_) => "plain",
+            LyricsStatus::Instrumental => "instrumental",
+            LyricsStatus::NotFound => "none",
+            LyricsStatus::Error(_) => "error",
+            LyricsStatus::Loading => "loading",
+        };
+        eprintln!(
+            "  {:<36} -> {kind}",
+            track.title.chars().take(36).collect::<String>()
+        );
+        if matches!(status, LyricsStatus::NotFound | LyricsStatus::Error(_)) {
+            continue;
+        }
+        resolved += 1;
+
+        // Feed exactly what the app would show into the overlay state.
+        let mut state = OverlayState::default();
+        state.begin(track.title.clone(), track.artist.clone());
+        state.set_status(&status);
+        let total = track.duration;
+        let mut last_rows = 0usize;
+        let mut last_active: Option<usize> = None;
+        for step in 0..=10u32 {
+            let pos = total.mul_f32(step as f32 / 10.0);
+            state.sync_position(pos, cfg.lyrics_offset_ms, Some(total));
+            let rows = state.visible_rows().len();
+            assert!(
+                rows <= 6,
+                "'{}' drew {rows} rows at {pos:?}; the overlay must stay in the karaoke band",
+                track.title
+            );
+            last_rows = rows;
+            last_active = state.active();
+        }
+        if matches!(status, LyricsStatus::Synced(_)) {
+            synced += 1;
+            assert!(
+                last_rows > 0,
+                "'{}' has synced lyrics but drew no rows",
+                track.title
+            );
+            assert!(
+                last_active.is_some(),
+                "'{}' never highlighted a line despite synced lyrics",
+                track.title
+            );
+        }
+        if matches!(status, LyricsStatus::Plain(_)) {
+            assert!(
+                last_active.is_none(),
+                "'{}' is a plain transcript but a line was marked active",
+                track.title
+            );
+        }
+    }
+
+    eprintln!(
+        "resolved {resolved} of {} tracks ({synced} synced)",
+        albums.len().min(6)
+    );
+    // The library may legitimately have no lyrics at all; the assertion is about
+    // quality when something is found, not about coverage.
+    assert!(
+        resolved > 0 || synced == 0,
+        "resolved {resolved} but synced {synced} — inconsistent counting"
+    );
+}

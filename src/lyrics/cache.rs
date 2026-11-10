@@ -26,8 +26,14 @@ impl LyricsCache {
         fs::create_dir_all(&self.dir)
     }
 
+    /// Bumped whenever the provider's matching or the parser changes meaning, so
+    /// entries written by an older build are not reused.
+    const FORMAT_VERSION: &'static str = "v2";
+
     pub fn key(track: &Track) -> String {
         let mut hasher = Sha256::new();
+        hasher.update(Self::FORMAT_VERSION.as_bytes());
+        hasher.update(b"|");
         hasher.update(track.artist.trim().to_lowercase().as_bytes());
         hasher.update(b"|");
         hasher.update(track.title.trim().to_lowercase().as_bytes());

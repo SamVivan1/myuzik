@@ -138,7 +138,12 @@ The app window uses the glass shell: warm-black translucent background with nati
 
 - A separate GPUI window titled exactly `Myuzik Lyrics`, app ID `io.github.samvivan1.Myuzik`.
 - Borderless, transparent, native blur, draggable by its surface; size ~392 × 160–220 px depending on lyric wrapping; position/size persisted.
-- Content: small gold "Pinned lyrics" pill, close button, album art, title/artist, previous/active/next lines, progress bar, pin status.
+- Content: small gold "Pinned lyrics" pill, close button, title/artist, **a karaoke band of at
+  most six lines** (two before the active line, three after), and a progress bar. The band is the
+  whole point: a 70-line lyric sheet must never be squeezed into a 180 px window. When the text is
+  an unsynchronised transcript the band follows progress through the track instead of highlighting
+  a fake active line, and says so with a small "unsynced" tag. When there is nothing to show
+  (loading, instrumental, not found, error) the window says so instead of drawing an empty box.
 - Toggle from player bar/sidebar (and Ctrl+P). Opening the window = pinned; closing = unpinned. The GNOME extension auto-pins windows with the matching title/app ID using `make_above()` + `stick()`; it can also hide it from the window list.
 - If the extension is not installed, show a one-time hint in Settings/status: install `myuzik-pin@samvivan1.github.io`; the overlay still works as a normal floating window.
 - The overlay is readable over any wallpaper: dark tint ≥ ~72% opacity, high-contrast ivory text, gold active line, no reliance on blur for contrast.
@@ -197,7 +202,7 @@ The app window uses the glass shell: warm-black translucent background with nati
 - **Display:** Fraunces (variable, soft serif) — page titles, greeting, album/now-playing titles, section headings.
 - **UI/lyrics:** Inter — navigation, labels, body, track metadata, lyrics.
 - Bundled with OFL licenses; system fallback: `Cantarell`, `Inter`, `sans-serif` for UI; `Georgia`, serif for display.
-- Scale: display 30–38 px; section 16–18 px; body 13–14 px; captions 9–11 px; lyrics 15 px inactive / 21 px active; pinned overlay 11–13 px. No pixel font in v1.
+- Scale: display 30–38 px; section 16–18 px; body 13–14 px; captions 9–11 px; lyrics 15 px inactive / 21 px active; pinned overlay band 11.5 px inactive / 16 px active (the small window carries the hierarchy through weight and colour, not size alone). No pixel font in v1.
 - Line height: body 1.45–1.6; lyrics 1.35–1.45; display 1.1–1.2.
 
 ### 6.3 Materials and shape
@@ -237,7 +242,7 @@ The app window uses the glass shell: warm-black translucent background with nati
 - No color-only state: pin state has label/icon; errors have text.
 - Reduced motion and font scaling supported.
 - Persistent player/overlay must not obscure focused elements; focus scrolls into view.
-- Lyrics never truncate the active line in the pinned overlay; wrap long lines.
+- Lyrics never truncate the active line in the pinned overlay; long lines wrap inside the band.
 
 ---
 

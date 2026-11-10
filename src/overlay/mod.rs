@@ -130,12 +130,199 @@ impl OverlayWindow {
     }
 }
 
+/// How many lines before / after the active one the pinned overlay shows.
+/// Together with the active line this is the whole band (6 rows), which fits the
+/// default 392x180 window; a song with 70 lines is therefore never crammed in.
+pub const BAND_BEFORE: usize = 2;
+pub const BAND_AFTER: usize = 3;
+
+/// What the overlay is currently able to show.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OverlayLyrics {
+    /// Nothing to show yet; `OverlayState::message` explains why.
+    #[default]
+    Message,
+    /// Timed lines, with the index of the one that is currently playing.
+    Synced {
+        lines: Vec<crate::lyrics::model::LyricLine>,
+        active: Option<usize>,
+    },
+    /// Untimed transcript. The band follows the song's progress proportionally
+    /// instead of pretending to be synchronised.
+    Plain { lines: Vec<String>, index: usize },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OverlayState {
     pub title: String,
     pub artist: String,
-    pub lines: Vec<crate::lyrics::model::LyricLine>,
-    pub active: Option<usize>,
+    pub lyrics: OverlayLyrics,
+    /// Shown when `lyrics` is `Message`.
+    pub message: String,
+    /// True when the text on screen comes from an unsynchronised transcript.
+    pub unsynced: bool,
+}
+
+impl OverlayState {
+    /// Start a track with nothing resolved yet.
+    pub fn begin(&mut self, title: String, artist: String) {
+        self.title = title;
+        self.artist = artist;
+        self.lyrics = OverlayLyrics::Message;
+        self.message = "Loading lyrics…".to_string();
+        self.unsynced = false;
+    }
+
+    /// Show a resolved lyrics status.
+    pub fn set_status(&mut self, status: &crate::lyrics::model::LyricsStatus) {
+        use crate::lyrics::model::LyricsStatus;
+        self.unsynced = false;
+        match status {
+            LyricsStatus::Synced(lines) if !lines.is_empty() => {
+                self.lyrics = OverlayLyrics::Synced {
+                    lines: lines.clone(),
+                    active: None,
+                };
+            }
+            // A payload with no usable timings is a transcript, not a synced file.
+            LyricsStatus::Synced(_) => self.set_message("No lyrics found"),
+            LyricsStatus::Plain(text) => {
+                let lines: Vec<String> = text
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if lines.is_empty() {
+                    self.set_message("No lyrics found");
+                } else {
+                    self.lyrics = OverlayLyrics::Plain { lines, index: 0 };
+                    self.unsynced = true;
+                }
+            }
+            LyricsStatus::Instrumental => self.set_message("♪ Instrumental"),
+            LyricsStatus::Loading => self.set_message("Loading lyrics…"),
+            LyricsStatus::NotFound => self.set_message("No lyrics found"),
+            LyricsStatus::Error(_) => self.set_message("Lyrics unavailable"),
+        }
+    }
+
+    pub fn set_message(&mut self, message: &str) {
+        self.lyrics = OverlayLyrics::Message;
+        self.message = message.to_string();
+        self.unsynced = false;
+    }
+
+    /// Advance the band for a playback position, honouring the lyric offset.
+    pub fn sync_position(
+        &mut self,
+        position: std::time::Duration,
+        offset_ms: i64,
+        duration: Option<std::time::Duration>,
+    ) {
+        use crate::lyrics::lrc::{active_line, apply_offset};
+        match &mut self.lyrics {
+            OverlayLyrics::Synced { lines, active } => {
+                let pos = apply_offset(position, offset_ms);
+                *active = active_line(lines, pos);
+            }
+            OverlayLyrics::Plain { lines, index } => {
+                *index = plain_index(position, duration, lines.len());
+            }
+            OverlayLyrics::Message => {}
+        }
+    }
+
+    /// Total number of lines, 0 in the message state.
+    pub fn line_count(&self) -> usize {
+        match &self.lyrics {
+            OverlayLyrics::Synced { lines, .. } => lines.len(),
+            OverlayLyrics::Plain { lines, .. } => lines.len(),
+            OverlayLyrics::Message => 0,
+        }
+    }
+
+    /// The active line index, when there is one.
+    pub fn active(&self) -> Option<usize> {
+        match &self.lyrics {
+            OverlayLyrics::Synced { active, .. } => *active,
+            OverlayLyrics::Plain { .. } => None,
+            OverlayLyrics::Message => None,
+        }
+    }
+
+    /// The text of the first visible line, for tests and diagnostics.
+    pub fn first_visible_line(&self) -> Option<String> {
+        self.visible_rows().first().map(|(text, _)| text.clone())
+    }
+
+    /// The band of rows to draw: at most `BAND_BEFORE + 1 + BAND_AFTER` of them.
+    pub fn visible_rows(&self) -> Vec<(String, bool)> {
+        match &self.lyrics {
+            OverlayLyrics::Message => Vec::new(),
+            OverlayLyrics::Synced { lines, active } => {
+                let Some(active) = *active else {
+                    // Before the first timestamp: show the opening lines, none active.
+                    let end = lines.len().min(BAND_BEFORE + 1 + BAND_AFTER);
+                    return lines[..end]
+                        .iter()
+                        .map(|l| (l.text.clone(), false))
+                        .collect();
+                };
+                let range = band_range(active, lines.len(), BAND_BEFORE, BAND_AFTER);
+                range
+                    .map(|i| (lines[i].text.clone(), i == active))
+                    .collect()
+            }
+            OverlayLyrics::Plain { lines, index } => {
+                let active = (*index).min(lines.len().saturating_sub(1));
+                let range = band_range(active, lines.len(), BAND_BEFORE, BAND_AFTER);
+                range.map(|i| (lines[i].clone(), i == active)).collect()
+            }
+        }
+    }
+}
+
+/// The slice of lines to show around `active`, full whenever the list allows it.
+pub fn band_range(
+    active: usize,
+    len: usize,
+    before: usize,
+    after: usize,
+) -> std::ops::Range<usize> {
+    if len == 0 {
+        return 0..0;
+    }
+    let active = active.min(len - 1);
+    let want = (before + 1 + after).min(len);
+    let mut start = active.saturating_sub(before);
+    let mut end = (active + 1 + after).min(len);
+    // Near the end, slide the band back so it stays full instead of shrinking.
+    if end - start < want {
+        start = end.saturating_sub(want);
+        end = (start + want).min(len);
+    }
+    start..end
+}
+
+/// Which line of an unsynchronised transcript to centre, by progress through the
+/// track. Without a duration there is nothing to follow, so it stays at the top.
+pub fn plain_index(
+    position: std::time::Duration,
+    duration: Option<std::time::Duration>,
+    len: usize,
+) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let Some(duration) = duration else {
+        return 0;
+    };
+    let total = duration.as_secs_f64();
+    if total <= 0.0 {
+        return 0;
+    }
+    let frac = (position.as_secs_f64() / total).clamp(0.0, 1.0);
+    ((frac * len as f64) as usize).min(len - 1)
 }
 
 pub struct PinnedLyricsView {
@@ -165,43 +352,56 @@ impl Render for PinnedLyricsView {
         let t = &theme.colors;
         let state = self.state.read(cx).clone();
 
+        // Karaoke band: only the lines around the active one. Drawing the whole
+        // song here is what made a 70-line lyric sheet unreadable in a 180 px
+        // window.
+        let rows = state.visible_rows();
         let mut lines_container = div()
             .flex()
             .flex_col()
-            .gap(gpui::px(4.0))
+            .justify_center()
+            .gap(gpui::px(5.0))
             .px(gpui::px(16.0))
-            .py(gpui::px(12.0));
+            .py(gpui::px(10.0))
+            .flex_1()
+            .overflow_hidden();
 
-        for (i, line) in state.lines.iter().enumerate() {
-            let is_active = state.active == Some(i);
-            let line_color = if is_active {
-                t.gold_light
-            } else {
-                t.text_secondary
-            };
-            let line_size = if is_active { 13.0 } else { 11.0 };
-            let line_weight = if is_active {
-                gpui::FontWeight::BOLD
-            } else {
-                gpui::FontWeight::NORMAL
-            };
-            let mut line_div = div()
-                .text_size(gpui::px(line_size))
-                .font_family(theme.ui_font)
-                .font_weight(line_weight)
-                .text_color(line_color)
-                .child(line.text.clone());
-            if is_active {
-                line_div = line_div.child(
-                    div()
-                        .mt(gpui::px(2.0))
-                        .w(gpui::px(40.0))
-                        .h(gpui::px(2.0))
-                        .rounded(gpui::px(999.0))
-                        .bg(t.gold),
-                );
+        if rows.is_empty() {
+            lines_container = lines_container.items_center().child(
+                div()
+                    .text_size(gpui::px(12.0))
+                    .font_family(theme.ui_font)
+                    .text_color(t.text_secondary)
+                    .child(state.message.clone()),
+            );
+        } else {
+            for (text, is_active) in rows {
+                let (line_size, line_color, line_weight, opacity) = if is_active {
+                    (16.0, t.gold_light, gpui::FontWeight::BOLD, 1.0)
+                } else {
+                    (11.5, t.text_secondary, gpui::FontWeight::NORMAL, 0.72)
+                };
+                let mut line_div = div()
+                    .w_full()
+                    .text_size(gpui::px(line_size))
+                    .font_family(theme.ui_font)
+                    .font_weight(line_weight)
+                    .text_color(line_color)
+                    .opacity(opacity)
+                    // Long lines wrap instead of overflowing the pinned window.
+                    .child(text);
+                if is_active {
+                    line_div = line_div.child(
+                        div()
+                            .mt(gpui::px(3.0))
+                            .w(gpui::px(40.0))
+                            .h(gpui::px(2.0))
+                            .rounded(gpui::px(999.0))
+                            .bg(t.gold),
+                    );
+                }
+                lines_container = lines_container.child(line_div);
             }
-            lines_container = lines_container.child(line_div);
         }
 
         div()
@@ -288,9 +488,28 @@ impl Render for PinnedLyricsView {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(gpui::px(9.0))
-                            .text_color(t.text_secondary)
-                            .child(format!("{} — {}", state.title, state.artist)),
+                            .flex()
+                            .items_center()
+                            .gap(gpui::px(6.0))
+                            .child(
+                                div()
+                                    .text_size(gpui::px(9.0))
+                                    .text_color(t.text_secondary)
+                                    .child(format!("{} — {}", state.title, state.artist)),
+                            )
+                            .when(state.unsynced, |el| {
+                                el.child(
+                                    div()
+                                        .px(gpui::px(5.0))
+                                        .py(gpui::px(1.0))
+                                        .rounded(gpui::px(999.0))
+                                        .border_1()
+                                        .border_color(t.glass_border)
+                                        .text_size(gpui::px(8.0))
+                                        .text_color(t.text_secondary)
+                                        .child("unsynced"),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -334,5 +553,120 @@ pub fn set_overlay_title(window: &mut gpui::Window) {
 impl Default for OverlayWindow {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod band_tests {
+    use super::*;
+    use crate::lyrics::model::{LyricLine, LyricsStatus};
+    use std::time::Duration;
+
+    fn synced(n: usize) -> Vec<LyricLine> {
+        (0..n)
+            .map(|i| LyricLine {
+                time: Duration::from_secs(i as u64 * 5),
+                text: format!("line {i}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn band_keeps_six_rows_around_the_active_line() {
+        let range = band_range(10, 70, BAND_BEFORE, BAND_AFTER);
+        assert_eq!(range, 8..14);
+        assert_eq!(range.len(), BAND_BEFORE + 1 + BAND_AFTER);
+    }
+
+    #[test]
+    fn band_stays_full_at_the_start_and_the_end() {
+        assert_eq!(band_range(0, 70, BAND_BEFORE, BAND_AFTER), 0..6);
+        let end = band_range(69, 70, BAND_BEFORE, BAND_AFTER);
+        assert_eq!(end, 64..70);
+        assert_eq!(end.len(), 6);
+    }
+
+    #[test]
+    fn band_never_exceeds_the_line_count() {
+        assert_eq!(band_range(1, 3, BAND_BEFORE, BAND_AFTER), 0..3);
+        assert_eq!(band_range(0, 0, BAND_BEFORE, BAND_AFTER), 0..0);
+        assert_eq!(band_range(99, 4, BAND_BEFORE, BAND_AFTER), 0..4);
+    }
+
+    #[test]
+    fn a_long_song_renders_at_most_six_rows() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Synced(synced(70)));
+        state.sync_position(Duration::from_secs(300), 0, Some(Duration::from_secs(360)));
+        let rows = state.visible_rows();
+        assert_eq!(rows.len(), BAND_BEFORE + 1 + BAND_AFTER);
+        assert_eq!(rows.iter().filter(|(_, active)| *active).count(), 1);
+    }
+
+    #[test]
+    fn offset_shifts_which_line_is_active() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Synced(synced(10)));
+        // 5 s lines: at 10 s line 2 is active, with no offset.
+        state.sync_position(Duration::from_secs(10), 0, None);
+        assert_eq!(state.active(), Some(2));
+        // -5000 ms of offset moves playback back a whole line.
+        state.sync_position(Duration::from_secs(10), -5_000, None);
+        assert_eq!(state.active(), Some(1));
+    }
+
+    #[test]
+    fn plain_lyrics_follow_progress_and_never_highlight_a_fake_line() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Plain(
+            (0..10)
+                .map(|i| format!("row {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+        assert!(state.unsynced);
+        assert_eq!(
+            state.active(),
+            None,
+            "plain lyrics must not fake an active line"
+        );
+        assert_eq!(
+            plain_index(Duration::ZERO, Some(Duration::from_secs(100)), 10),
+            0
+        );
+        assert_eq!(
+            plain_index(Duration::from_secs(50), Some(Duration::from_secs(100)), 10),
+            5
+        );
+        assert_eq!(
+            plain_index(Duration::from_secs(100), Some(Duration::from_secs(100)), 10),
+            9
+        );
+        // No duration: nothing to follow, stay at the top.
+        assert_eq!(plain_index(Duration::from_secs(50), None, 10), 0);
+    }
+
+    #[test]
+    fn states_show_a_message_instead_of_an_empty_box() {
+        for (status, expected) in [
+            (LyricsStatus::Instrumental, "♪ Instrumental"),
+            (LyricsStatus::NotFound, "No lyrics found"),
+            (LyricsStatus::Loading, "Loading lyrics…"),
+            (LyricsStatus::Error("boom".into()), "Lyrics unavailable"),
+        ] {
+            let mut state = OverlayState::default();
+            state.set_status(&status);
+            assert_eq!(state.line_count(), 0);
+            assert!(state.visible_rows().is_empty());
+            assert_eq!(state.message, expected, "for {status:?}");
+        }
+    }
+
+    #[test]
+    fn blank_plain_lines_are_dropped() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Plain("a\n\n   \nb".to_string()));
+        assert_eq!(state.line_count(), 2);
+        assert_eq!(state.first_visible_line().as_deref(), Some("a"));
     }
 }

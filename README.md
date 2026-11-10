@@ -13,9 +13,13 @@ and GStreamer.
 - Browse **recent**, **starred**, **artists**, and **playlists** from Navidrome (Subsonic API).
 - Real cover art, with an in-memory LRU and 512 px covers.
 - Playback via GStreamer (`playbin`), with queue, next/previous, repeat/shuffle, seek, volume.
-- **Synced lyrics** from Navidrome (OpenSubsonic) with LRCLIB fallback and a disk cache.
-- **Pinned lyrics overlay** — a borderless, always-above window; on GNOME, a small Shell extension
-  pins it above other windows and across workspaces.
+- **Synced lyrics** from Navidrome (OpenSubsonic) with LRCLIB fallback and a disk cache. LRCLIB
+  results are matched by title, artist and duration, so a different edit of the same song is not
+  accepted: no lyrics beats the wrong lyrics.
+- **Pinned lyrics overlay** — a borderless, always-above window showing a karaoke band of six lines
+  around the line being sung (never the whole song), honouring the lyric offset. Unsynced
+  transcripts follow the track's progress and are marked "unsynced". On GNOME, a small Shell
+  extension pins it above other windows and across workspaces.
 - **MPRIS** controls and metadata (works with `playerctl`, GNOME media menu, etc.).
 - **Scrobbling** (now-playing + submitted) to Navidrome.
 - **Endless autoplay**: when a track ends, Myuzik keeps going with similar music — first

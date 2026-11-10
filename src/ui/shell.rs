@@ -46,6 +46,10 @@ pub struct Shell {
     radio: Arc<std::sync::Mutex<crate::library::radio::Radio>>,
     /// Mirrors `config.autoplay` so the async completion can re-check it.
     autoplay_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Lyric offset in ms, mirrored for the player event loop (which has no
+    /// access to `self`): the pinned overlay has to honour the same offset as
+    /// the Now Playing screen.
+    lyrics_offset_ms: Arc<std::sync::atomic::AtomicI64>,
     /// One radio fetch at a time, so repeated triggers cannot stampede.
     radio_in_flight: Arc<std::sync::atomic::AtomicBool>,
     /// Set when playback ran out before the fetch landed: resume on arrival.
@@ -171,6 +175,9 @@ impl Shell {
         let scrobble_client = client.clone();
         let scrobble_enabled_for_loop = scrobble_enabled.clone();
         let overlay_for_loop = overlay_state.clone();
+        let lyrics_offset_for_loop =
+            Arc::new(std::sync::atomic::AtomicI64::new(config.lyrics_offset_ms));
+        let lyrics_offset_field = lyrics_offset_for_loop.clone();
         let covers_for_loop = paths.covers.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
@@ -247,11 +254,15 @@ impl Shell {
                             });
                         });
                         let os = overlay_for_loop.clone();
+                        let offset_ms =
+                            lyrics_offset_for_loop.load(std::sync::atomic::Ordering::Relaxed);
                         cx.update(|app| {
-                            let lines = os.read(app).lines.clone();
-                            let idx = crate::lyrics::lrc::active_line(&lines, pos);
+                            // The overlay applies the same offset as Now Playing,
+                            // and follows plain transcripts by progress rather
+                            // than faking a synced line.
+                            let duration = state.read(app).duration;
                             app.update_entity(&os, |st, _cx| {
-                                st.active = idx;
+                                st.sync_position(pos, offset_ms, duration);
                             });
                         });
                     }
@@ -370,6 +381,7 @@ impl Shell {
             search_generation,
             radio,
             autoplay_enabled,
+            lyrics_offset_ms: lyrics_offset_field,
             radio_in_flight,
             radio_continue_pending,
             self_weak,
@@ -591,58 +603,21 @@ impl Shell {
 
     pub fn play_track(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
         self.player_state.update(cx, |ps, _cx| {
-            // play_now with single track
             ps.play_now(vec![track.clone()], 0);
         });
-        // send load+play to engine
-        if let Some(client) = &self.client
-            && let Ok(uri) = client.stream_url(&track.id, self.config.quality)
-        {
-            self.player_handle
-                .tx
-                .send(PlayerCommand::Load {
-                    uri,
-                    track_id: track.id.clone(),
-                })
-                .ok();
-            self.player_handle.tx.send(PlayerCommand::Play).ok();
-        }
         // A single track leaves nothing queued, so autoplay has to seed itself
         // from this track while it plays.
-        self.radio.lock().unwrap_or_else(|e| e.into_inner()).reset();
-        self.radio
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .note_played(&track.id);
+        {
+            let mut radio = self.radio.lock().unwrap_or_else(|e| e.into_inner());
+            radio.reset();
+            radio.note_played(&track.id);
+        }
+        // One path for loading: engine, cover, lyrics, Now Playing and the
+        // pinned overlay. Duplicating it here is what left the overlay empty for
+        // tracks started from search or the queue.
+        self.load_and_play(&track, cx);
         if self.config.autoplay {
             self.ensure_radio(false, cx);
-        }
-        // fetch lyrics
-        if let Some(client) = &self.client {
-            let c = client.clone();
-            let t = track.clone();
-            let _ps = self.player_state.clone();
-            let np = self.now_playing.clone();
-            cx.spawn(async move |cx| {
-                let t_bg = t.clone();
-                let c_bg = c.clone();
-                let status = cx
-                    .background_executor()
-                    .spawn(async move {
-                        c_bg.lyrics(&t_bg.id)
-                            .ok()
-                            .flatten()
-                            .unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
-                    })
-                    .await;
-                cx.update(|app| {
-                    app.update_entity(&np, |v, cx| {
-                        v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
-                        v.set_lyrics(cx, status);
-                    });
-                });
-            })
-            .detach();
         }
     }
 
@@ -751,6 +726,11 @@ impl Shell {
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
         self.cache_track_cover(track, cx);
+        // Show the new track's placeholder immediately: without this the pin kept
+        // the previous song's lines until the fetch resolved.
+        self.overlay_state.update(cx, |st, _cx| {
+            st.begin(track.title.clone(), track.artist.clone());
+        });
         if let Some(provider) = &self.lyrics_provider {
             let p = provider.clone();
             let t = track.clone();
@@ -792,20 +772,8 @@ impl Shell {
                         v.set_lyrics(cx, status.clone());
                     });
                     app.update_entity(&os, |st, _cx| {
-                        st.title = t.title.clone();
-                        st.artist = t.artist.clone();
-                        st.active = None;
-                        st.lines = match status {
-                            crate::lyrics::model::LyricsStatus::Synced(lines) => lines,
-                            crate::lyrics::model::LyricsStatus::Plain(text) => text
-                                .lines()
-                                .map(|l| crate::lyrics::model::LyricLine {
-                                    time: std::time::Duration::ZERO,
-                                    text: l.to_string(),
-                                })
-                                .collect(),
-                            _ => Vec::new(),
-                        };
+                        st.begin(t.title.clone(), t.artist.clone());
+                        st.set_status(&status);
                     });
                 });
             })
@@ -1049,6 +1017,8 @@ impl Shell {
             (self.config.lyrics_offset_ms + delta).clamp(-10_000, 10_000);
         self.persist_config();
         let offset = self.config.lyrics_offset_ms;
+        self.lyrics_offset_ms
+            .store(offset, std::sync::atomic::Ordering::Relaxed);
         self.now_playing.update(cx, |np, cx| {
             np.set_offset_ms(offset);
             np.lyrics.update(cx, |view, _cx| view.set_offset_ms(offset));
@@ -1308,19 +1278,31 @@ impl Shell {
     }
 
     pub fn overlay_line_count(&self, cx: &gpui::App) -> usize {
-        self.overlay_state.read(cx).lines.len()
+        self.overlay_state.read(cx).line_count()
     }
 
     pub fn overlay_active(&self, cx: &gpui::App) -> Option<usize> {
-        self.overlay_state.read(cx).active
+        self.overlay_state.read(cx).active()
     }
 
     pub fn overlay_first_line(&self, cx: &gpui::App) -> Option<String> {
-        self.overlay_state
-            .read(cx)
-            .lines
-            .first()
-            .map(|l| l.text.clone())
+        self.overlay_state.read(cx).first_visible_line()
+    }
+
+    /// How many rows the pinned overlay is drawing right now (never more than
+    /// the karaoke band, however long the song's lyrics are).
+    pub fn overlay_visible_rows(&self, cx: &gpui::App) -> usize {
+        self.overlay_state.read(cx).visible_rows().len()
+    }
+
+    /// The message the overlay shows when it has no lines to draw.
+    pub fn overlay_message(&self, cx: &gpui::App) -> Option<String> {
+        let state = self.overlay_state.read(cx);
+        if state.line_count() == 0 {
+            Some(state.message.clone())
+        } else {
+            None
+        }
     }
 
     pub fn current_track_title(&self, cx: &gpui::App) -> Option<String> {

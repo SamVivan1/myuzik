@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Fixed
+- **The pinned lyric overlay is now readable.** It used to render *every* line of the song into a
+  392×180 window — a 70-line lyric sheet collapsed into an unreadable pile — with the whole text
+  wrapping at 11 px. It now draws a karaoke band of at most six lines (two before the active line,
+  three after), keeps the active line at 16 px gold, wraps long lines, drops blank rows, and shows
+  a message ("Loading lyrics…", "♪ Instrumental", "No lyrics found", "Lyrics unavailable") instead
+  of an empty box.
+- **The overlay honours the lyric offset.** The ±500 ms setting only affected Now Playing; the pin
+  ignored it and drifted out of sync. Both now use the same offset.
+- **Plain lyrics no longer fake a synced line.** Untimed transcripts were stored with every
+  timestamp at zero, so the *last* line of the song was highlighted as active for the whole track.
+  They now follow progress through the track proportionally, marked "unsynced".
+- **Tracks started from search reached the overlay.** `play_track` had its own lyrics path that
+  updated only the Now Playing screen, so the pin showed nothing (or the previous song) for those
+  tracks. There is now one loading path.
+- **LRCLIB matching no longer returns another song's lyrics.** Two causes: `/api/get` always sent
+  `album_name`, which makes LRCLIB demand an exact album match and 404 on correct songs (verified:
+  the same request without the album returns 200 with synced lyrics); and the search fallback took
+  the first hit, which for popular titles can be a different edit ("APT." returned 161 s, 170 s and
+  172 s against a 170 s track). Albums are now omitted and search hits are ranked by duration
+  proximity, accepting a synced record only within 3 s. On a 6-track sample this took synced
+  resolution from ~1/6 to 6/6.
+- **LRC parsing hardened**: blank lines dropped, `[offset:±ms]` honoured, mid-line timestamps,
+  enhanced-LRC `<mm:ss.xx>` word tags stripped, BOM/CRLF handled, consecutive duplicates merged.
+- Lyrics cache keys are versioned, so entries written by the old matcher are refetched.
+
 ### Added
 - **Endless autoplay radio.** When the queue runs out, playback continues with similar music
   instead of stopping: tracks similar to the current song, then to its artist, then more from

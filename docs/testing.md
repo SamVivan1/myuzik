@@ -29,9 +29,10 @@ They are `#[ignore]` by default and cover:
 
 ## Unit tests (inline in `src/`)
 
-34 tests, run by the same `cargo test`: config defaults/round-trip (2), LRC parsing and
-offsets (6), Subsonic DTO parsing incl. lyrics shapes (3), overlay geometry clamping (4),
-OS accent mapping (3), log redaction (2), scrobble thresholds (6), theme contrast (5),
+56 tests, run by the same `cargo test`: config defaults/round-trip (2), LRC parsing/offsets and
+the hardened parser (12), LRCLIB matching and payload validation (8), Subsonic DTO parsing incl.
+lyrics shapes (3), overlay geometry clamping (4), overlay karaoke band and lyric states (8), OS
+accent mapping (3), log redaction (2), scrobble thresholds (6), theme contrast (5),
 autoplay-radio selection helpers (3).
 
 ## Mocked UI/integration tests
@@ -55,6 +56,9 @@ autoplay-radio selection helpers (3).
 - `tests/queue.rs`: queue semantics, repeat/shuffle, rapid next/previous, and the autoplay
   primitives (`remaining`, `append`, `append_continue` resuming an exhausted queue, and
   `trim_front_to` bounding the queue under both linear and shuffle playback).
+- `tests/overlay_lyrics.rs`: the pinned overlay through the real `Shell` — a 70-line lyric sheet
+  draws at most six rows, the lyric offset shifts the active line, and a track without lyrics shows
+  a message instead of an empty box.
 - `tests/radio.rs`: autoplay radio against a mocked server — source priority, dedup against
   the queue/history/seed, genre pagination advancing and wrapping, the random backstop, a
   failing source not aborting the batch, and the stall guard.

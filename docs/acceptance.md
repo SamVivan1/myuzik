@@ -23,7 +23,7 @@ inline `#[cfg(test)]` modules in `src/` (31 tests), not separate files under `te
 ```text
 cargo fmt --check                              → clean
 cargo clippy --all-targets -- -D warnings      → clean
-cargo test -- --test-threads=1                 → 102 passed, 0 failed, 10 ignored
+cargo test -- --test-threads=1                 → 127 passed, 0 failed, 11 ignored
 MYUZIK_LIVE=1 cargo test --test live_navidrome -- --ignored → 7 passed, 0 failed
 MYUZIK_LIVE=1 cargo test --test live_player    -- --ignored → 1 passed, 0 failed
 desktop-file-validate packaging/*.desktop      → exit 0
@@ -76,6 +76,20 @@ server, enabled with `MYUZIK_LIVE=1`) and the 1 `screenshots` capture.
 | Player bar: play/pause, ±10 s, volume ±, progress, cover | ✅ run today — `home_album_track_play_flow` (tests/ui_flow.rs) |
 | Global shortcuts: Space, arrows, Shift+arrows, Ctrl+K, Ctrl+P, Esc | ✅ run today — `global_shortcuts_work` (tests/ui_flow.rs) |
 | EOS advances to the next track | ✅ earlier — `play_next` path; MPRIS `next` verified with `playerctl` in the earlier acceptance run |
+
+### Lyrics rendering and matching
+
+| Check | Result |
+|---|---|
+| The pinned overlay draws a band (≤6 rows), never the whole song | ✅ run today — `overlay_draws_a_band_not_the_whole_song` (tests/overlay_lyrics.rs), `a_long_song_renders_at_most_six_rows` |
+| Band stays full and correct at the start, middle and end of a song | ✅ run today — `band_keeps_six_rows_around_the_active_line`, `band_stays_full_at_the_start_and_the_end`, `band_never_exceeds_the_line_count` |
+| The lyric offset moves the pinned overlay, not just Now Playing | ✅ run today — `lyric_offset_shifts_the_overlay`, `offset_shifts_which_line_is_active` |
+| Plain (untimed) lyrics follow progress and never fake an active line | ✅ run today — `plain_lyrics_follow_progress_and_never_highlight_a_fake_line` |
+| Missing/instrumental/error shows a message, not an empty box | ✅ run today — `states_show_a_message_instead_of_an_empty_box`, `overlay_shows_a_message_when_lyrics_are_missing` |
+| Blank lyric rows are dropped | ✅ run today — `blank_plain_lines_are_dropped`, `ignores_metadata_and_drops_blank_lines` |
+| LRC hardening: `[offset:]`, mid-line stamps, enhanced-LRC tags, BOM/CRLF, duplicates | ✅ run today — `header_offset_tag_shifts_every_line`, `handles_inline_stamps_and_text_before_them`, `strips_enhanced_lrc_word_timing`, `strips_bom_and_handles_crlf`, `drops_consecutive_duplicate_lines` |
+| A different edit of the same song is not accepted as synced | ✅ run today — `picks_the_recording_whose_duration_matches`, `refuses_a_synced_match_that_is_a_different_recording`, `falls_back_to_plain_when_the_synced_match_is_too_far` |
+| Real tracks resolve to usable lyrics | ✅ run today — live `live_lyrics_quality_in_the_overlay`: 6 of 6 sampled tracks resolved synced, each drawing ≤6 rows across the whole track |
 
 ### Autoplay radio
 
