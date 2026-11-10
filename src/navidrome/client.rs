@@ -40,7 +40,10 @@ impl NavidromeClient {
         if !base_url.path().ends_with('/') {
             base_url = base_url.join("/").map_err(|e| NavidromeError::Protocol(e.to_string()))?;
         }
-        let agent = ureq::Agent::new_with_defaults();
+        let config = ureq::Agent::config_builder()
+            .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
         Ok(Self {
             base_url,
             username: username.to_string(),
@@ -70,7 +73,14 @@ impl NavidromeClient {
         }
 
         let resp = self.agent.get(url.as_str()).call().map_err(NavidromeError::from)?;
-        let parsed: T = resp.into_body().read_json().map_err(NavidromeError::from)?;
+        let value: serde_json::Value = resp.into_body().read_json().map_err(NavidromeError::from)?;
+        let inner = match value {
+            serde_json::Value::Object(mut map) => map
+                .remove("subsonic-response")
+                .unwrap_or(serde_json::Value::Object(map)),
+            other => other,
+        };
+        let parsed: T = serde_json::from_value(inner)?;
         Ok(parsed)
     }
 
@@ -140,7 +150,8 @@ impl NavidromeClient {
         let resp: SubsonicResponse<AlbumDetailData> = self.get_json("getAlbum", &[("id", id)])?;
         Self::check_status(&resp)?;
         let album = resp.data.album.ok_or(NavidromeError::NotFound)?;
-        Ok(album_detail_from_dto(album, resp.data.song))
+        let songs = if album.song.is_empty() { resp.data.song } else { album.song.clone() };
+        Ok(album_detail_from_dto(album, songs))
     }
 
     pub fn playlists(&self) -> Result<Vec<Playlist>, NavidromeError> {

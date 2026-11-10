@@ -9,6 +9,12 @@ pub struct SubsonicError {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct SubsonicEnvelope<T> {
+    #[serde(rename = "subsonic-response")]
+    pub response: SubsonicResponse<T>,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct SubsonicResponse<T> {
     pub status: String,
     pub version: Option<String>,
@@ -46,6 +52,8 @@ pub struct AlbumDto {
     pub duration: Option<i64>,
     pub year: Option<u32>,
     pub starred: Option<String>,
+    #[serde(default)]
+    pub song: Vec<SongDto>,
 }
 
 #[derive(Deserialize, Debug, Default)]

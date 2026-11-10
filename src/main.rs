@@ -20,6 +20,14 @@ fn main() {
 
     let app = application();
     app.run(move |cx| {
+        let fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Fraunces.ttf")),
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Inter.ttf")),
+        ];
+        if let Err(e) = cx.text_system().add_fonts(fonts) {
+            tracing::warn!("failed to load bundled fonts: {e:?}");
+        }
+
         let player_handle = spawn_player();
         let mpris_handle = start_mpris(player_handle.tx.clone()).ok();
 

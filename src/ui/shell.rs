@@ -636,6 +636,33 @@ impl Render for Shell {
             .child(
                 div()
                     .absolute()
+                    .inset_0()
+                    .bg(gpui::linear_gradient(
+                        135.0,
+                        gpui::linear_color_stop(gpui::rgba(0x1A140CFF), 0.0),
+                        gpui::linear_color_stop(gpui::rgba(0x0B0B0EFF), 1.0),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(gpui::px(-180.0))
+                    .left(gpui::px(-80.0))
+                    .w(gpui::px(720.0))
+                    .h(gpui::px(520.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(gpui::rgba(0xC9A86A10))
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::rgba(0xC9A86A18).into(),
+                        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                        blur_radius: gpui::px(220.0),
+                        spread_radius: gpui::px(0.0),
+                        inset: false,
+                    }]),
+            )
+            .child(
+                div()
+                    .absolute()
                     .inset(gpui::px(24.0))
                     .rounded(gpui::px(theme.radii.glass))
                     .bg(t.glass_tint)
@@ -897,20 +924,7 @@ impl Render for Shell {
                                 col
                             } else {
                                 div()
-                                    .font_family(theme.display_font)
-                                    .text_size(gpui::px(16.0))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("Made for you")
-                            })
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(gpui::px(6.0))
-                                    .child(track_row("01", "Midnight Static", "Lumen Fields", "3:42", true, t))
-                                    .child(track_row("02", "Paper Satellites", "Kite Garden", "4:07", false, t))
-                                    .child(track_row("03", "Golden Hour", "Vela", "3:18", false, t)),
-                            ),
+                            }),
                     ),
             )
             .child(player)
@@ -956,19 +970,26 @@ fn playlist_item(label: &str, t: &crate::theme::Colors) -> gpui::Div {
 }
 
 fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div {
+    let initial = title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".to_string());
     gpui::div()
         .flex()
         .flex_col()
-        .gap(gpui::px(6.0))
+        .gap(gpui::px(7.0))
+        .w(gpui::px(168.0))
         .child(
             gpui::div()
-                .aspect_ratio(1.0)
+                .w(gpui::px(168.0))
+                .h(gpui::px(168.0))
                 .rounded(gpui::px(16.0))
-                .bg(t.glass_tint)
+                .bg(gpui::linear_gradient(
+                    135.0,
+                    gpui::linear_color_stop(t.gold_deep, 0.0),
+                    gpui::linear_color_stop(t.clay_surface, 1.0),
+                ))
                 .border_1()
                 .border_color(t.glass_border)
                 .shadow(vec![gpui::BoxShadow {
-                    color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
+                    color: gpui::hsla(0.05, 0.4, 0.05, 0.35),
                     offset: gpui::point(gpui::px(0.0), gpui::px(14.0)),
                     blur_radius: gpui::px(32.0),
                     spread_radius: gpui::px(0.0),
@@ -979,26 +1000,26 @@ fn album_card(title: &str, artist: &str, t: &crate::theme::Colors) -> gpui::Div 
                 .justify_center()
                 .child(
                     gpui::div()
-                        .w(gpui::px(33.0))
-                        .h(gpui::px(33.0))
-                        .rounded(gpui::px(999.0))
-                        .bg(t.gold)
+                        .font_family("Fraunces")
+                        .text_size(gpui::px(54.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.clay_ink)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child("▶"),
+                        .opacity(0.85)
+                        .child(initial),
                 ),
         )
         .child(
             gpui::div()
-                .text_size(gpui::px(10.0))
+                .w(gpui::px(168.0))
+                .text_size(gpui::px(11.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(t.text_primary)
                 .child(title.to_string()),
         )
         .child(
             gpui::div()
-                .text_size(gpui::px(8.0))
+                .w(gpui::px(168.0))
+                .text_size(gpui::px(9.0))
                 .text_color(t.text_secondary)
                 .child(artist.to_string()),
         )
