@@ -1349,6 +1349,8 @@ impl Render for Shell {
                                                     .py(gpui::px(8.0))
                                                     .rounded(gpui::px(10.0))
                                                     .bg(t.glass_tint)
+                                                    .border_1()
+                                                    .border_color(t.glass_border)
                                                     .text_size(gpui::px(12.0))
                                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                                         this.play_tracks(songs2.clone(), i, cx);
@@ -1487,7 +1489,27 @@ impl Render for Shell {
                                                 .px(gpui::px(16.0))
                                                 .py(gpui::px(8.0))
                                                 .rounded(gpui::px(999.0))
-                                                .bg(t.gold)
+                                                .bg(gpui::linear_gradient(
+                                                    145.0,
+                                                    gpui::linear_color_stop(t.gold_light, 0.0),
+                                                    gpui::linear_color_stop(t.gold, 1.0),
+                                                ))
+                                                .shadow(vec![
+                                                    gpui::BoxShadow {
+                                                        color: gpui::rgba(0xFFFFFFB3).into(),
+                                                        offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                                        blur_radius: gpui::px(3.0),
+                                                        spread_radius: gpui::px(0.0),
+                                                        inset: true,
+                                                    },
+                                                    gpui::BoxShadow {
+                                                        color: gpui::rgba(0x5A411E55).into(),
+                                                        offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
+                                                        blur_radius: gpui::px(5.0),
+                                                        spread_radius: gpui::px(0.0),
+                                                        inset: true,
+                                                    },
+                                                ])
                                                 .text_color(t.clay_ink)
                                                 .text_size(gpui::px(10.0))
                                                 .font_weight(gpui::FontWeight::BOLD)
