@@ -7,8 +7,6 @@ use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
 use crate::player::state::{PlaybackStatus, PlayerState};
 use crate::theme::midnight_brass;
 use crate::ui::now_playing::NowPlayingView;
-use crate::ui::search::SearchView;
-use crate::ui::settings::SettingsView;
 use gpui::{
     AnimationExt, Context, InteractiveElement, Render, StatefulInteractiveElement, Window, div,
     prelude::*,
@@ -35,8 +33,6 @@ pub struct Shell {
     search_focus: gpui::FocusHandle,
     now_playing: gpui::Entity<NowPlayingView>,
     _np_subscription: gpui::Subscription,
-    search_view: gpui::Entity<SearchView>,
-    settings_view: gpui::Entity<SettingsView>,
     mpris_handle: Option<MprisHandle>,
     overlay_state: gpui::Entity<crate::overlay::OverlayState>,
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
@@ -56,6 +52,11 @@ pub struct Shell {
     setup_focus_requested: bool,
     root_focus: gpui::FocusHandle,
     root_focus_requested: bool,
+    /// Focus handles for every tabbable control in the shell, keyed by a
+    /// logical name (`nav-home`, `player-play`, `album:a1`, …). Created lazily
+    /// while rendering and cached so a control keeps the same focus handle
+    /// (and therefore the same accesskit node) across frames.
+    a11y_focus: std::cell::RefCell<std::collections::HashMap<String, gpui::FocusHandle>>,
 }
 
 impl Shell {
@@ -96,8 +97,6 @@ impl Shell {
                 }
             },
         );
-        let search_view = cx.new(|_cx| SearchView::new());
-        let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
         let overlay_handle = None;
         let overlay_geometry = Arc::new(std::sync::Mutex::new(crate::overlay::OverlayGeometry {
@@ -346,8 +345,6 @@ impl Shell {
             search_focus,
             now_playing,
             _np_subscription: np_subscription,
-            search_view,
-            settings_view,
             overlay_state,
             overlay_handle,
             overlay_geometry,
@@ -366,6 +363,7 @@ impl Shell {
             setup_focus_requested,
             root_focus,
             root_focus_requested,
+            a11y_focus: std::cell::RefCell::new(std::collections::HashMap::new()),
             mpris_handle,
         }
     }
@@ -396,6 +394,78 @@ impl Shell {
 
     pub fn set_volume(&self, v: f32) {
         self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+    }
+
+    // --- Keyboard focus order and focus ring -------------------------------
+    //
+    // gpui sorts tab stops by `tab_index` and then by paint order, so these
+    // group numbers define the whole window's focus order: sidebar navigation
+    // first, then the page content, then the player bar, then the window
+    // chrome. Every tabbable control gets a handle from `focus_for` and a
+    // 2 px OS-accent ring from `focus_border` (see docs/accessibility.md).
+
+    pub const TAB_NAV: isize = 0;
+    pub const TAB_CONTENT: isize = 1;
+    pub const TAB_PLAYER: isize = 2;
+    pub const TAB_CHROME: isize = 3;
+
+    /// The focus handle for a tabbable control, created on first use.
+    fn focus_for(
+        &self,
+        key: &str,
+        tab_index: isize,
+        cx: &gpui::Context<Self>,
+    ) -> gpui::FocusHandle {
+        let mut handles = self.a11y_focus.borrow_mut();
+        let handle = handles
+            .entry(key.to_string())
+            .or_insert_with(|| cx.focus_handle())
+            .clone();
+        // An element that supplies its own focus handle is inserted into gpui's
+        // tab-stop map with *that* handle, so the tab settings have to live on
+        // the handle itself (not only on the element).
+        handle.tab_stop(true).tab_index(tab_index)
+    }
+
+    /// Border colour for a keyboard-focusable control: the OS accent while it
+    /// has keyboard focus, otherwise the component's own resting border.
+    ///
+    /// Controls are drawn with a reserved 2 px border so that gaining focus
+    /// never shifts the layout (gpui at this revision has no outline API). A
+    /// control that has no border of its own passes
+    /// a fully transparent [`gpui::rgba`], so the ring is invisible until it is
+    /// focused: focus is the only thing that draws a border. Controls that
+    /// already have a visible border (search fields, settings rows, cards)
+    /// pass their own token and keep it.
+    fn focus_border(
+        &self,
+        handle: &gpui::FocusHandle,
+        window: &gpui::Window,
+        rest: impl Into<gpui::Rgba>,
+        t: &crate::theme::Colors,
+    ) -> gpui::Rgba {
+        if handle.is_focused(window) {
+            t.os_accent
+        } else {
+            rest.into()
+        }
+    }
+
+    /// The logical name of the focused control, when it is one of the shell's
+    /// tabbable controls. Used by `tests/a11y.rs` to assert the tab order.
+    pub fn focused_control(&self, window: &gpui::Window) -> Option<String> {
+        self.a11y_focus
+            .borrow()
+            .iter()
+            .find(|(_, handle)| handle.is_focused(window))
+            .map(|(key, _)| key.clone())
+    }
+
+    /// The logical names of every control registered for keyboard focus.
+    pub fn focus_controls(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.a11y_focus.borrow().keys().cloned().collect();
+        keys.sort();
+        keys
     }
 
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
@@ -433,7 +503,7 @@ impl Shell {
         let state = self.overlay_state.clone();
         let geometry = self.overlay_geometry.clone();
         let handle = cx.open_window(opts, move |_window, cx| {
-            cx.new(|_cx| crate::overlay::PinnedLyricsView::new(state, geometry))
+            cx.new(|cx| crate::overlay::PinnedLyricsView::new(state, geometry, cx))
         });
         if let Ok(h) = handle {
             h.update(cx, |_view, window, _cx| {
@@ -1154,6 +1224,8 @@ impl Render for Shell {
                 let e = setup_entity.clone();
                 div()
                     .id(format!("setup-field-{}", idx))
+                    .role(gpui::Role::TextInput)
+                    .aria_label(format!("{} field", label))
                     .debug_selector({
                         let d = idx;
                         move || format!("setup-field-{}", d)
@@ -1273,6 +1345,8 @@ impl Render for Shell {
                         .child(
                             div()
                                 .id("setup-connect")
+                                .role(gpui::Role::Button)
+                                .aria_label("Connect to Navidrome")
                                 .debug_selector(|| "setup-connect".to_string())
                                 .cursor_pointer()
                                 .px(gpui::px(18.0))
@@ -1298,6 +1372,39 @@ impl Render for Shell {
                 )
                 .into_any_element();
         }
+
+        // Keyboard-focus handles for the persistent chrome. The sidebar, the
+        // player bar and the window controls are always rendered, so their
+        // handles exist up front; content controls create theirs in the branch
+        // that renders them.
+        let nav_focus: Vec<gpui::FocusHandle> = [
+            "nav-home",
+            "nav-nowplaying",
+            "nav-search",
+            "nav-albums",
+            "nav-artists",
+            "nav-playlists",
+            "nav-favorites",
+            "nav-settings",
+        ]
+        .iter()
+        .map(|key| self.focus_for(key, Self::TAB_NAV, cx))
+        .collect();
+        let f_np_open = self.focus_for("player-now-playing", Self::TAB_PLAYER, cx);
+        let f_seek_back = self.focus_for("player-seek-back", Self::TAB_PLAYER, cx);
+        let f_prev = self.focus_for("player-prev", Self::TAB_PLAYER, cx);
+        let f_play = self.focus_for("player-play", Self::TAB_PLAYER, cx);
+        let f_next = self.focus_for("player-next", Self::TAB_PLAYER, cx);
+        let f_seek_fwd = self.focus_for("player-seek-forward", Self::TAB_PLAYER, cx);
+        let f_vol_down = self.focus_for("player-volume-down", Self::TAB_PLAYER, cx);
+        let f_vol_up = self.focus_for("player-volume-up", Self::TAB_PLAYER, cx);
+        let f_pin = self.focus_for("player-pin-lyrics", Self::TAB_PLAYER, cx);
+        let f_sidebar_pin = self.focus_for("sidebar-pin-lyrics", Self::TAB_NAV, cx);
+        let f_win_close = self.focus_for("window-close", Self::TAB_CHROME, cx);
+        let f_win_min = self.focus_for("window-minimize", Self::TAB_CHROME, cx);
+        let f_win_max = self.focus_for("window-maximize", Self::TAB_CHROME, cx);
+        let f_search_shortcut = self.focus_for("content-search-shortcut", Self::TAB_CONTENT, cx);
+        let f_see_all = self.focus_for("content-see-all-albums", Self::TAB_CONTENT, cx);
 
         let decorations = window.window_decorations();
         let (shadow_size, rounded_window) = match decorations {
@@ -1393,6 +1500,12 @@ impl Render for Shell {
                     .w(gpui::px(260.0))
                     .cursor_pointer()
                     .id("np-open")
+                    .track_focus(&f_np_open)
+                    .tab_index(Self::TAB_PLAYER)
+                    .role(gpui::Role::Button)
+                    .aria_label("Open Now Playing")
+                    .border_2()
+                    .border_color(self.focus_border(&f_np_open, window, gpui::rgba(0x00000000), t))
                     .debug_selector(|| "np-open".to_string())
                     .on_click(cx.listener(|this, _event, _window, _cx| {
                         this.route = Route::NowPlaying;
@@ -1489,6 +1602,17 @@ impl Render for Shell {
                                     .opacity(0.7)
                                     .cursor_pointer()
                                     .id("seek-back")
+                                    .aria_label("Seek back 10 seconds")
+                                    .track_focus(&f_seek_back)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_seek_back,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
                                     .debug_selector(|| "seek-back".to_string())
                                     .on_click(cx.listener(move |this, _event, _window, _cx| {
                                         let back = position
@@ -1507,6 +1631,16 @@ impl Render for Shell {
                                     .text_color(t.clay_ink)
                                     .cursor_pointer()
                                     .id("prev-btn")
+                                    .track_focus(&f_prev)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_prev,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
                                     .aria_label("Previous track")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.play_previous(cx);
@@ -1546,6 +1680,17 @@ impl Render for Shell {
                                     .text_size(gpui::px(16.0))
                                     .cursor_pointer()
                                     .id("play-btn")
+                                    .track_focus(&f_play)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_play,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
+                                    .aria_label(if is_playing { "Pause" } else { "Play" })
                                     .debug_selector(|| "play-btn".to_string())
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.player_state.update(cx, |ps, _cx| ps.toggle());
@@ -1563,6 +1708,16 @@ impl Render for Shell {
                                     .text_color(t.clay_ink)
                                     .cursor_pointer()
                                     .id("next-btn")
+                                    .track_focus(&f_next)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_next,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
                                     .aria_label("Next track")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.play_next(cx);
@@ -1581,6 +1736,17 @@ impl Render for Shell {
                                     .opacity(0.7)
                                     .cursor_pointer()
                                     .id("seek-fwd")
+                                    .aria_label("Seek forward 10 seconds")
+                                    .track_focus(&f_seek_fwd)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_seek_fwd,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
                                     .debug_selector(|| "seek-fwd".to_string())
                                     .on_click(cx.listener(move |this, _event, _window, _cx| {
                                         let fwd = position
@@ -1642,6 +1808,17 @@ impl Render for Shell {
                     .child(
                         div()
                             .id("vol-down")
+                            .track_focus(&f_vol_down)
+                            .tab_index(Self::TAB_PLAYER)
+                            .role(gpui::Role::Button)
+                            .aria_label("Volume down")
+                            .border_2()
+                            .border_color(self.focus_border(
+                                &f_vol_down,
+                                window,
+                                gpui::rgba(0x00000000),
+                                t,
+                            ))
                             .debug_selector(|| "vol-down".to_string())
                             .cursor_pointer()
                             .px(gpui::px(4.0))
@@ -1676,6 +1853,17 @@ impl Render for Shell {
                     .child(
                         div()
                             .id("vol-up")
+                            .track_focus(&f_vol_up)
+                            .tab_index(Self::TAB_PLAYER)
+                            .role(gpui::Role::Button)
+                            .aria_label("Volume up")
+                            .border_2()
+                            .border_color(self.focus_border(
+                                &f_vol_up,
+                                window,
+                                gpui::rgba(0x00000000),
+                                t,
+                            ))
                             .debug_selector(|| "vol-up".to_string())
                             .cursor_pointer()
                             .px(gpui::px(4.0))
@@ -1722,6 +1910,17 @@ impl Render for Shell {
                             .font_weight(gpui::FontWeight::BOLD)
                             .cursor_pointer()
                             .id("pin-btn")
+                            .track_focus(&f_pin)
+                            .tab_index(Self::TAB_PLAYER)
+                            .role(gpui::Role::Button)
+                            .aria_label("Pin or unpin the lyrics overlay")
+                            .border_2()
+                            .border_color(self.focus_border(
+                                &f_pin,
+                                window,
+                                gpui::rgba(0x00000000),
+                                t,
+                            ))
                             .active(|style| style.opacity(0.9))
                             .on_click(cx.listener(|this, _event, _window, _cx| {
                                 if this.overlay_handle.is_some() {
@@ -1750,11 +1949,24 @@ impl Render for Shell {
             .on_key_down(move |ev, window, app| {
                 let entity = key_entity.clone();
                 app.update_entity(&entity, |this, cx| {
+                    let key = ev.keystroke.key.as_str();
+                    let mods = ev.keystroke.modifiers;
+                    // Tab moves through the shell's focus order (sidebar →
+                    // content → player bar → window chrome). It is handled
+                    // before the text-entry guard so Tab also leaves the
+                    // search field.
+                    if key == "tab" && !mods.control && !mods.alt {
+                        if mods.shift {
+                            window.focus_prev(cx);
+                        } else {
+                            window.focus_next(cx);
+                        }
+                        cx.notify();
+                        return;
+                    }
                     if this.search_focus.is_focused(window) {
                         return;
                     }
-                    let key = ev.keystroke.key.as_str();
-                    let mods = ev.keystroke.modifiers;
                     match key {
                         "space" if !mods.control && !mods.alt => {
                             this.player_state.update(cx, |ps, _cx| ps.toggle());
@@ -1940,7 +2152,7 @@ impl Render for Shell {
                                     .gap(gpui::px(8.0))
                                     .child(
                                         div()
-                                            .id("win-close").debug_selector(|| "win-close".to_string()).aria_label("Close window")
+                                            .id("win-close").track_focus(&f_win_close).tab_index(Self::TAB_CHROME).role(gpui::Role::Button).border_2().border_color(self.focus_border(&f_win_close, window, gpui::rgba(0x00000000), t)).debug_selector(|| "win-close".to_string()).aria_label("Close window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1953,7 +2165,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-min").debug_selector(|| "win-min".to_string()).aria_label("Minimize window")
+                                            .id("win-min").track_focus(&f_win_min).tab_index(Self::TAB_CHROME).role(gpui::Role::Button).border_2().border_color(self.focus_border(&f_win_min, window, gpui::rgba(0x00000000), t)).debug_selector(|| "win-min".to_string()).aria_label("Minimize window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1966,7 +2178,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-max").debug_selector(|| "win-max".to_string()).aria_label("Maximize window")
+                                            .id("win-max").track_focus(&f_win_max).tab_index(Self::TAB_CHROME).role(gpui::Role::Button).border_2().border_color(self.focus_border(&f_win_max, window, gpui::rgba(0x00000000), t)).debug_selector(|| "win-max".to_string()).aria_label("Maximize window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -2059,14 +2271,14 @@ impl Render for Shell {
                                     .flex()
                                     .flex_col()
                                     .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").debug_selector(|| "nav-home".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
-                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
-                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
+                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").track_focus(&nav_focus[0]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Home").aria_selected(self.route == Route::Home).border_2().border_color(self.focus_border(&nav_focus[0], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-home".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
+                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").track_focus(&nav_focus[1]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Now Playing").aria_selected(self.route == Route::NowPlaying).border_2().border_color(self.focus_border(&nav_focus[1], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-nowplaying".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").track_focus(&nav_focus[2]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Search").aria_selected(self.route == Route::Search).border_2().border_color(self.focus_border(&nav_focus[2], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-search".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
+                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").track_focus(&nav_focus[3]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Albums").aria_selected(self.route == Route::Albums).border_2().border_color(self.focus_border(&nav_focus[3], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-albums".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").track_focus(&nav_focus[4]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Artists").aria_selected(self.route == Route::Artists).border_2().border_color(self.focus_border(&nav_focus[4], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-artists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").track_focus(&nav_focus[5]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Playlists").aria_selected(self.route == Route::Playlists).border_2().border_color(self.focus_border(&nav_focus[5], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-playlists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").track_focus(&nav_focus[6]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Favorites").aria_selected(self.route == Route::Favorites).border_2().border_color(self.focus_border(&nav_focus[6], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-favorites".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").track_focus(&nav_focus[7]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Settings").aria_selected(self.route == Route::Settings).border_2().border_color(self.focus_border(&nav_focus[7], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-settings".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
                             )
                             .child(
                                 div()
@@ -2105,7 +2317,7 @@ impl Render for Shell {
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .cursor_pointer()
-                                            .id("pin-btn").active(|style| style.opacity(0.9))
+                                            .id("pin-btn").track_focus(&f_sidebar_pin).tab_index(Self::TAB_NAV).role(gpui::Role::Button).aria_label("Pin or unpin the lyrics overlay").border_2().border_color(self.focus_border(&f_sidebar_pin, window, gpui::rgba(0x00000000), t)).active(|style| style.opacity(0.9))
                                             .on_click(cx.listener(|this, _event, _window, _cx| {
                                                 if this.overlay_handle.is_some() { this.close_overlay(_cx); } else { this.open_overlay(_cx); }
                                             }))
@@ -2178,6 +2390,12 @@ impl Render for Shell {
                                     .child(
                                         div()
                                             .id("home-search")
+                                            .track_focus(&f_search_shortcut)
+                                            .tab_index(Self::TAB_CONTENT)
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Search your library (Ctrl K)")
+                                            .border_2()
+                                            .border_color(self.focus_border(&f_search_shortcut, window, t.glass_border, t))
                                             .cursor_pointer()
                                             .flex()
                                             .items_center()
@@ -2242,6 +2460,12 @@ impl Render for Shell {
                                     .child(
                                         div()
                                             .id("see-all-albums")
+                                            .track_focus(&f_see_all)
+                                            .tab_index(Self::TAB_CONTENT)
+                                            .role(gpui::Role::Link)
+                                            .aria_label("See all albums")
+                                            .border_2()
+                                            .border_color(self.focus_border(&f_see_all, window, gpui::rgba(0x00000000), t))
                                             .cursor_pointer()
                                             .text_size(gpui::px(10.0))
                                             .text_color(t.text_secondary)
@@ -2259,6 +2483,9 @@ impl Render for Shell {
                                     div()
                                         .id("search-box")
                                         .track_focus(&self.search_focus)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::TextInput)
+                                        .aria_label("Search your library")
                                         .focusable()
                                         .on_key_down(move |ev, _window, app| {
                                             let entity = search_entity.clone();
@@ -2311,7 +2538,12 @@ impl Render for Shell {
                                         .rounded(gpui::px(999.0))
                                         .bg(t.glass_tint)
                                         .border_2()
-                                        .border_color(t.os_accent)
+                                        .border_color(self.focus_border(
+                                            &self.search_focus,
+                                            window,
+                                            t.glass_border,
+                                            t,
+                                        ))
                                         .cursor_text()
                                         .child(
                                             div()
@@ -2338,9 +2570,21 @@ impl Render for Shell {
                                         let songs = results.songs.clone();
                                         for (i, tr) in results.songs.iter().take(20).enumerate() {
                                             let songs2 = songs.clone();
+                                            let f_search_song =
+                                                self.focus_for(&format!("search-song-{i}"), Self::TAB_CONTENT, cx);
                                             col = col.child(
                                                 div()
                                                     .id(format!("search-song-{}", i))
+                                                    .track_focus(&f_search_song)
+                                                    .tab_index(Self::TAB_CONTENT)
+                                                    .role(gpui::Role::Button)
+                                                    .border_2()
+                                                    .border_color(self.focus_border(
+                                                        &f_search_song,
+                                                        window,
+                                                        t.glass_border,
+                                                        t,
+                                                    ))
                                                     .aria_label(format!("Play {}", tr.title))
                                                     .cursor_pointer()
                                                     .px(gpui::px(12.0))
@@ -2366,6 +2610,14 @@ impl Render for Shell {
                                 col
                             } else if self.route == Route::Settings {
                                 let mut col = div().flex().flex_col().gap(gpui::px(8.0));
+                                let f_set_quality = self.focus_for("settings-quality", Self::TAB_CONTENT, cx);
+                                let f_set_scrobble = self.focus_for("settings-scrobble", Self::TAB_CONTENT, cx);
+                                let f_set_lyrics_source =
+                                    self.focus_for("settings-lyrics-source", Self::TAB_CONTENT, cx);
+                                let f_set_reduce_motion =
+                                    self.focus_for("settings-reduce-motion", Self::TAB_CONTENT, cx);
+                                let f_offset_down = self.focus_for("settings-offset-down", Self::TAB_CONTENT, cx);
+                                let f_offset_up = self.focus_for("settings-offset-up", Self::TAB_CONTENT, cx);
                                 col = col
                                     .child(settings_section("Account", t))
                                     .child(setting_row("Server URL", &self.config.server_url, t))
@@ -2374,6 +2626,7 @@ impl Render for Shell {
                                     .child(
                                         setting_row("Stream quality", self.quality_label(), t)
                                             .id("set-quality").debug_selector(|| "set-quality".to_string())
+                                            .track_focus(&f_set_quality).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label(format!("Stream quality, {}", self.quality_label())).border_2().border_color(self.focus_border(&f_set_quality, window, t.glass_border, t))
                                             .cursor_pointer()
                                             .on_click(cx.listener(|this, _event, _window, _cx| {
                                                 this.cycle_quality();
@@ -2386,6 +2639,7 @@ impl Render for Shell {
                                             t,
                                         )
                                         .id("set-scrobble").debug_selector(|| "set-scrobble".to_string())
+                                            .track_focus(&f_set_scrobble).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label(format!("Scrobble, {}", if self.config.scrobble { "on" } else { "off" })).border_2().border_color(self.focus_border(&f_set_scrobble, window, t.glass_border, t))
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _event, _window, _cx| {
                                             this.toggle_scrobble();
@@ -2412,6 +2666,7 @@ impl Render for Shell {
                                             .child(
                                                 div()
                                                     .id("offset-down").debug_selector(|| "offset-down".to_string())
+                                            .track_focus(&f_offset_down).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label("Decrease lyrics offset by 500 ms").border_2().border_color(self.focus_border(&f_offset_down, window, t.glass_border, t))
                                                     .cursor_pointer()
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(6.0))
@@ -2430,6 +2685,7 @@ impl Render for Shell {
                                             .child(
                                                 div()
                                                     .id("offset-up").debug_selector(|| "offset-up".to_string())
+                                            .track_focus(&f_offset_up).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label("Increase lyrics offset by 500 ms").border_2().border_color(self.focus_border(&f_offset_up, window, t.glass_border, t))
                                                     .cursor_pointer()
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(6.0))
@@ -2457,6 +2713,7 @@ impl Render for Shell {
                                             t,
                                         )
                                         .id("set-lyrics-source").debug_selector(|| "set-lyrics-source".to_string())
+                                            .track_focus(&f_set_lyrics_source).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label(format!("Lyrics source, {}", if self.config.prefer_navidrome_lyrics { "Navidrome first" } else { "LRCLIB first" })).border_2().border_color(self.focus_border(&f_set_lyrics_source, window, t.glass_border, t))
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _event, _window, _cx| {
                                             this.toggle_lyrics_source();
@@ -2470,6 +2727,7 @@ impl Render for Shell {
                                             t,
                                         )
                                         .id("set-reduce-motion").debug_selector(|| "set-reduce-motion".to_string())
+                                            .track_focus(&f_set_reduce_motion).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label(format!("Reduce motion, {}", if self.config.reduce_motion { "on" } else { "off" })).border_2().border_color(self.focus_border(&f_set_reduce_motion, window, t.glass_border, t))
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _event, _window, cx| {
                                             this.toggle_reduce_motion(cx);
@@ -2483,12 +2741,34 @@ impl Render for Shell {
                                 if let Some(detail) = &self.artist_detail {
                                     let albums = detail.albums.clone();
                                     let artist_name = detail.artist.name.clone();
-                                    let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
+                                    let f_back_link =
+                                        self.focus_for("artists-back", Self::TAB_CONTENT, cx);
+                                    let artist_grid_label = format!("Albums by {}", artist_name);
+                                    let mut grid = div()
+                                        .grid()
+                                        .grid_cols(4)
+                                        .gap(gpui::px(14.0))
+                                        .id("artist-album-grid")
+                                        .role(gpui::Role::Grid)
+                                        .aria_label(artist_grid_label);
                                     for a in albums.iter() {
                                         let aid = a.id.clone();
+                                        let f_album =
+                                            self.focus_for(&format!("artist-album:{}", aid), Self::TAB_CONTENT, cx);
                                         grid = grid.child(
                                             album_card(&a.name, &a.artist, None, t)
                                                 .id(format!("artist-album-{}", aid))
+                                                .track_focus(&f_album)
+                                                .tab_index(Self::TAB_CONTENT)
+                                                .role(gpui::Role::Button)
+                                                .aria_label(format!("Open album {}", a.name))
+                                                .border_2()
+                                                .border_color(self.focus_border(
+                                                    &f_album,
+                                                    window,
+                                                    t.glass_border,
+                                                    t,
+                                                ))
                                                 .debug_selector({
                                                     let d = aid.clone();
                                                     move || format!("artist-album-{}", d)
@@ -2507,6 +2787,17 @@ impl Render for Shell {
                                         .child(
                                             div()
                                                 .id("artist-back")
+                                                .track_focus(&f_back_link)
+                                                .tab_index(Self::TAB_CONTENT)
+                                                .role(gpui::Role::Link)
+                                                .aria_label("Back to artists")
+                                                .border_2()
+                                                .border_color(self.focus_border(
+                                                    &f_back_link,
+                                                    window,
+                                                    t.glass_border_soft,
+                                                    t,
+                                                ))
                                                 .debug_selector(|| "artist-back".to_string())
                                                 .cursor_pointer()
                                                 .text_size(gpui::px(10.0))
@@ -2526,12 +2817,34 @@ impl Render for Shell {
                                         .child(grid)
                                 } else {
                                     let hs = self.home_state.read(cx);
-                                    let mut col = div().flex().flex_col().gap(gpui::px(4.0));
+                                    let mut col = div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(gpui::px(4.0))
+                                        .id("artist-list")
+                                        .role(gpui::Role::List)
+                                        .aria_label("Artists");
                                     for a in &hs.artists {
                                         let aid = a.id.clone();
+                                        let f_artist =
+                                            self.focus_for(&format!("artist:{}", aid), Self::TAB_CONTENT, cx);
                                         col = col.child(
                                             div()
                                                 .id(format!("artist-{}", aid))
+                                                .track_focus(&f_artist)
+                                                .tab_index(Self::TAB_CONTENT)
+                                                .role(gpui::Role::ListItem)
+                                                .aria_label(format!(
+                                                    "Show albums by {}",
+                                                    a.name
+                                                ))
+                                                .border_2()
+                                                .border_color(self.focus_border(
+                                                    &f_artist,
+                                                    window,
+                                                    t.glass_border,
+                                                    t,
+                                                ))
                                                 .debug_selector({
                                                     let d = aid.clone();
                                                     move || format!("artist-{}", d)
@@ -2550,16 +2863,38 @@ impl Render for Shell {
                                                 .child(a.name.clone()),
                                         );
                                     }
-                                    col
+                                    div().w_full().child(col)
                                 }
                             } else if self.route == Route::Playlists {
                                 let hs = self.home_state.read(cx);
-                                let mut col = div().flex().flex_col().gap(gpui::px(4.0));
+                                let mut col = div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(4.0))
+                                    .id("playlist-list")
+                                    .role(gpui::Role::List)
+                                    .aria_label("Playlists");
                                 for p in &hs.playlists {
                                     let pid = p.id.clone();
+                                    let f_playlist =
+                                        self.focus_for(&format!("playlist:{}", pid), Self::TAB_CONTENT, cx);
                                     col = col.child(
                                         div()
                                             .id(format!("playlist-{}", pid))
+                                            .track_focus(&f_playlist)
+                                            .tab_index(Self::TAB_CONTENT)
+                                            .role(gpui::Role::ListItem)
+                                            .aria_label(format!(
+                                                "Play playlist {}",
+                                                p.name
+                                            ))
+                                            .border_2()
+                                            .border_color(self.focus_border(
+                                                &f_playlist,
+                                                window,
+                                                t.glass_border,
+                                                t,
+                                            ))
                                             .debug_selector({
                                                 let d = pid.clone();
                                                 move || format!("playlist-{}", d)
@@ -2578,12 +2913,23 @@ impl Render for Shell {
                                             .child(format!("{} · {} tracks", p.name, p.song_count)),
                                     );
                                 }
-                                col
+                                div().w_full().child(col)
                             } else if self.selected_album.is_some() {
                                 div()
                             } else {
                                 let hs = self.home_state.read(cx);
-                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
+                                let grid_label = match self.route {
+                                    Route::Favorites => "Favorite albums",
+                                    Route::Albums => "Albums",
+                                    _ => "Recently added albums",
+                                };
+                                let mut grid = div()
+                                    .grid()
+                                    .grid_cols(4)
+                                    .gap(gpui::px(14.0))
+                                    .id("album-grid")
+                                    .role(gpui::Role::Grid)
+                                    .aria_label(grid_label);
                                 if hs.loading && hs.albums.is_empty() {
                                     for i in 0..8 {
                                         grid = grid.child(album_skeleton(i, t));
@@ -2595,10 +2941,22 @@ impl Render for Shell {
                                 let limit = if matches!(self.route, Route::Albums | Route::Favorites) { source.len() } else { 8 };
                                     for a in source.iter().take(limit) {
                                         let aid = a.id.clone();
+                                        let f_album =
+                                            self.focus_for(&format!("album:{}", aid), Self::TAB_CONTENT, cx);
                                         let cover = a.cover_art_id.as_ref().and_then(|cid| hs.covers.get(cid)).cloned();
                                         grid = grid.child(
                                             album_card(&a.name, &a.artist, cover, t)
                                                 .id(format!("album-{}", aid))
+                                                .track_focus(&f_album)
+                                                .tab_index(Self::TAB_CONTENT)
+                                                .role(gpui::Role::Button)
+                                                .border_2()
+                                                .border_color(self.focus_border(
+                                                    &f_album,
+                                                    window,
+                                                    t.glass_border_soft,
+                                                    t,
+                                                ))
                                                 .debug_selector({
                                                     let d = aid.clone();
                                                     move || format!("album-{}", d)
@@ -2612,10 +2970,14 @@ impl Render for Shell {
                                         );
                                     }
                                 }
-                                grid
+                                div().w_full().child(grid)
                             })
                             .child(if self.route == Route::Home && let Some(detail) = &self.album_detail {
                                 let mut col = div().flex().flex_col().gap(gpui::px(6.0));
+                                let f_album_back = self.focus_for("album-back", Self::TAB_CONTENT, cx);
+                                let f_album_star = self.focus_for("album-star", Self::TAB_CONTENT, cx);
+                                let f_album_play_all =
+                                    self.focus_for("album-play-all", Self::TAB_CONTENT, cx);
                                 let songs_all = detail.songs.clone();
                                 let album_name = detail.album.name.clone();
                                 let album_artist = detail.album.artist.clone();
@@ -2697,6 +3059,17 @@ impl Render for Shell {
                                                 .child(
                                                     div()
                                                         .id("album-back")
+                                                        .track_focus(&f_album_back)
+                                                        .tab_index(Self::TAB_CONTENT)
+                                                        .role(gpui::Role::Link)
+                                                        .aria_label("Back to library")
+                                                        .border_2()
+                                                        .border_color(self.focus_border(
+                                                            &f_album_back,
+                                                            window,
+                                                            t.glass_border_soft,
+                                                            t,
+                                                        ))
                                                         .cursor_pointer()
                                                         .text_size(gpui::px(10.0))
                                                         .text_color(t.text_secondary)
@@ -2732,7 +3105,23 @@ impl Render for Shell {
                                                         .gap(gpui::px(8.0))
                                                         .child(
                                                             div()
-                                                                .id("album-star").debug_selector(|| "album-star".to_string())
+                                                                .id("album-star")
+                                                                .track_focus(&f_album_star)
+                                                                .tab_index(Self::TAB_CONTENT)
+                                                                .role(gpui::Role::Button)
+                                                                .aria_label(if detail.album.starred {
+                                                                    "Remove album from favorites"
+                                                                } else {
+                                                                    "Add album to favorites"
+                                                                })
+                                                                .border_2()
+                                                                .border_color(self.focus_border(
+                                                                    &f_album_star,
+                                                                    window,
+                                                                    t.glass_border,
+                                                                    t,
+                                                                ))
+                                                                .debug_selector(|| "album-star".to_string())
                                                                 .cursor_pointer()
                                                                 .px(gpui::px(14.0))
                                                                 .py(gpui::px(8.0))
@@ -2750,7 +3139,19 @@ impl Render for Shell {
                                                         )
                                                         .child(
                                                             div()
-                                                                .id("album-play-all").debug_selector(|| "album-play-all".to_string())
+                                                                .id("album-play-all")
+                                                                .track_focus(&f_album_play_all)
+                                                                .tab_index(Self::TAB_CONTENT)
+                                                                .role(gpui::Role::Button)
+                                                                .aria_label("Play all tracks")
+                                                                .border_2()
+                                                                .border_color(self.focus_border(
+                                                                    &f_album_play_all,
+                                                                    window,
+                                                                    t.gold_light,
+                                                                    t,
+                                                                ))
+                                                                .debug_selector(|| "album-play-all".to_string())
                                                                 .cursor_pointer()
                                                                 .px(gpui::px(16.0))
                                                                 .py(gpui::px(8.0))
@@ -2773,10 +3174,21 @@ impl Render for Shell {
                                 );
                                 let songs = detail.songs.clone();
                                 let current_id = self.player_state.read(cx).current.as_ref().map(|c| c.id.clone());
+                                // The rows are a list so a screen reader announces the
+                                // track count and lets the user walk the album.
+                                let tracks_label = format!("Tracks in {}", detail.album.name);
+                                let mut tracks = div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(6.0))
+                                    .id("track-list")
+                                    .role(gpui::Role::List)
+                                    .aria_label(tracks_label);
                                 for (i, t_) in detail.songs.iter().enumerate() {
                                     let songs2 = songs.clone();
                                     let is_current = current_id.as_deref() == Some(t_.id.as_str());
-                                    col = col.child(
+                                    let f_track = self.focus_for(&format!("track-{i}"), Self::TAB_CONTENT, cx);
+                                    tracks = tracks.child(
                                         track_row(
                                             &format!("{:02}", i + 1),
                                             &t_.title,
@@ -2786,6 +3198,20 @@ impl Render for Shell {
                                             t,
                                         )
                                         .id(format!("track-{}", i))
+                                        .track_focus(&f_track)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::ListItem)
+                                        .border_2()
+                                        .border_color(self.focus_border(
+                                            &f_track,
+                                            window,
+                                            if is_current {
+                                                t.gold_glow_border
+                                            } else {
+                                                t.glass_border
+                                            },
+                                            t,
+                                        ))
                                         .debug_selector(move || format!("track-{}", i))
                                         .aria_label(format!("Play {}", t_.title))
                                         .cursor_pointer()
@@ -2794,7 +3220,7 @@ impl Render for Shell {
                                         })),
                                     );
                                 }
-                                col
+                                col.child(tracks)
                             } else {
                                 div()
                             }),
@@ -3339,6 +3765,11 @@ fn format_time(seconds: f64) -> String {
     format!("{}:{:02}", mins, secs)
 }
 
+/// Maximum number of decoded cover images kept in memory (`HomeState::covers`).
+///
+/// Exported so the stress test asserts the real bound instead of repeating it.
+pub const COVER_CACHE_CAP: usize = 200;
+
 #[derive(Clone, Default)]
 pub struct HomeState {
     pub albums: Vec<crate::library::Album>,
@@ -3352,7 +3783,7 @@ pub struct HomeState {
 }
 
 impl HomeState {
-    /// Insert a cover, evicting the least recently added beyond 200 entries.
+    /// Insert a cover, evicting the least recently added beyond [`COVER_CACHE_CAP`].
     pub fn insert_cover(&mut self, id: String, image: std::sync::Arc<gpui::Image>) {
         if self.covers.insert(id.clone(), image).is_none() {
             self.cover_order.push_back(id);
@@ -3360,7 +3791,7 @@ impl HomeState {
             self.cover_order.retain(|existing| existing != &id);
             self.cover_order.push_back(id);
         }
-        while self.cover_order.len() > 200 {
+        while self.cover_order.len() > COVER_CACHE_CAP {
             if let Some(old) = self.cover_order.pop_front() {
                 self.covers.remove(&old);
             }

@@ -24,6 +24,13 @@ pub struct NowPlayingView {
     pub cover_art: Option<gpui::ImageSource>,
     source_label: String,
     offset_ms: i64,
+    /// Keyboard-focus handles for the transport and lyric controls.
+    prev_focus: gpui::FocusHandle,
+    play_focus: gpui::FocusHandle,
+    next_focus: gpui::FocusHandle,
+    offset_down_focus: gpui::FocusHandle,
+    offset_up_focus: gpui::FocusHandle,
+    pin_focus: gpui::FocusHandle,
 }
 
 impl NowPlayingView {
@@ -40,6 +47,30 @@ impl NowPlayingView {
             cover_art: None,
             source_label: "Navidrome / LRCLIB".to_string(),
             offset_ms: 0,
+            prev_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
+            play_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
+            next_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
+            offset_down_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
+            offset_up_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
+            pin_focus: cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(crate::ui::shell::Shell::TAB_CONTENT),
         }
     }
 
@@ -81,7 +112,7 @@ impl NowPlayingView {
 }
 
 impl Render for NowPlayingView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
 
@@ -202,6 +233,15 @@ impl Render for NowPlayingView {
                             .child(
                                 div()
                                     .id("np-prev")
+                                    .track_focus(&self.prev_focus)
+                                    .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(if self.prev_focus.is_focused(window) {
+                                        t.os_accent
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
                                     .debug_selector(|| "np-prev".to_string())
                                     .aria_label("Previous track")
                                     .cursor_pointer()
@@ -219,6 +259,15 @@ impl Render for NowPlayingView {
                             .child(
                                 div()
                                     .id("np-play")
+                                    .track_focus(&self.play_focus)
+                                    .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(if self.play_focus.is_focused(window) {
+                                        t.os_accent
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
                                     .debug_selector(|| "np-play".to_string())
                                     .aria_label(if self.playing { "Pause" } else { "Play" })
                                     .cursor_pointer()
@@ -243,6 +292,15 @@ impl Render for NowPlayingView {
                             .child(
                                 div()
                                     .id("np-next")
+                                    .track_focus(&self.next_focus)
+                                    .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(if self.next_focus.is_focused(window) {
+                                        t.os_accent
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
                                     .debug_selector(|| "np-next".to_string())
                                     .aria_label("Next track")
                                     .cursor_pointer()
@@ -347,6 +405,18 @@ impl Render for NowPlayingView {
                                     .child(
                                         div()
                                             .id("np-offset-down")
+                                            .track_focus(&self.offset_down_focus)
+                                            .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                            .role(gpui::Role::Button)
+                                            .border_2()
+                                            .border_color(
+                                                if self.offset_down_focus.is_focused(window) {
+                                                    t.os_accent
+                                                } else {
+                                                    gpui::rgba(0x00000000)
+                                                },
+                                            )
+                                            .aria_label("Lyrics earlier by 500 ms")
                                             .debug_selector(|| "np-offset-down".to_string())
                                             .cursor_pointer()
                                             .px(gpui::px(9.0))
@@ -364,6 +434,18 @@ impl Render for NowPlayingView {
                                     .child(
                                         div()
                                             .id("np-offset-up")
+                                            .track_focus(&self.offset_up_focus)
+                                            .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                            .role(gpui::Role::Button)
+                                            .border_2()
+                                            .border_color(
+                                                if self.offset_up_focus.is_focused(window) {
+                                                    t.os_accent
+                                                } else {
+                                                    gpui::rgba(0x00000000)
+                                                },
+                                            )
+                                            .aria_label("Lyrics later by 500 ms")
                                             .debug_selector(|| "np-offset-up".to_string())
                                             .cursor_pointer()
                                             .px(gpui::px(9.0))
@@ -381,6 +463,16 @@ impl Render for NowPlayingView {
                                     .child(
                                         div()
                                             .id("np-pin")
+                                            .track_focus(&self.pin_focus)
+                                            .tab_index(crate::ui::shell::Shell::TAB_CONTENT)
+                                            .role(gpui::Role::Button)
+                                            .border_2()
+                                            .border_color(if self.pin_focus.is_focused(window) {
+                                                t.os_accent
+                                            } else {
+                                                gpui::rgba(0x00000000)
+                                            })
+                                            .aria_label("Pin lyrics to the desktop")
                                             .debug_selector(|| "np-pin".to_string())
                                             .cursor_pointer()
                                             .px(gpui::px(11.0))

@@ -141,19 +141,26 @@ pub struct OverlayState {
 pub struct PinnedLyricsView {
     state: gpui::Entity<OverlayState>,
     geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
+    /// Focus handle for the overlay's close control.
+    close_focus: gpui::FocusHandle,
 }
 
 impl PinnedLyricsView {
     pub fn new(
         state: gpui::Entity<OverlayState>,
         geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
+        cx: &mut gpui::App,
     ) -> Self {
-        Self { state, geometry }
+        Self {
+            state,
+            geometry,
+            close_focus: cx.focus_handle().tab_stop(true).tab_index(0),
+        }
     }
 }
 
 impl Render for PinnedLyricsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
         let state = self.state.read(cx).clone();
@@ -234,6 +241,15 @@ impl Render for PinnedLyricsView {
                     .child(
                         div()
                             .id("overlay-close")
+                            .track_focus(&self.close_focus)
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .border_2()
+                            .border_color(if self.close_focus.is_focused(window) {
+                                t.os_accent
+                            } else {
+                                gpui::rgba(0x00000000)
+                            })
                             .aria_label("Close lyrics overlay")
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _event, window, _cx| {
@@ -306,7 +322,7 @@ pub fn open_overlay(
         ..Default::default()
     };
     cx.open_window(opts, move |_window, cx| {
-        cx.new(|_cx| PinnedLyricsView::new(state, geometry))
+        cx.new(|cx| PinnedLyricsView::new(state, geometry, cx))
     })
     .expect("failed to open overlay window")
 }
