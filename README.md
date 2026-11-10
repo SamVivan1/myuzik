@@ -75,6 +75,8 @@ Without the extension the overlay still opens as a normal window.
 
 ## Keyboard and controls
 
+- `Space` play/pause · `←`/`→` seek 5 s · `Shift+←`/`Shift+→` previous/next
+- `↑`/`↓` volume · `Ctrl+K` search · `Ctrl+P` pin lyrics · `Esc` close overlay
 - Transport buttons in the clay player bar: previous, play/pause, next, −10 s, +10 s.
 - Volume −/+ (also available over MPRIS).
 - Click the now-playing area or **Now Playing** in the sidebar for cover + lyrics.
