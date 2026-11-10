@@ -26,6 +26,9 @@ pub struct Shell {
     selected_album: Option<String>,
     album_detail: Option<crate::library::AlbumDetail>,
     album_loading: bool,
+    search_query: String,
+    search_results: Option<crate::library::SearchResults>,
+    search_focus: gpui::FocusHandle,
     now_playing: gpui::Entity<NowPlayingView>,
     search_view: gpui::Entity<SearchView>,
     settings_view: gpui::Entity<SettingsView>,
@@ -41,6 +44,9 @@ impl Shell {
         let selected_album = None;
         let album_detail = None;
         let album_loading = false;
+        let search_query = String::new();
+        let search_results = None;
+        let search_focus = cx.focus_handle();
         let now_playing = cx.new(|cx| NowPlayingView::new(cx));
         let search_view = cx.new(|_cx| SearchView::new());
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
@@ -210,6 +216,9 @@ impl Shell {
             selected_album,
             album_detail,
             album_loading,
+            search_query,
+            search_results,
+            search_focus,
             now_playing,
             search_view,
             settings_view,
@@ -819,7 +828,7 @@ impl Render for Shell {
                                     .gap(gpui::px(4.0))
                                     .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
                                     .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Search; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; window.focus(&this.search_focus, cx); })))
                                     .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; })))
                                     .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; })))
                                     .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; })))
@@ -940,7 +949,97 @@ impl Render for Shell {
                             .child(if self.route == Route::NowPlaying {
                                 div().child(self.now_playing.clone())
                             } else if self.route == Route::Search {
-                                div().child(self.search_view.clone())
+                                let mut col = div().flex().flex_col().gap(gpui::px(12.0));
+                                let search_entity = cx.entity();
+                                col = col.child(
+                                    div()
+                                        .id("search-box")
+                                        .track_focus(&self.search_focus)
+                                        .focusable()
+                                        .on_key_down(move |ev, _window, app| {
+                                            let entity = search_entity.clone();
+                                            app.update_entity(&entity, |this, cx| {
+                                                let k = ev.keystroke.key.as_str();
+                                                if k == "backspace" {
+                                                    this.search_query.pop();
+                                                } else if k == "escape" {
+                                                    this.search_query.clear();
+                                                    this.search_results = None;
+                                                } else if k == "enter" {
+                                                    let q = this.search_query.trim().to_string();
+                                                    if !q.is_empty()
+                                                        && let Some(client) = this.client.clone() {
+                                                        let entity2 = cx.entity();
+                                                        cx.spawn(async move |_, cx| {
+                                                            let res = cx.background_executor().spawn(async move { client.search(&q) }).await;
+                                                            cx.update(|app| {
+                                                                app.update_entity(&entity2, |shell, _| {
+                                                                    if let Ok(r) = res { shell.search_results = Some(r); }
+                                                                });
+                                                            });
+                                                        }).detach();
+                                                    }
+                                                } else if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                                                    if let Some(ch) = &ev.keystroke.key_char {
+                                                        this.search_query.push_str(ch);
+                                                    } else if k.len() == 1 && k.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                                                        this.search_query.push_str(k);
+                                                    }
+                                                }
+                                                cx.notify();
+                                            });
+                                        })
+                                        .flex()
+                                        .items_center()
+                                        .gap(gpui::px(10.0))
+                                        .px(gpui::px(16.0))
+                                        .py(gpui::px(12.0))
+                                        .rounded(gpui::px(999.0))
+                                        .bg(t.clay_surface)
+                                        .border_2()
+                                        .border_color(t.os_accent)
+                                        .cursor_text()
+                                        .child(
+                                            div()
+                                                .text_size(gpui::px(12.0))
+                                                .text_color(t.clay_ink)
+                                                .child(if self.search_query.is_empty() {
+                                                    "Type to search artists, albums, songs…".to_string()
+                                                } else {
+                                                    self.search_query.clone()
+                                                }),
+                                        ),
+                                );
+                                if self.search_query.is_empty() {
+                                    col = col.child(
+                                        div()
+                                            .text_size(gpui::px(11.0))
+                                            .text_color(t.text_secondary)
+                                            .child("Press Enter to search. Esc clears."),
+                                    );
+                                }
+                                if let Some(results) = &self.search_results {
+                                    if !results.songs.is_empty() {
+                                        col = col.child(div().text_size(gpui::px(9.0)).font_weight(gpui::FontWeight::BOLD).text_color(t.gold).child("SONGS"));
+                                        for tr in results.songs.iter().take(20) {
+                                            col = col.child(
+                                                div()
+                                                    .px(gpui::px(12.0))
+                                                    .py(gpui::px(8.0))
+                                                    .rounded(gpui::px(10.0))
+                                                    .bg(t.glass_tint)
+                                                    .text_size(gpui::px(12.0))
+                                                    .child(format!("{} — {}", tr.title, tr.artist)),
+                                            );
+                                        }
+                                    }
+                                    if results.songs.is_empty() && results.albums.is_empty() && results.artists.is_empty() {
+                                        col = col.child(
+                                            div().text_size(gpui::px(11.0)).text_color(t.text_secondary).child("No results"),
+                                        );
+                                    }
+                                }
+                                col
                             } else if self.route == Route::Settings {
                                 div().child(self.settings_view.clone())
                             } else if self.route == Route::Artists {

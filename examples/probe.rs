@@ -6,6 +6,10 @@ fn main() {
     println!("ping: {:?}", c.ping());
     println!("artists: {:?}", c.artists().map(|a| a.len()));
     println!("playlists: {:?}", c.playlists().map(|p| p.len()));
+    match c.search("billie") {
+        Ok(r) => println!("search: {} songs, {} albums, {} artists", r.songs.len(), r.albums.len(), r.artists.len()),
+        Err(e) => println!("search err: {e:?}"),
+    }
     let albums = match c.album_list(myuzik::navidrome::client::AlbumListKind::Newest, 20, 0) {
         Ok(a) => a,
         Err(e) => { println!("album err: {e:?}"); return; }

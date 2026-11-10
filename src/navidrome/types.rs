@@ -148,6 +148,7 @@ pub struct PlaylistDetailData {
 
 #[derive(Deserialize, Debug, Default)]
 pub struct Search3Data {
+    #[serde(rename = "searchResult3")]
     pub search_result3: Option<SearchResult3>,
 }
 
