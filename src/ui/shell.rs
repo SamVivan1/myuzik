@@ -864,16 +864,50 @@ impl Shell {
             return;
         };
         let entity = cx.entity();
+        let client_for_cover = client.clone();
         cx.spawn(async move |_, cx| {
+            let client_for_album = client.clone();
+            let album_id = id.clone();
             let res = cx
                 .background_executor()
-                .spawn(async move { client.album(&id) })
+                .spawn(async move { client_for_album.album(&album_id) })
                 .await;
+            let cover = match &res {
+                Ok(d) => match d.album.cover_art_id.clone() {
+                    Some(cid) => {
+                        let client = client_for_cover.clone();
+                        let cid_for_fetch = cid.clone();
+                        cx.background_executor()
+                            .spawn(async move { client.cover_bytes(&cid_for_fetch, 512) })
+                            .await
+                            .ok()
+                            .map(|bytes| (cid, bytes))
+                    }
+                    None => None,
+                },
+                Err(_) => None,
+            };
             cx.update(|app| {
-                entity.update(app, |shell, _cx| {
+                entity.update(app, |shell, cx| {
                     shell.album_loading = false;
                     if let Ok(d) = res {
                         shell.album_detail = Some(d);
+                        if let Some((cid, bytes)) = cover {
+                            let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+                            let format = if is_png {
+                                gpui::ImageFormat::Png
+                            } else {
+                                gpui::ImageFormat::Jpeg
+                            };
+                            let image = std::sync::Arc::new(gpui::Image {
+                                format,
+                                bytes,
+                                id: fxhash_id(&cid),
+                            });
+                            shell.home_state.update(cx, |h, _cx| {
+                                h.insert_cover(cid, image);
+                            });
+                        }
                     }
                 });
             });
@@ -1399,7 +1433,7 @@ impl Render for Shell {
                             .gap(gpui::px(2.0))
                             .child(
                                 div()
-                                    .text_size(gpui::px(12.0))
+                                    .text_size(gpui::px(13.0))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .text_color(t.clay_ink)
                                     .child(if current_title.is_empty() {
@@ -1410,7 +1444,7 @@ impl Render for Shell {
                             )
                             .child(
                                 div()
-                                    .text_size(gpui::px(9.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
                                     .child(current_artist.clone()),
@@ -1450,7 +1484,7 @@ impl Render for Shell {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(gpui::px(9.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
                                     .cursor_pointer()
@@ -1542,7 +1576,7 @@ impl Render for Shell {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(gpui::px(9.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
                                     .cursor_pointer()
@@ -1688,6 +1722,7 @@ impl Render for Shell {
                             .font_weight(gpui::FontWeight::BOLD)
                             .cursor_pointer()
                             .id("pin-btn")
+                            .active(|style| style.opacity(0.9))
                             .on_click(cx.listener(|this, _event, _window, _cx| {
                                 if this.overlay_handle.is_some() {
                                     this.close_overlay(_cx);
@@ -2024,14 +2059,14 @@ impl Render for Shell {
                                     .flex()
                                     .flex_col()
                                     .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").debug_selector(|| "nav-home".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
-                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
-                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
+                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").debug_selector(|| "nav-home".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
+                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").debug_selector(|| "nav-nowplaying".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").debug_selector(|| "nav-search".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
+                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").debug_selector(|| "nav-albums".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").debug_selector(|| "nav-artists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").debug_selector(|| "nav-playlists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").debug_selector(|| "nav-favorites".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
+                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").debug_selector(|| "nav-settings".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
                             )
                             .child(
                                 div()
@@ -2070,7 +2105,7 @@ impl Render for Shell {
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .cursor_pointer()
-                                            .id("pin-btn")
+                                            .id("pin-btn").active(|style| style.opacity(0.9))
                                             .on_click(cx.listener(|this, _event, _window, _cx| {
                                                 if this.overlay_handle.is_some() { this.close_overlay(_cx); } else { this.open_overlay(_cx); }
                                             }))
@@ -2091,7 +2126,9 @@ impl Render for Shell {
                             .pb(gpui::px(112.0))
                             .id("main-scroll")
                             .overflow_y_scroll()
-                            .child(
+                            .child(if self.route == Route::Home && self.selected_album.is_some() {
+                                div()
+                            } else {
                                 div()
                                     .flex()
                                     .items_start()
@@ -2102,23 +2139,6 @@ impl Render for Shell {
                                             .flex()
                                             .flex_col()
                                             .gap(gpui::px(4.0))
-                                            .child(
-                                                div()
-                                                    .text_size(gpui::px(9.0))
-                                                    .font_weight(gpui::FontWeight::BOLD)
-                                                    .text_color(t.gold)
-                                                    .child(match self.route {
-                                                        crate::app::Route::Home => "YOUR LIBRARY",
-                                                        crate::app::Route::Search => "SEARCH",
-                                                        crate::app::Route::NowPlaying => "NOW PLAYING",
-                                                        crate::app::Route::Settings => "SETTINGS",
-                                                        crate::app::Route::Albums => "ALBUMS",
-                                                        crate::app::Route::Artists => "ARTISTS",
-                                                        crate::app::Route::Playlists => "PLAYLISTS",
-                                                        crate::app::Route::Favorites => "FAVORITES",
-                                                        _ => "MYUZIK",
-                                                    }),
-                                            )
                                             .child(
                                                 div()
                                                     .font_family(theme.display_font)
@@ -2202,8 +2222,8 @@ impl Render for Shell {
                                                     .text_color(t.os_accent)
                                                     .child("Ctrl K"),
                                             ),
-                                    ),
-                            )
+                                    )
+                            })
                             .child(if self.selected_album.is_some()
                                 || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings | Route::Artists | Route::Playlists | Route::Favorites) {
                                 div()
@@ -2564,7 +2584,11 @@ impl Render for Shell {
                             } else {
                                 let hs = self.home_state.read(cx);
                                 let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
-                                if hs.albums.is_empty() {
+                                if hs.loading && hs.albums.is_empty() {
+                                    for i in 0..8 {
+                                        grid = grid.child(album_skeleton(i, t));
+                                    }
+                                } else if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
                                     let source = if self.route == Route::Favorites { &hs.favorites } else { &hs.albums };
@@ -2580,6 +2604,7 @@ impl Render for Shell {
                                                     move || format!("album-{}", d)
                                                 })
                                                 .aria_label(format!("Open album {}", a.name))
+                                                .active(|style| style.opacity(0.94))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                                     this.open_album(aid.clone(), cx);
@@ -2594,90 +2619,156 @@ impl Render for Shell {
                                 let songs_all = detail.songs.clone();
                                 let album_name = detail.album.name.clone();
                                 let album_artist = detail.album.artist.clone();
+                                let album_meta = {
+                                    let mut parts = Vec::new();
+                                    if let Some(year) = detail.album.year {
+                                        parts.push(year.to_string());
+                                    }
+                                    let count = detail.songs.len();
+                                    parts.push(if count == 1 {
+                                        "1 song".to_string()
+                                    } else {
+                                        format!("{count} songs")
+                                    });
+                                    if let Some(duration) = detail.album.duration {
+                                        parts.push(format!("{} min", duration.as_secs() / 60));
+                                    }
+                                    parts.join(" · ")
+                                };
+                                let album_cover = detail
+                                    .album
+                                    .cover_art_id
+                                    .as_ref()
+                                    .and_then(|cid| self.home_state.read(cx).covers.get(cid))
+                                    .cloned();
+                                let initial = detail
+                                    .album
+                                    .name
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "?".to_string());
                                 col = col.child(
                                     div()
                                         .flex()
-                                        .flex_col()
                                         .items_start()
-                                        .gap(gpui::px(8.0))
+                                        .gap(gpui::px(18.0))
                                         .child(
                                             div()
-                                                .id("album-back")
-                                                .cursor_pointer()
-                                                .text_size(gpui::px(10.0))
-                                                .text_color(t.text_secondary)
-                                                .on_click(cx.listener(|this, _event, _window, _cx| {
-                                                    this.selected_album = None;
-                                                    this.album_detail = None;
-                                                }))
-                                                .child("← Back to library"),
-                                        )
-                                        .child(
-                                            div()
-                                                .font_family(theme.display_font)
-                                                .text_size(gpui::px(26.0))
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .child(album_name),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(gpui::px(11.0))
-                                                .text_color(t.text_secondary)
-                                                .child(album_artist),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("album-star").debug_selector(|| "album-star".to_string())
-                                                .cursor_pointer()
-                                                .px(gpui::px(14.0))
-                                                .py(gpui::px(8.0))
-                                                .rounded(gpui::px(999.0))
-                                                .bg(t.glass_highlight_soft)
+                                                .w(gpui::px(160.0))
+                                                .h(gpui::px(160.0))
+                                                .flex_shrink_0()
+                                                .rounded(gpui::px(18.0))
+                                                .bg(gpui::linear_gradient(
+                                                    135.0,
+                                                    gpui::linear_color_stop(t.gold_deep, 0.0),
+                                                    gpui::linear_color_stop(t.clay_surface, 1.0),
+                                                ))
                                                 .border_1()
                                                 .border_color(t.glass_border)
-                                                .text_color(t.gold_light)
-                                                .text_size(gpui::px(10.0))
-                                                .font_weight(gpui::FontWeight::BOLD)
-                                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                                    this.toggle_album_star(cx);
-                                                }))
-                                                .child(if detail.album.starred { "★ Favorited" } else { "☆ Favorite" }),
+                                                .overflow_hidden()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(if let Some(image) = album_cover {
+                                                    gpui::img(gpui::ImageSource::Image(image))
+                                                        .w(gpui::px(160.0))
+                                                        .h(gpui::px(160.0))
+                                                        .rounded(gpui::px(18.0))
+                                                        .object_fit(gpui::ObjectFit::Cover)
+                                                        .into_any_element()
+                                                } else {
+                                                    div()
+                                                        .font_family(theme.display_font)
+                                                        .text_size(gpui::px(48.0))
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .text_color(t.clay_ink)
+                                                        .opacity(0.85)
+                                                        .child(initial)
+                                                        .into_any_element()
+                                                }),
                                         )
                                         .child(
                                             div()
-                                                .id("album-play-all").debug_selector(|| "album-play-all".to_string())
-                                                .cursor_pointer()
-                                                .px(gpui::px(16.0))
-                                                .py(gpui::px(8.0))
-                                                .rounded(gpui::px(999.0))
-                                                .bg(gpui::linear_gradient(
-                                                    145.0,
-                                                    gpui::linear_color_stop(t.gold_light, 0.0),
-                                                    gpui::linear_color_stop(t.gold, 1.0),
-                                                ))
-                                                .shadow(vec![
-                                                    gpui::BoxShadow {
-                                                        color: gpui::rgba(0xFFFFFFB3).into(),
-                                                        offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
-                                                        blur_radius: gpui::px(3.0),
-                                                        spread_radius: gpui::px(0.0),
-                                                        inset: true,
-                                                    },
-                                                    gpui::BoxShadow {
-                                                        color: gpui::rgba(0x5A411E55).into(),
-                                                        offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
-                                                        blur_radius: gpui::px(5.0),
-                                                        spread_radius: gpui::px(0.0),
-                                                        inset: true,
-                                                    },
-                                                ])
-                                                .text_color(t.clay_ink)
-                                                .text_size(gpui::px(10.0))
-                                                .font_weight(gpui::FontWeight::BOLD)
-                                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    this.play_tracks(songs_all.clone(), 0, cx);
-                                                }))
-                                                .child("Play all"),
+                                                .flex()
+                                                .flex_col()
+                                                .items_start()
+                                                .gap(gpui::px(8.0))
+                                                .child(
+                                                    div()
+                                                        .id("album-back")
+                                                        .cursor_pointer()
+                                                        .text_size(gpui::px(10.0))
+                                                        .text_color(t.text_secondary)
+                                                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                                                            this.selected_album = None;
+                                                            this.album_detail = None;
+                                                        }))
+                                                        .child("← Back to library"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .font_family(theme.display_font)
+                                                        .text_size(gpui::px(28.0))
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .child(album_name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(gpui::px(12.0))
+                                                        .text_color(t.text_secondary)
+                                                        .child(album_artist),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(gpui::px(10.0))
+                                                        .text_color(t.text_tertiary)
+                                                        .child(album_meta),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(gpui::px(8.0))
+                                                        .child(
+                                                            div()
+                                                                .id("album-star").debug_selector(|| "album-star".to_string())
+                                                                .cursor_pointer()
+                                                                .px(gpui::px(14.0))
+                                                                .py(gpui::px(8.0))
+                                                                .rounded(gpui::px(999.0))
+                                                                .bg(t.glass_highlight_soft)
+                                                                .border_1()
+                                                                .border_color(t.glass_border)
+                                                                .text_color(t.gold_light)
+                                                                .text_size(gpui::px(10.0))
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                                                    this.toggle_album_star(cx);
+                                                                }))
+                                                                .child(if detail.album.starred { "★ Favorited" } else { "☆ Favorite" }),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("album-play-all").debug_selector(|| "album-play-all".to_string())
+                                                                .cursor_pointer()
+                                                                .px(gpui::px(16.0))
+                                                                .py(gpui::px(8.0))
+                                                                .rounded(gpui::px(999.0))
+                                                                .bg(gpui::linear_gradient(
+                                                                    145.0,
+                                                                    gpui::linear_color_stop(t.gold_light, 0.0),
+                                                                    gpui::linear_color_stop(t.gold, 1.0),
+                                                                ))
+                                                                .text_color(t.clay_ink)
+                                                                .text_size(gpui::px(10.0))
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                                    this.play_tracks(songs_all.clone(), 0, cx);
+                                                                }))
+                                                                .child("Play all"),
+                                                        ),
+                                                ),
                                         ),
                                 );
                                 let songs = detail.songs.clone();
@@ -2983,15 +3074,16 @@ fn setting_row(label: &str, value: &str, t: &crate::theme::Colors) -> gpui::Div 
         .bg(t.glass_tint)
         .border_1()
         .border_color(t.glass_border)
+        .hover(|style| style.bg(t.glass_highlight_soft))
         .child(
             div()
-                .text_size(gpui::px(11.0))
+                .text_size(gpui::px(12.0))
                 .text_color(t.text_secondary)
                 .child(label.to_string()),
         )
         .child(
             div()
-                .text_size(gpui::px(11.0))
+                .text_size(gpui::px(12.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
                 .child(value.to_string()),
@@ -3010,7 +3102,7 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
                 gpui::linear_color_stop(t.clay_shade, 1.0),
             ))
             .text_color(t.clay_ink)
-            .text_size(gpui::px(12.0))
+            .text_size(gpui::px(13.0))
             .font_weight(gpui::FontWeight::BOLD)
             .shadow(vec![
                 gpui::BoxShadow {
@@ -3035,10 +3127,47 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .py(gpui::px(7.0))
             .rounded(gpui::px(12.0))
             .text_color(t.text_secondary)
-            .text_size(gpui::px(12.0))
+            .text_size(gpui::px(13.0))
             .hover(|style| style.bg(t.glass_hover))
             .child(label.to_string())
     }
+}
+
+fn album_skeleton(index: usize, t: &crate::theme::Colors) -> gpui::Div {
+    let pulse = div()
+        .w_full()
+        .aspect_ratio(1.0)
+        .rounded(gpui::px(16.0))
+        .bg(t.glass_tint)
+        .border_1()
+        .border_color(t.glass_border)
+        .with_animation(
+            format!("skeleton-{index}"),
+            gpui::Animation::new(std::time::Duration::from_millis(900))
+                .repeat()
+                .with_easing(gpui::ease_in_out),
+            |el, delta| el.opacity(0.35 + 0.45 * delta),
+        );
+    div()
+        .flex()
+        .flex_col()
+        .gap(gpui::px(7.0))
+        .w_full()
+        .child(pulse)
+        .child(
+            div()
+                .h(gpui::px(10.0))
+                .w_full()
+                .rounded(gpui::px(4.0))
+                .bg(t.glass_tint),
+        )
+        .child(
+            div()
+                .h(gpui::px(8.0))
+                .w(gpui::px(90.0))
+                .rounded(gpui::px(4.0))
+                .bg(t.glass_tint),
+        )
 }
 
 fn album_card(
@@ -3122,7 +3251,7 @@ fn album_card(
         .child(
             gpui::div()
                 .w_full()
-                .text_size(gpui::px(11.0))
+                .text_size(gpui::px(12.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
                 .child(title.to_string()),
@@ -3130,7 +3259,7 @@ fn album_card(
         .child(
             gpui::div()
                 .w_full()
-                .text_size(gpui::px(9.0))
+                .text_size(gpui::px(10.0))
                 .text_color(t.text_secondary)
                 .child(artist.to_string()),
         )
@@ -3154,6 +3283,7 @@ fn track_row(
         .py(gpui::px(7.0))
         .rounded(gpui::px(12.0))
         .bg(bg)
+        .hover(|style| style.bg(t.glass_highlight_soft))
         .border_1()
         .border_color(if active {
             t.gold_glow_border
@@ -3183,14 +3313,14 @@ fn track_row(
                 .flex_col()
                 .child(
                     gpui::div()
-                        .text_size(gpui::px(11.0))
+                        .text_size(gpui::px(12.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(text_color)
                         .child(title.to_string()),
                 )
                 .child(
                     gpui::div()
-                        .text_size(gpui::px(8.0))
+                        .text_size(gpui::px(10.0))
                         .text_color(t.text_secondary)
                         .child(artist.to_string()),
                 ),

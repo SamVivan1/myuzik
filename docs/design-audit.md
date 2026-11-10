@@ -36,8 +36,19 @@ window traffic-light semantics (red/yellow/green) and transparent shadows.
 
 - Route change fade: 180 ms ease-out.
 - Equalizer bars animate while playing (620/780/700 ms ping-pong).
-- Reduced motion: `App::set_reduce_motion` disables animation end states; Settings toggle.
+- Lyrics: 380 ms ease-out vertical centering when the active line changes; the active line
+  cross-fades (220 ms) and seeks/large jumps snap to the new position.
+- Loading skeletons pulse (900 ms) on the Home shelves.
+- Clay/controls acknowledge press with an opacity/background change; icon buttons gain a clay
+  hover pill.
+- Reduced motion: `App::set_reduce_motion` renders animation end states; Settings toggle.
 - No idle animation (equalizer only while playing).
+
+## Typography pass
+
+- Nav 13 px; album title 12 px / artist 10 px; track title 12 px / artist 10 px; settings rows
+  12 px; player title 13 px / artist 10 px.
+- Eyebrow/kicker labels above headings were removed; the heading carries the hierarchy.
 
 ## Deliberate deviations from the mockup
 

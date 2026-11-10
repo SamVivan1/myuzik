@@ -15,8 +15,10 @@ pub fn target_offset(
     let line_center = line_tops[active] + line_heights[active] / 2.0;
     viewport_h / 2.0 - line_center
 }
-use gpui::{Context, Render, Window, div, prelude::*};
+use gpui::{AnimationExt, Context, Render, Window, div, prelude::*};
 use std::time::Duration;
+
+const LYRIC_ROW_H: f32 = 40.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LyricsMode {
@@ -33,6 +35,11 @@ pub struct LyricsView {
     plain_text: String,
     offset_ms: i64,
     viewport_height: f32,
+    last_position: Duration,
+    anim_key: usize,
+    from_offset: f32,
+    to_offset: f32,
+    current_offset: f32,
 }
 
 impl LyricsView {
@@ -45,10 +52,21 @@ impl LyricsView {
             plain_text: String::new(),
             offset_ms: 0,
             viewport_height: 400.0,
+            last_position: Duration::ZERO,
+            anim_key: 0,
+            from_offset: 0.0,
+            to_offset: 0.0,
+            current_offset: 0.0,
         }
     }
 
     pub fn set_status(&mut self, status: LyricsStatus) {
+        self.active = None;
+        self.last_position = Duration::ZERO;
+        self.anim_key = 0;
+        self.from_offset = 0.0;
+        self.to_offset = 0.0;
+        self.current_offset = 0.0;
         match status {
             LyricsStatus::Loading => {
                 self.mode = LyricsMode::Message;
@@ -103,7 +121,23 @@ impl LyricsView {
                 break;
             }
         }
-        self.active = idx;
+        if idx != self.active {
+            let previous = self.active;
+            self.active = idx;
+            let active = idx.unwrap_or(0);
+            let target = -(active as f32 * LYRIC_ROW_H);
+            let seek_jump = position.abs_diff(self.last_position) > Duration::from_secs(2);
+            let big_jump = previous.map(|p| p.abs_diff(active) > 2).unwrap_or(false);
+            self.from_offset = if seek_jump || big_jump {
+                target
+            } else {
+                self.current_offset
+            };
+            self.to_offset = target;
+            self.current_offset = target;
+            self.anim_key = self.anim_key.wrapping_add(1);
+        }
+        self.last_position = position;
     }
 
     pub fn set_offset_ms(&mut self, offset: i64) {
@@ -143,7 +177,8 @@ impl Render for LyricsView {
                         .text_size(gpui::px(14.0))
                         .text_color(t.text_secondary)
                         .child(self.message.clone()),
-                ),
+                )
+                .into_any_element(),
             LyricsMode::Plain => div()
                 .size_full()
                 .flex()
@@ -156,16 +191,16 @@ impl Render for LyricsView {
                         .text_size(gpui::px(13.0))
                         .text_color(t.text_secondary)
                         .child(self.plain_text.clone()),
-                ),
+                )
+                .into_any_element(),
             LyricsMode::Synced => {
-                let _active = self.active.unwrap_or(0);
+                let pad = (self.viewport_height / 2.0 - LYRIC_ROW_H / 2.0).max(0.0);
                 let mut container = div()
-                    .size_full()
                     .flex()
                     .flex_col()
-                    .gap(gpui::px(6.0))
-                    .px(gpui::px(16.0))
-                    .py(gpui::px(12.0));
+                    .px(gpui::px(24.0))
+                    .pt(gpui::px(pad))
+                    .pb(gpui::px(pad));
 
                 for (i, line) in self.lines.iter().enumerate() {
                     let is_active = self.active == Some(i);
@@ -174,24 +209,24 @@ impl Render for LyricsView {
                     } else {
                         t.text_secondary
                     };
-                    let size = if is_active { 16.0 } else { 13.0 };
+                    let size = if is_active { 21.0 } else { 15.0 };
                     let weight = if is_active {
                         gpui::FontWeight::BOLD
                     } else {
                         gpui::FontWeight::NORMAL
                     };
 
-                    let mut line_div = div()
+                    let text = div()
                         .text_size(gpui::px(size))
                         .font_family(theme.ui_font)
                         .font_weight(weight)
                         .text_color(color)
                         .child(line.text.clone());
 
+                    let mut inner = div().flex().flex_col().gap(gpui::px(3.0)).child(text);
                     if is_active {
-                        line_div = line_div.child(
+                        inner = inner.child(
                             div()
-                                .mt(gpui::px(2.0))
                                 .w(gpui::px(40.0))
                                 .h(gpui::px(2.0))
                                 .rounded(gpui::px(999.0))
@@ -199,10 +234,50 @@ impl Render for LyricsView {
                         );
                     }
 
-                    container = container.child(line_div);
+                    let line = div()
+                        .flex()
+                        .items_start()
+                        .gap(gpui::px(9.0))
+                        .min_h(gpui::px(LYRIC_ROW_H))
+                        .child(
+                            div()
+                                .w(gpui::px(6.0))
+                                .h(gpui::px(6.0))
+                                .mt(gpui::px(if is_active { 11.0 } else { 8.0 }))
+                                .rounded(gpui::px(999.0))
+                                .bg(if is_active { t.gold } else { t.text_tertiary })
+                                .opacity(if is_active { 1.0 } else { 0.35 }),
+                        )
+                        .child(inner);
+                    container = container.child(
+                        line.with_animation(
+                            format!("lyric-{i}-{is_active}"),
+                            gpui::Animation::new(std::time::Duration::from_millis(220))
+                                .with_easing(gpui::ease_out_quint()),
+                            |el, delta| el.opacity(0.45 + 0.55 * delta),
+                        ),
+                    );
                 }
 
-                container
+                let animated = if self.anim_key == 0 {
+                    container.mt(gpui::px(self.to_offset)).into_any_element()
+                } else {
+                    let from = self.from_offset;
+                    let to = self.to_offset;
+                    container
+                        .with_animation(
+                            format!("lyrics-{}", self.anim_key),
+                            gpui::Animation::new(Duration::from_millis(380))
+                                .with_easing(gpui::ease_out_quint()),
+                            move |el, delta| el.mt(gpui::px(from + (to - from) * delta)),
+                        )
+                        .into_any_element()
+                };
+                div()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(animated)
+                    .into_any_element()
             }
         }
     }
