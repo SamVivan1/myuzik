@@ -35,7 +35,16 @@ fn main() {
 
     let paths = config::Paths::new().expect("paths");
     paths.ensure().expect("ensure dirs");
-    let cfg = config::load_config(&paths).expect("config");
+    // A corrupt or unreadable config must not stop the app from starting: fall back
+    // to defaults and say so. `expect` here meant a typo in the file was a crash with
+    // no way in.
+    let cfg = match config::load_config(&paths) {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            tracing::warn!(%error, "config could not be read, using defaults");
+            config::AppConfig::default()
+        }
+    };
     tracing::info!(?paths.config, server = %cfg.server_url, "config loaded");
 
     let app = application();

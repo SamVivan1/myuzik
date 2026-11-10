@@ -193,7 +193,15 @@ impl LyricsProvider {
     }
 
     fn fetch_lrclib(&self, track: &Track) -> Option<LyricsStatus> {
-        let agent = ureq::Agent::new_with_defaults();
+        // LRCLIB can be slow or unreachable; without a bound the status stayed at
+        // "Loading lyrics…" for the whole track. ureq has no default timeouts.
+        let agent = ureq::Agent::config_builder()
+            .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
+            .timeout_connect(Some(std::time::Duration::from_secs(8)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(12)))
+            .timeout_global(Some(std::time::Duration::from_secs(20)))
+            .build()
+            .into();
         let mut candidates: Vec<Candidate> = Vec::new();
 
         // Direct lookups first. The album name is deliberately empty: supplying

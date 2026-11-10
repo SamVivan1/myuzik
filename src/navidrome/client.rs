@@ -45,8 +45,14 @@ impl NavidromeClient {
                 .join("/")
                 .map_err(|e| NavidromeError::Protocol(e.to_string()))?;
         }
+        // ureq 3 defaults to no timeouts at all, so a stalled server hung the request
+        // forever: lyrics stayed on "Loading lyrics…", covers never arrived and the
+        // radio never continued. Bound every phase.
         let config = ureq::Agent::config_builder()
             .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
+            .timeout_connect(Some(std::time::Duration::from_secs(8)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(15)))
+            .timeout_global(Some(std::time::Duration::from_secs(25)))
             .build();
         let agent = ureq::Agent::new_with_config(config);
         Ok(Self {

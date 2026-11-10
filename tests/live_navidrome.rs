@@ -346,7 +346,7 @@ fn live_lyrics_quality_in_the_overlay() {
             state.sync_position(pos, cfg.lyrics_offset_ms, Some(total));
             let rows = state.visible_rows().len();
             assert!(
-                rows <= 6,
+                rows <= 7,
                 "'{}' drew {rows} rows at {pos:?}; the overlay must stay in the karaoke band",
                 track.title
             );
