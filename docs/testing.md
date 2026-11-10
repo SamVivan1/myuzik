@@ -28,8 +28,11 @@ They are `#[ignore]` by default and cover:
 - `tests/ui_flow.rs`: a full mocked Navidrome drives the real `Shell` headlessly —
   home load, album click/detail, track click/play command, star toggle, lyrics → overlay sync,
   scrobble now-playing + submission, volume, seek, error toast, search keystrokes, playlist play,
-  artist → album navigation.
-- `tests/ui_shell.rs`: every route renders, sidebar navigation clicks, overlay open/close.
+  artist → album navigation, first-run setup form (connect + save 0600 credentials), and stale
+  lyrics responses being discarded.
+- `tests/ui_shell.rs`: every route renders, sidebar navigation clicks, overlay open/close,
+  unreachable-server toast, setup form typing/validation, configured volume, and editable settings
+  (quality, scrobble, lyric offset/source, reduced motion) persisting to disk.
 - `tests/mpris_metadata.rs`: MPRIS metadata mapping and microsecond positions.
 - `tests/lyrics_view.rs`: active-line centering math.
 

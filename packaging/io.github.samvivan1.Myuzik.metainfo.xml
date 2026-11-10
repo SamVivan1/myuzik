@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.samvivan1.Myuzik</id>
+  <name>Myuzik</name>
+  <summary>Personal Navidrome player with synced lyrics</summary>
+  <developer id="io.github.samvivan1">
+    <name>SamVivan1</name>
+  </developer>
+  <launchable type="desktop-id">io.github.samvivan1.Myuzik.desktop</launchable>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      Myuzik is a lightweight native music player for a self-hosted Navidrome server.
+      It streams your library, shows synced lyrics from Navidrome or LRCLIB, and can pin
+      a lyrics overlay above other windows on GNOME.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Browse recent, starred, artist, and playlist views</li>
+      <li>Synced lyrics with offset adjustment</li>
+      <li>Pinned desktop lyric overlay (GNOME Shell extension)</li>
+      <li>MPRIS media controls, scrobbling, and search</li>
+      <li>Low memory footprint using GPUI and GStreamer</li>
+    </ul>
+  </description>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+  <url type="homepage">https://github.com/SamVivan1/myuzik</url>
+  <url type="bugtracker">https://github.com/SamVivan1/myuzik/issues</url>
+  <releases>
+    <release version="0.1.0" date="2026-11-10">
+      <description>
+        <p>First functional release: library, playback, lyrics, overlay, MPRIS, search, settings.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

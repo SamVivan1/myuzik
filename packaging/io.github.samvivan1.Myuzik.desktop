@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Myuzik
+Comment=Personal Navidrome player with synced lyrics
+Exec=myuzik
+Icon=io.github.samvivan1.Myuzik
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=io.github.samvivan1.Myuzik
+Keywords=music;player;navidrome;subsonic;lyrics;
