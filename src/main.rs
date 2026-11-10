@@ -168,23 +168,17 @@ fn main() {
                                     }
                                     TrayCommand::Next => {
                                         cx.update(|app| {
-                                            let _ = handle.update(app, |shell, _window, cx| {
-                                                shell.play_next(cx);
-                                            });
+                                            shell.update(app, |shell, cx| shell.play_next(cx));
                                         });
                                     }
                                     TrayCommand::Previous => {
                                         cx.update(|app| {
-                                            let _ = handle.update(app, |shell, _window, cx| {
-                                                shell.play_previous(cx);
-                                            });
+                                            shell.update(app, |shell, cx| shell.play_previous(cx));
                                         });
                                     }
                                     TrayCommand::PinLyrics => {
                                         cx.update(|app| {
-                                            let _ = handle.update(app, |shell, _window, cx| {
-                                                shell.toggle_overlay(cx);
-                                            });
+                                            shell.update(app, |shell, cx| shell.toggle_overlay(cx));
                                         });
                                     }
                                     TrayCommand::Quit => {
