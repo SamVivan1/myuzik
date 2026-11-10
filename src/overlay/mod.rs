@@ -1,10 +1,33 @@
+//! The pinned lyrics overlay ("PiP"): a small always-on-top window that keeps the
+//! current lyric line visible while you work elsewhere.
+//!
+//! Layout follows the approved reference: two columns. On the left, the artwork
+//! with the track title, the artist and a real progress bar; on the right, a band
+//! of six lyric lines centred vertically, with the line being sung emphasised.
+//! Only the band is ever drawn, so a 70-line lyric sheet still fits (and stays
+//! readable) in a 620x330 window.
+//!
+//! Cheap by construction: the state is read without cloning the whole lyric list,
+//! the artwork is the same `Arc<Image>` the main window already caches, and there
+//! is no timer or effect work when playback is paused.
+
 #![allow(clippy::items_after_test_module)]
+
 use crate::theme::midnight_brass;
 use gpui::{Context, Render, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*};
-pub const DEFAULT_WIDTH: u32 = 392;
-pub const DEFAULT_HEIGHT: u32 = 180;
-pub const MIN_WIDTH: u32 = 320;
-pub const MIN_HEIGHT: u32 = 140;
+
+pub const DEFAULT_WIDTH: u32 = 620;
+pub const DEFAULT_HEIGHT: u32 = 330;
+pub const MIN_WIDTH: u32 = 520;
+pub const MIN_HEIGHT: u32 = 280;
+
+/// Lyric rows drawn: three above the active line, three below. The outermost
+/// rows sit under the edge fade, so the band reads as a continuous lyric stream
+/// rather than a fixed list.
+pub const BAND_BEFORE: usize = 3;
+pub const BAND_AFTER: usize = 3;
+/// Width of the left column (artwork, title, artist, progress).
+const LEFT_COLUMN: f32 = 160.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayGeometry {
@@ -49,58 +72,6 @@ pub fn clamp_geometry(
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod geometry_tests {
-    use super::*;
-
-    #[test]
-    fn default_geometry() {
-        let g = OverlayGeometry::default();
-        assert_eq!(g.width, DEFAULT_WIDTH);
-        assert_eq!(g.height, DEFAULT_HEIGHT);
-    }
-
-    #[test]
-    fn clamp_size_to_monitor() {
-        let g = OverlayGeometry {
-            x: 0,
-            y: 0,
-            width: 10000,
-            height: 10000,
-        };
-        let c = clamp_geometry(g, 0, 0, 1920, 1080);
-        assert_eq!(c.width, 1920);
-        assert_eq!(c.height, 1080);
-    }
-
-    #[test]
-    fn clamp_position_to_monitor() {
-        let g = OverlayGeometry {
-            x: -100,
-            y: -50,
-            width: 392,
-            height: 180,
-        };
-        let c = clamp_geometry(g, 0, 0, 1920, 1080);
-        assert_eq!(c.x, 0);
-        assert_eq!(c.y, 0);
-    }
-
-    #[test]
-    fn clamp_min_size() {
-        let g = OverlayGeometry {
-            x: 0,
-            y: 0,
-            width: 100,
-            height: 50,
-        };
-        let c = clamp_geometry(g, 0, 0, 1920, 1080);
-        assert_eq!(c.width, MIN_WIDTH);
-        assert_eq!(c.height, MIN_HEIGHT);
-    }
-}
-
 pub const OVERLAY_TITLE: &str = "Myuzik Lyrics";
 pub const APP_ID: &str = "io.github.samvivan1.Myuzik";
 
@@ -130,11 +101,47 @@ impl OverlayWindow {
     }
 }
 
-/// How many lines before / after the active one the pinned overlay shows.
-/// Together with the active line this is the whole band (6 rows), which fits the
-/// default 392x180 window; a song with 70 lines is therefore never crammed in.
-pub const BAND_BEFORE: usize = 2;
-pub const BAND_AFTER: usize = 3;
+impl Default for OverlayWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// How prominent one lyric row is.
+///
+/// The reference shades four tiers: the line being sung, the line that follows,
+/// the line just before, and everything further away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineTier {
+    Active,
+    Next,
+    Far,
+    Dim,
+}
+
+impl LineTier {
+    pub fn is_active(self) -> bool {
+        matches!(self, LineTier::Active)
+    }
+
+    fn of(index: usize, active: Option<usize>) -> Self {
+        match active {
+            Some(active) if index == active => LineTier::Active,
+            Some(active) if index == active + 1 => LineTier::Next,
+            Some(active) if index + 1 == active => LineTier::Far,
+            Some(_) => LineTier::Dim,
+            // Before the first timestamp there is no active line yet.
+            None => LineTier::Dim,
+        }
+    }
+}
+
+/// One row to draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleRow {
+    pub text: String,
+    pub tier: LineTier,
+}
 
 /// What the overlay is currently able to show.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -161,6 +168,12 @@ pub struct OverlayState {
     pub message: String,
     /// True when the text on screen comes from an unsynchronised transcript.
     pub unsynced: bool,
+    /// Artwork for the left column; the same `Arc` the main window caches.
+    pub cover: Option<std::sync::Arc<gpui::Image>>,
+    /// Playback position, for the progress bar.
+    pub position: std::time::Duration,
+    /// Track length, when known.
+    pub duration: Option<std::time::Duration>,
 }
 
 impl OverlayState {
@@ -171,6 +184,9 @@ impl OverlayState {
         self.lyrics = OverlayLyrics::Message;
         self.message = "Loading lyrics…".to_string();
         self.unsynced = false;
+        self.cover = None;
+        self.position = std::time::Duration::ZERO;
+        self.duration = None;
     }
 
     /// Show a resolved lyrics status.
@@ -212,6 +228,11 @@ impl OverlayState {
         self.unsynced = false;
     }
 
+    /// Artwork for the left column.
+    pub fn set_cover(&mut self, cover: Option<std::sync::Arc<gpui::Image>>) {
+        self.cover = cover;
+    }
+
     /// Advance the band for a playback position, honouring the lyric offset.
     pub fn sync_position(
         &mut self,
@@ -220,6 +241,8 @@ impl OverlayState {
         duration: Option<std::time::Duration>,
     ) {
         use crate::lyrics::lrc::{active_line, apply_offset};
+        self.position = position;
+        self.duration = duration;
         match &mut self.lyrics {
             OverlayLyrics::Synced { lines, active } => {
                 let pos = apply_offset(position, offset_ms);
@@ -230,6 +253,18 @@ impl OverlayState {
             }
             OverlayLyrics::Message => {}
         }
+    }
+
+    /// How far through the track we are, 0.0–1.0. Zero without a duration.
+    pub fn progress_fraction(&self) -> f32 {
+        let Some(total) = self.duration else {
+            return 0.0;
+        };
+        let total = total.as_secs_f64();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        ((self.position.as_secs_f64() / total) as f32).clamp(0.0, 1.0)
     }
 
     /// Total number of lines, 0 in the message state.
@@ -252,31 +287,35 @@ impl OverlayState {
 
     /// The text of the first visible line, for tests and diagnostics.
     pub fn first_visible_line(&self) -> Option<String> {
-        self.visible_rows().first().map(|(text, _)| text.clone())
+        self.visible_rows().first().map(|row| row.text.clone())
     }
 
     /// The band of rows to draw: at most `BAND_BEFORE + 1 + BAND_AFTER` of them.
-    pub fn visible_rows(&self) -> Vec<(String, bool)> {
+    pub fn visible_rows(&self) -> Vec<VisibleRow> {
         match &self.lyrics {
             OverlayLyrics::Message => Vec::new(),
             OverlayLyrics::Synced { lines, active } => {
-                let Some(active) = *active else {
+                let range = match *active {
+                    Some(active) => band_range(active, lines.len(), BAND_BEFORE, BAND_AFTER),
                     // Before the first timestamp: show the opening lines, none active.
-                    let end = lines.len().min(BAND_BEFORE + 1 + BAND_AFTER);
-                    return lines[..end]
-                        .iter()
-                        .map(|l| (l.text.clone(), false))
-                        .collect();
+                    None => 0..lines.len().min(BAND_BEFORE + 1 + BAND_AFTER),
                 };
-                let range = band_range(active, lines.len(), BAND_BEFORE, BAND_AFTER);
                 range
-                    .map(|i| (lines[i].text.clone(), i == active))
+                    .map(|i| VisibleRow {
+                        text: lines[i].text.clone(),
+                        tier: LineTier::of(i, *active),
+                    })
                     .collect()
             }
             OverlayLyrics::Plain { lines, index } => {
                 let active = (*index).min(lines.len().saturating_sub(1));
                 let range = band_range(active, lines.len(), BAND_BEFORE, BAND_AFTER);
-                range.map(|i| (lines[i].clone(), i == active)).collect()
+                range
+                    .map(|i| VisibleRow {
+                        text: lines[i].clone(),
+                        tier: LineTier::of(i, Some(active)),
+                    })
+                    .collect()
             }
         }
     }
@@ -325,6 +364,12 @@ pub fn plain_index(
     ((frac * len as f64) as usize).min(len - 1)
 }
 
+/// `m:ss` for the progress labels.
+fn fmt_time(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
 pub struct PinnedLyricsView {
     state: gpui::Entity<OverlayState>,
     geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
@@ -350,94 +395,301 @@ impl Render for PinnedLyricsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
-        let state = self.state.read(cx).clone();
 
-        // Karaoke band: only the lines around the active one. Drawing the whole
-        // song here is what made a 70-line lyric sheet unreadable in a 180 px
-        // window.
-        let rows = state.visible_rows();
-        let mut lines_container = div()
+        // Read once, copy only what is drawn: the old code cloned every lyric
+        // line about ten times a second just to draw six of them.
+        let (title, artist, cover, unsynced, message, rows, progress, elapsed, total) = {
+            let state = self.state.read(cx);
+            (
+                state.title.clone(),
+                state.artist.clone(),
+                state.cover.clone(),
+                state.unsynced,
+                state.message.clone(),
+                state.visible_rows(),
+                state.progress_fraction(),
+                fmt_time(state.position),
+                state
+                    .duration
+                    .map(fmt_time)
+                    .unwrap_or_else(|| "--:--".to_string()),
+            )
+        };
+
+        // ---- left column: artwork, title, artist, progress ----
+        let art = div()
+            .w(gpui::px(LEFT_COLUMN))
+            .h(gpui::px(LEFT_COLUMN))
+            .flex_none()
+            .rounded(gpui::px(18.0))
+            .overflow_hidden()
+            .border_1()
+            .border_color(gpui::rgba(0xFFFFFF40))
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::rgba(0x00000066).into(),
+                offset: gpui::point(gpui::px(0.0), gpui::px(10.0)),
+                blur_radius: gpui::px(24.0),
+                spread_radius: gpui::px(0.0),
+                inset: false,
+            }])
+            .child(match &cover {
+                Some(image) => div()
+                    .size_full()
+                    .child(
+                        gpui::img(gpui::ImageSource::Image(image.clone()))
+                            .w(gpui::px(LEFT_COLUMN))
+                            .h(gpui::px(LEFT_COLUMN))
+                            .object_fit(gpui::ObjectFit::Cover),
+                    )
+                    .into_any_element(),
+                None => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::linear_gradient(
+                        135.0,
+                        gpui::linear_color_stop(t.clay_gradient_start, 0.0),
+                        gpui::linear_color_stop(t.gold_deep, 1.0),
+                    ))
+                    .text_size(gpui::px(34.0))
+                    .text_color(t.clay_ink)
+                    .font_family(theme.display_font)
+                    .child("♪")
+                    .into_any_element(),
+            });
+
+        let progress_fill = LEFT_COLUMN * progress;
+
+        let left = div()
+            .w(gpui::px(LEFT_COLUMN))
+            .flex_none()
             .flex()
             .flex_col()
-            .justify_center()
-            .gap(gpui::px(5.0))
-            .px(gpui::px(16.0))
-            .py(gpui::px(10.0))
-            .flex_1()
-            .overflow_hidden();
-
-        if rows.is_empty() {
-            lines_container = lines_container.items_center().child(
-                div()
-                    .text_size(gpui::px(12.0))
-                    .font_family(theme.ui_font)
-                    .text_color(t.text_secondary)
-                    .child(state.message.clone()),
-            );
-        } else {
-            for (text, is_active) in rows {
-                let (line_size, line_color, line_weight, opacity) = if is_active {
-                    (16.0, t.gold_light, gpui::FontWeight::BOLD, 1.0)
-                } else {
-                    (11.5, t.text_secondary, gpui::FontWeight::NORMAL, 0.72)
-                };
-                let mut line_div = div()
-                    .w_full()
-                    .text_size(gpui::px(line_size))
-                    .font_family(theme.ui_font)
-                    .font_weight(line_weight)
-                    .text_color(line_color)
-                    .opacity(opacity)
-                    // Long lines wrap instead of overflowing the pinned window.
-                    .child(text);
-                if is_active {
-                    line_div = line_div.child(
-                        div()
-                            .mt(gpui::px(3.0))
-                            .w(gpui::px(40.0))
-                            .h(gpui::px(2.0))
-                            .rounded(gpui::px(999.0))
-                            .bg(t.gold),
-                    );
-                }
-                lines_container = lines_container.child(line_div);
-            }
-        }
-
-        div()
-            .size_full()
-            .bg(t.glass_tint)
-            .text_color(t.text_primary)
-            .flex()
-            .flex_col()
+            .child(art)
             .child(
-                // header
                 div()
+                    .mt(gpui::px(13.0))
+                    .font_family(theme.display_font)
+                    .text_size(gpui::px(20.0))
+                    .line_height(gpui::px(25.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(t.text_primary)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .mt(gpui::px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(gpui::px(6.0))
+                    .child(
+                        div()
+                            .text_size(gpui::px(12.5))
+                            .text_color(t.text_secondary)
+                            .child(artist),
+                    )
+                    .when(unsynced, |el| {
+                        el.child(
+                            div()
+                                .px(gpui::px(5.0))
+                                .py(gpui::px(1.0))
+                                .rounded(gpui::px(999.0))
+                                .border_1()
+                                .border_color(t.gold_tint_border)
+                                .text_size(gpui::px(8.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(t.gold)
+                                .child("UNSYNCED"),
+                        )
+                    }),
+            )
+            .child(
+                // Real progress, not decoration.
+                div()
+                    .mt(gpui::px(16.0))
+                    .w(gpui::px(LEFT_COLUMN))
+                    .h(gpui::px(5.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(gpui::rgba(0xFFFFFF2E))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .h(gpui::px(5.0))
+                            .w(gpui::px(progress_fill))
+                            .rounded(gpui::px(999.0))
+                            .bg(gpui::linear_gradient(
+                                90.0,
+                                gpui::linear_color_stop(t.gold_light, 0.0),
+                                gpui::linear_color_stop(t.gold, 1.0),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .mt(gpui::px(8.0))
+                    .w(gpui::px(LEFT_COLUMN))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px(gpui::px(14.0))
-                    .py(gpui::px(10.0))
-                    .border_b_1()
-                    .border_color(t.glass_border)
-                    .id("overlay-header")
-                    .aria_label("Drag lyrics overlay")
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|_this, _event, window, _cx| window.start_window_move()),
+                    .text_size(gpui::px(10.0))
+                    .text_color(t.text_tertiary)
+                    .child(elapsed)
+                    .child(total),
+            )
+            .child(div().flex_1());
+
+        // ---- right column: the lyric band ----
+        let mut lines = div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .items_center()
+            .gap(gpui::px(17.0))
+            .px(gpui::px(6.0))
+            // Room for the close control, so it never sits on a lyric.
+            .pr(gpui::px(38.0))
+            .overflow_hidden();
+
+        if rows.is_empty() {
+            lines = lines.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(gpui::px(4.0))
+                    .child(
+                        div()
+                            .text_size(gpui::px(14.0))
+                            .font_family(theme.ui_font)
+                            .text_color(t.text_secondary)
+                            .child(message),
                     )
                     .child(
                         div()
-                            .px(gpui::px(8.0))
-                            .py(gpui::px(4.0))
-                            .rounded(gpui::px(999.0))
-                            .bg(t.gold)
-                            .text_color(t.clay_ink)
+                            .text_size(gpui::px(10.5))
                             .font_family(theme.ui_font)
-                            .text_size(gpui::px(9.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child("Pinned lyrics"),
-                    )
+                            .text_color(t.text_tertiary)
+                            .child("Lyrics come from Navidrome and LRCLIB"),
+                    ),
+            );
+        } else {
+            for row in rows {
+                let (size, color, weight, opacity) = match row.tier {
+                    LineTier::Active => (20.0, t.gold_light, gpui::FontWeight::SEMIBOLD, 1.0),
+                    LineTier::Next => (16.5, t.text_primary, gpui::FontWeight::MEDIUM, 0.94),
+                    LineTier::Far => (16.0, t.text_primary, gpui::FontWeight::NORMAL, 0.72),
+                    LineTier::Dim => (15.5, t.text_secondary, gpui::FontWeight::NORMAL, 0.52),
+                };
+                lines = lines.child(
+                    div()
+                        .w_full()
+                        .text_center()
+                        .text_size(gpui::px(size))
+                        .line_height(gpui::px(size * 1.34))
+                        .font_family(theme.ui_font)
+                        .font_weight(weight)
+                        .text_color(color)
+                        .opacity(opacity)
+                        .child(row.text),
+                );
+            }
+        }
+
+        let right = div().flex_1().h_full().child(lines);
+
+        let ambient = div()
+            .absolute()
+            .inset_0()
+            .child(
+                div()
+                    .absolute()
+                    .left(gpui::px(-70.0))
+                    .top(gpui::px(-60.0))
+                    .w(gpui::px(300.0))
+                    .h(gpui::px(300.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(gpui::linear_gradient(
+                        150.0,
+                        gpui::linear_color_stop(gpui::rgba(0xC9A86A5C), 0.0),
+                        gpui::linear_color_stop(gpui::rgba(0x00000000), 0.62),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .right(gpui::px(-90.0))
+                    .bottom(gpui::px(-80.0))
+                    .w(gpui::px(320.0))
+                    .h(gpui::px(320.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(gpui::linear_gradient(
+                        330.0,
+                        gpui::linear_color_stop(gpui::rgba(0x2F6B6340), 0.0),
+                        gpui::linear_color_stop(gpui::rgba(0x00000000), 0.58),
+                    )),
+            );
+
+        div()
+            .size_full()
+            .rounded(gpui::px(22.0))
+            .overflow_hidden()
+            .bg(gpui::linear_gradient(
+                155.0,
+                gpui::linear_color_stop(gpui::rgb(0x1B1614), 0.0),
+                gpui::linear_color_stop(gpui::rgb(0x0C0B0F), 1.0),
+            ))
+            .border_1()
+            .border_color(gpui::rgba(0xE8D3A342))
+            .shadow(vec![
+                // Deep drop shadow: the panel floats above the desktop.
+                gpui::BoxShadow {
+                    color: gpui::rgba(0x000000A0).into(),
+                    offset: gpui::point(gpui::px(0.0), gpui::px(20.0)),
+                    blur_radius: gpui::px(52.0),
+                    spread_radius: gpui::px(0.0),
+                    inset: false,
+                },
+                // Inset top highlight: the glass edge catching the light.
+                gpui::BoxShadow {
+                    color: gpui::rgba(0xFFFFFF1A).into(),
+                    offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+                    blur_radius: gpui::px(1.0),
+                    spread_radius: gpui::px(0.0),
+                    inset: true,
+                },
+                gpui::BoxShadow {
+                    color: t.shadow_warm.into(),
+                    offset: gpui::point(gpui::px(0.0), gpui::px(-2.0)),
+                    blur_radius: gpui::px(10.0),
+                    spread_radius: gpui::px(0.0),
+                    inset: true,
+                },
+            ])
+            .text_color(t.text_primary)
+            // The whole panel drags the window.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_this, _event, window, _cx| window.start_window_move()),
+            )
+            .child(ambient)
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_row()
+                    .gap(gpui::px(24.0))
+                    .p(gpui::px(20.0))
+                    .child(left)
+                    .child(right),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(gpui::px(12.0))
+                    .right(gpui::px(12.0))
                     .child(
                         div()
                             .id("overlay-close")
@@ -464,60 +716,18 @@ impl Render for PinnedLyricsView {
                                 }
                                 window.remove_window();
                             }))
-                            .w(gpui::px(24.0))
-                            .h(gpui::px(24.0))
+                            .w(gpui::px(28.0))
+                            .h(gpui::px(28.0))
                             .rounded(gpui::px(999.0))
-                            .bg(gpui::rgba(0xFFFFFFFF))
+                            .bg(gpui::rgba(0xFFFFFF1F))
+                            .opacity(0.8)
+                            .hover(|style| style.opacity(1.0).bg(gpui::rgba(0xFFFFFF1F)))
                             .text_color(t.text_secondary)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(gpui::px(12.0))
+                            .text_size(gpui::px(13.0))
                             .child("×"),
-                    ),
-            )
-            .child(lines_container)
-            .child(
-                div()
-                    .px(gpui::px(16.0))
-                    .py(gpui::px(8.0))
-                    .border_t_1()
-                    .border_color(t.glass_border)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(gpui::px(6.0))
-                            .child(
-                                div()
-                                    .text_size(gpui::px(9.0))
-                                    .text_color(t.text_secondary)
-                                    .child(format!("{} — {}", state.title, state.artist)),
-                            )
-                            .when(state.unsynced, |el| {
-                                el.child(
-                                    div()
-                                        .px(gpui::px(5.0))
-                                        .py(gpui::px(1.0))
-                                        .rounded(gpui::px(999.0))
-                                        .border_1()
-                                        .border_color(t.glass_border)
-                                        .text_size(gpui::px(8.0))
-                                        .text_color(t.text_secondary)
-                                        .child("unsynced"),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w(gpui::px(60.0))
-                            .h(gpui::px(3.0))
-                            .rounded(gpui::px(999.0))
-                            .bg(t.gold)
-                            .opacity(0.6),
                     ),
             )
     }
@@ -550,9 +760,54 @@ pub fn set_overlay_title(window: &mut gpui::Window) {
     window.set_window_title(OVERLAY_TITLE);
 }
 
-impl Default for OverlayWindow {
-    fn default() -> Self {
-        Self::new()
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn default_geometry() {
+        let g = OverlayGeometry::default();
+        assert_eq!(g.width, DEFAULT_WIDTH);
+        assert_eq!(g.height, DEFAULT_HEIGHT);
+    }
+
+    #[test]
+    fn clamp_size_to_monitor() {
+        let g = OverlayGeometry {
+            x: 0,
+            y: 0,
+            width: 10000,
+            height: 10000,
+        };
+        let c = clamp_geometry(g, 0, 0, 1920, 1080);
+        assert_eq!(c.width, 1920);
+        assert_eq!(c.height, 1080);
+    }
+
+    #[test]
+    fn clamp_position_to_monitor() {
+        let g = OverlayGeometry {
+            x: -100,
+            y: -50,
+            width: 620,
+            height: 330,
+        };
+        let c = clamp_geometry(g, 0, 0, 1920, 1080);
+        assert_eq!(c.x, 0);
+        assert_eq!(c.y, 0);
+    }
+
+    #[test]
+    fn clamp_min_size() {
+        let g = OverlayGeometry {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
+        let c = clamp_geometry(g, 0, 0, 1920, 1080);
+        assert_eq!(c.width, MIN_WIDTH);
+        assert_eq!(c.height, MIN_HEIGHT);
     }
 }
 
@@ -572,18 +827,18 @@ mod band_tests {
     }
 
     #[test]
-    fn band_keeps_six_rows_around_the_active_line() {
+    fn band_keeps_seven_rows_around_the_active_line() {
         let range = band_range(10, 70, BAND_BEFORE, BAND_AFTER);
-        assert_eq!(range, 8..14);
+        assert_eq!(range, 7..14);
         assert_eq!(range.len(), BAND_BEFORE + 1 + BAND_AFTER);
     }
 
     #[test]
     fn band_stays_full_at_the_start_and_the_end() {
-        assert_eq!(band_range(0, 70, BAND_BEFORE, BAND_AFTER), 0..6);
+        assert_eq!(band_range(0, 70, BAND_BEFORE, BAND_AFTER), 0..7);
         let end = band_range(69, 70, BAND_BEFORE, BAND_AFTER);
-        assert_eq!(end, 64..70);
-        assert_eq!(end.len(), 6);
+        assert_eq!(end, 63..70);
+        assert_eq!(end.len(), 7);
     }
 
     #[test]
@@ -594,25 +849,58 @@ mod band_tests {
     }
 
     #[test]
-    fn a_long_song_renders_at_most_six_rows() {
+    fn a_long_song_renders_at_most_seven_rows() {
         let mut state = OverlayState::default();
         state.set_status(&LyricsStatus::Synced(synced(70)));
         state.sync_position(Duration::from_secs(300), 0, Some(Duration::from_secs(360)));
         let rows = state.visible_rows();
-        assert_eq!(rows.len(), BAND_BEFORE + 1 + BAND_AFTER);
-        assert_eq!(rows.iter().filter(|(_, active)| *active).count(), 1);
+        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.iter().filter(|r| r.tier.is_active()).count(), 1);
+    }
+
+    #[test]
+    fn tiers_follow_the_active_line() {
+        let mut state = OverlayState::default();
+        state.set_status(&LyricsStatus::Synced(synced(70)));
+        // 5 s per line: at 300 s line 60 is playing.
+        state.sync_position(Duration::from_secs(300), 0, None);
+        let rows = state.visible_rows();
+        let tiers: Vec<LineTier> = rows.iter().map(|r| r.tier).collect();
+        assert_eq!(
+            tiers,
+            vec![
+                LineTier::Dim,
+                LineTier::Dim,
+                LineTier::Far,
+                LineTier::Active,
+                LineTier::Next,
+                LineTier::Dim,
+                LineTier::Dim,
+            ]
+        );
+        assert_eq!(rows[3].text, "line 60");
     }
 
     #[test]
     fn offset_shifts_which_line_is_active() {
         let mut state = OverlayState::default();
         state.set_status(&LyricsStatus::Synced(synced(10)));
-        // 5 s lines: at 10 s line 2 is active, with no offset.
         state.sync_position(Duration::from_secs(10), 0, None);
         assert_eq!(state.active(), Some(2));
-        // -5000 ms of offset moves playback back a whole line.
         state.sync_position(Duration::from_secs(10), -5_000, None);
         assert_eq!(state.active(), Some(1));
+    }
+
+    #[test]
+    fn progress_fraction_is_clamped() {
+        let mut state = OverlayState::default();
+        assert_eq!(state.progress_fraction(), 0.0, "no duration yet");
+        state.sync_position(Duration::from_secs(50), 0, Some(Duration::from_secs(100)));
+        assert!((state.progress_fraction() - 0.5).abs() < f32::EPSILON);
+        state.sync_position(Duration::from_secs(500), 0, Some(Duration::from_secs(100)));
+        assert_eq!(state.progress_fraction(), 1.0, "clamped at the end");
+        state.sync_position(Duration::ZERO, 0, Some(Duration::ZERO));
+        assert_eq!(state.progress_fraction(), 0.0, "zero duration");
     }
 
     #[test]
@@ -631,6 +919,15 @@ mod band_tests {
             "plain lyrics must not fake an active line"
         );
         assert_eq!(
+            state
+                .visible_rows()
+                .iter()
+                .filter(|r| r.tier.is_active())
+                .count(),
+            1,
+            "the band still centres the line the song has reached"
+        );
+        assert_eq!(
             plain_index(Duration::ZERO, Some(Duration::from_secs(100)), 10),
             0
         );
@@ -642,7 +939,6 @@ mod band_tests {
             plain_index(Duration::from_secs(100), Some(Duration::from_secs(100)), 10),
             9
         );
-        // No duration: nothing to follow, stay at the top.
         assert_eq!(plain_index(Duration::from_secs(50), None, 10), 0);
     }
 
@@ -668,5 +964,15 @@ mod band_tests {
         state.set_status(&LyricsStatus::Plain("a\n\n   \nb".to_string()));
         assert_eq!(state.line_count(), 2);
         assert_eq!(state.first_visible_line().as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn begin_clears_the_previous_track_artwork_and_progress() {
+        let mut state = OverlayState::default();
+        state.sync_position(Duration::from_secs(30), 0, Some(Duration::from_secs(60)));
+        state.begin("New".to_string(), "Artist".to_string());
+        assert_eq!(state.cover, None);
+        assert_eq!(state.progress_fraction(), 0.0);
+        assert_eq!(state.line_count(), 0);
     }
 }

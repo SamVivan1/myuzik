@@ -182,7 +182,7 @@ fn overlay_draws_a_band_not_the_whole_song(cx: &mut TestAppContext) {
 
     let rows = shell.read_with(&vcx, |s, cx| s.overlay_visible_rows(cx));
     assert!(
-        rows <= 6,
+        rows <= 7,
         "the overlay drew {rows} rows; it must stay within the karaoke band"
     );
     assert!(rows >= 3, "the band should still show context, got {rows}");
@@ -196,8 +196,8 @@ fn overlay_draws_a_band_not_the_whole_song(cx: &mut TestAppContext) {
         shell
             .read_with(&vcx, |s, cx| s.overlay_first_line(cx))
             .as_deref(),
-        Some("line 58"),
-        "the band should start two lines before the active one"
+        Some("line 57"),
+        "the band should start three lines before the active one"
     );
 }
 
