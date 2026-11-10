@@ -6,8 +6,12 @@
 - **System tray** (`src/platform/tray.rs`): a StatusNotifierItem plus DBusMenu on the session bus,
   with Show/Hide, Play/Pause, Previous, Next, Pin lyrics and Quit. The menu labels follow the
   current track and play state. Without a session bus the app runs normally, just without a tray.
-- **Close to tray**: closing the main window hides it instead of quitting, so playback continues and
-  the tray brings it back. Configurable (`close_to_tray`, default on) with a Settings → Playback row.
+- **Close to tray**: closing the main window destroys it and leaves the process running — queue,
+  player thread and MPRIS all survive — so playback continues and the tray icon brings the same
+  window back. The app runs with an explicit quit mode and a supervisor that shows the icon only
+  while no window exists (tray `Status` flips between `Passive` and `Active`), so the icon and the
+  window are never both present. Configurable (`close_to_tray`, default on) with a
+  Settings → Playback row.
 
 ### Changed
 - The pinned overlay is redesigned to the approved reference: two columns — artwork, title, artist

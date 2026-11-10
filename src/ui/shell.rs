@@ -60,8 +60,6 @@ pub struct Shell {
     /// because it is attached after construction while the player event loop
     /// (created inside `new`) also reports into it.
     tray_slot: Arc<std::sync::Mutex<Option<Arc<crate::platform::tray::Tray>>>>,
-    /// The window's close handler is registered once, on the first frame.
-    close_handler_registered: bool,
     setup_server: String,
     setup_user: String,
     setup_pass: String,
@@ -400,7 +398,6 @@ impl Shell {
             radio_continue_pending,
             self_weak,
             tray_slot,
-            close_handler_registered: false,
             setup_server,
             setup_user,
             setup_pass,
@@ -1043,6 +1040,16 @@ impl Shell {
         self.persist_config();
     }
 
+    /// Close the main window.
+    ///
+    /// Removing the window is all that happens here: `main.rs` runs the app with
+    /// an explicit quit mode and a supervisor that keeps the tray icon visible
+    /// only while there is no window, so "close to tray" and "close quits" are one
+    /// decision instead of two code paths that can disagree.
+    pub fn close_window(&mut self, window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) {
+        window.remove_window();
+    }
+
     /// Hide the window to the tray on close instead of quitting.
     pub fn toggle_close_to_tray(&mut self) {
         self.config.close_to_tray = !self.config.close_to_tray;
@@ -1259,6 +1266,11 @@ impl Shell {
             .current
             .as_ref()
             .map(|t| t.id.clone())
+    }
+
+    /// Whether closing the window should leave the app running in the tray.
+    pub fn close_to_tray(&self) -> bool {
+        self.config.close_to_tray
     }
 
     /// Whether autoplay radio is enabled.
@@ -2151,23 +2163,6 @@ impl Render for Shell {
             window.focus(&self.root_focus, cx);
             self.root_focus_requested = true;
         }
-        if !self.close_handler_registered {
-            // Registered once per window. Returning false cancels the close, so
-            // "close to tray" keeps the process, the player and the tray alive.
-            let weak = self.self_weak.clone();
-            window.on_window_should_close(cx, move |window, app| {
-                let close_to_tray = weak
-                    .upgrade()
-                    .map(|entity| entity.read(app).config.close_to_tray)
-                    .unwrap_or(false);
-                if !close_to_tray {
-                    return true;
-                }
-                window.minimize_window();
-                false
-            });
-            self.close_handler_registered = true;
-        }
         let key_entity = cx.entity();
         // Glass shell with home content
         div()
@@ -2392,7 +2387,7 @@ impl Render for Shell {
                                             .border_1()
                                             .border_color(gpui::rgba(0x00000033))
                                             .hover(|style| style.bg(gpui::rgb(0xFF7B73)))
-                                            .on_click(cx.listener(|_this, _event, window, _cx| window.remove_window())),
+                                            .on_click(cx.listener(|this, _event, window, cx| this.close_window(window, cx))),
                                     )
                                     .child(
                                         div()

@@ -24,8 +24,10 @@ and GStreamer.
   across workspaces.
 - **System tray** — a StatusNotifierItem icon (visible in the GNOME top bar with the AppIndicator
   extension) with Show/Hide, Play/Pause, Previous, Next, Pin lyrics and Quit.
-- **Close to tray** — closing the window hides Myuzik to the tray and keeps the music playing;
-  turn it off in Settings → Playback. Quit from the tray menu.
+- **Close to tray** — the window closes for real and the app keeps running with its queue, player
+  and MPRIS intact; the tray icon appears only while there is no window, so the two never show up
+  together. Clicking the icon reopens the same window. Turn it off in Settings → Playback; Quit
+  from the tray menu.
 - **MPRIS** controls and metadata (works with `playerctl`, GNOME media menu, etc.).
 - **Scrobbling** (now-playing + submitted) to Navidrome.
 - **Endless autoplay**: when a track ends, Myuzik keeps going with similar music — first

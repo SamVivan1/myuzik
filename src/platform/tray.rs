@@ -183,6 +183,12 @@ impl Tray {
         self.send(ControlMessage::Pinned(pinned));
     }
 
+    /// Show or hide the icon. Hiding keeps the item exported and the menu
+    /// working; it only asks the shell to stop drawing it (SNI `Status`).
+    pub fn set_visible(&self, visible: bool) {
+        self.send(ControlMessage::Visible(visible));
+    }
+
     /// Release the bus name and wait for the worker thread to finish.
     ///
     /// Safe to call more than once and from any thread; the second call is a
@@ -220,18 +226,37 @@ enum ControlMessage {
     Track { title: String, artist: String },
     Playing(bool),
     Pinned(bool),
+    Visible(bool),
     Shutdown,
 }
 
 /// The tray state the D-Bus properties are read from.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct TrayState {
     title: String,
     artist: String,
     playing: bool,
     pinned: bool,
+    /// Shown in the shell. Hidden while the main window is open, so the icon is
+    /// not redundant with the window in the dock/taskbar.
+    visible: bool,
     /// Bumped whenever the menu layout changes, for DBusMenu `LayoutUpdated`.
     revision: u32,
+}
+
+impl Default for TrayState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            artist: String::new(),
+            playing: false,
+            pinned: false,
+            // Visible unless the app hides it, so a caller that never touches the
+            // flag still gets an icon.
+            visible: true,
+            revision: 0,
+        }
+    }
 }
 
 impl TrayState {
@@ -506,8 +531,13 @@ impl StatusNotifierItem {
 
     #[zbus(property)]
     fn status(&self) -> String {
-        // Passive would make the shell hide us.
-        "Active".to_owned()
+        // Passive asks the shell to stop drawing the icon; the item stays
+        // exported, so toggling back is immediate.
+        if lock_state(&self.state).visible {
+            "Active".to_owned()
+        } else {
+            "Passive".to_owned()
+        }
     }
 
     #[zbus(property)]
@@ -764,6 +794,7 @@ impl Service {
                 ControlMessage::Track { title, artist } => self.publish_track(title, artist),
                 ControlMessage::Playing(playing) => self.publish_playing(playing),
                 ControlMessage::Pinned(pinned) => self.publish_pinned(pinned),
+                ControlMessage::Visible(visible) => self.publish_visible(visible),
                 ControlMessage::Shutdown => break,
             }
         }
@@ -788,6 +819,19 @@ impl Service {
             .emit_signal(None::<&str>, path, interface, signal, body)
         {
             tracing::warn!(signal, %error, "tray: cannot emit signal");
+        }
+    }
+
+    fn publish_visible(&self, visible: bool) {
+        let changed = {
+            let mut state = lock_state(&self.state);
+            let changed = state.visible != visible;
+            state.visible = visible;
+            changed
+        };
+        if changed {
+            let status = if visible { "Active" } else { "Passive" };
+            self.emit(ITEM_PATH, SNI_INTERFACE, "NewStatus", &status);
         }
     }
 
@@ -1067,6 +1111,19 @@ mod tests {
     #[test]
     fn zero_sized_icon_yields_no_pixmaps() {
         assert!(icon_pixmaps(&[], 0).is_empty());
+    }
+
+    #[test]
+    fn the_icon_starts_visible_and_the_flag_tracks_hiding() {
+        // The app hides the icon while its window exists and shows it once the
+        // window is gone; the flag is what the `Status` property and the
+        // `NewStatus` signal are both derived from.
+        let mut state = TrayState::default();
+        assert!(state.visible, "the icon starts visible");
+        state.visible = false;
+        assert!(!state.visible, "hiding is sticky until shown again");
+        state.visible = true;
+        assert!(state.visible);
     }
 
     #[test]

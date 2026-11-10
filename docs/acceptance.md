@@ -88,7 +88,8 @@ server, enabled with `MYUZIK_LIVE=1`) and the 1 `screenshots` capture.
 | Missing lyrics show a message, not an empty box | ✅ `states_show_a_message_instead_of_an_empty_box` + `overlay-empty.png` |
 | Panel holds up on a light and a dark wallpaper | ✅ `overlay.png` (dark) and `overlay-light.png` (bright), reviewed |
 | Tray icon registers and answers menu clicks | ✅ run today on the real session: `org.kde.StatusNotifierItem-<pid>-1` registered, GNOME's appindicator called `AboutToShow`/`Event(clicked)`; `tray.shutdown()` releases the name |
-| Close to tray keeps the app alive | ⚠️ implemented (`on_window_should_close` → minimise, process + tray + player stay up) and the setting persists, but the window-manager close needs one manual click to confirm on the desktop |
+| Close to tray keeps the app alive | ✅ verified on the running desktop: with the window open the tray reports `Status=Passive`; after closing (the red button's path, `MYUZIK_WINDOW_TEST=close`) the process is still up and the tray flips to `Active`; calling the tray's `Activate` reopens the window and the tray returns to `Passive` |
+| Tray icon and window are never both visible | ✅ same run: `Passive` while a window exists, `Active` only when none does (400 ms supervisor) |
 
 ### Lyrics rendering and matching
 

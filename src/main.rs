@@ -10,6 +10,24 @@ use gpui::{
 };
 use gpui_platform::application;
 
+/// Options for the main window, shared by the first open and by the tray reopening it.
+fn main_window_options(bounds: Bounds<gpui::Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_background: WindowBackgroundAppearance::Blurred,
+        window_decorations: Some(WindowDecorations::Client),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(px(960.), px(640.))),
+        is_resizable: true,
+        app_id: Some("io.github.samvivan1.Myuzik".to_string()),
+        titlebar: Some(gpui::TitlebarOptions {
+            title: Some("Myuzik".into()),
+            appears_transparent: false,
+            traffic_light_position: None,
+        }),
+        ..Default::default()
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -37,6 +55,10 @@ fn main() {
         let config = cfg.clone();
         let paths = paths.clone();
 
+        // Closing the window must not end the process: with close-to-tray the app
+        // keeps playing and only the tray icon remains.
+        cx.set_quit_mode(gpui::QuitMode::Explicit);
+
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let opts = WindowOptions {
             window_background: WindowBackgroundAppearance::Blurred,
@@ -52,11 +74,17 @@ fn main() {
             }),
             ..Default::default()
         };
-        let handle = cx
-            .open_window(opts, |_window, cx| {
-                cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle))
+        // The shell lives at app scope, not inside the window, so destroying the
+        // window keeps the queue, the player and MPRIS alive and reopening it
+        // restores the same view.
+        let shell = cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle));
+        let mut handle = cx
+            .open_window(opts, {
+                let shell = shell.clone();
+                move |_window, _cx| shell.clone()
             })
             .expect("failed to open window");
+        let bounds_for_tray = bounds;
 
         // System tray: keeps the app reachable when the window is closed
         // (close-to-tray) and gives playback controls from the top bar.
@@ -69,18 +97,53 @@ fn main() {
                 match Tray::start(rgba.into_raw(), w.min(h)) {
                     Ok((tray, commands)) => {
                         let tray = std::sync::Arc::new(tray);
-                        let _ = handle.update(cx, |shell, _window, _cx| {
-                            shell.attach_tray(tray.clone());
-                        });
+                        shell.update(cx, |shell, _cx| shell.attach_tray(tray.clone()));
+                        // The icon is only useful when the window is gone.
+                        tray.set_visible(false);
                         let tray_player_tx = tray_player_tx.clone();
+                        // One supervisor keeps the icon and the window in step,
+                        // whichever way the window was closed (red button, WM,
+                        // Alt+F4), so the two never contradict each other.
+                        {
+                            let tray = tray.clone();
+                            let shell = shell.clone();
+                            cx.spawn(async move |cx| {
+                                loop {
+                                    cx.background_executor()
+                                        .timer(std::time::Duration::from_millis(400))
+                                        .await;
+                                    let empty = cx.update(|app| app.windows().is_empty());
+                                    let close_to_tray =
+                                        cx.update(|app| shell.read(app).close_to_tray());
+                                    tray.set_visible(empty);
+                                    if empty && !close_to_tray {
+                                        cx.update(|app| app.quit());
+                                        break;
+                                    }
+                                }
+                            })
+                            .detach();
+                        }
                         cx.spawn(async move |cx| {
                             while let Ok(command) = commands.recv_async().await {
                                 match command {
                                     TrayCommand::Show => {
                                         cx.update(|app| {
-                                            let _ = handle.update(app, |_shell, window, _cx| {
-                                                window.activate_window();
-                                            });
+                                            if app.windows().is_empty() {
+                                                let opts = main_window_options(bounds_for_tray);
+                                                let shell = shell.clone();
+                                                if let Ok(reopened) = app.open_window(opts, {
+                                                    let shell = shell.clone();
+                                                    move |_window, _cx| shell.clone()
+                                                }) {
+                                                    handle = reopened;
+                                                }
+                                            } else {
+                                                let _ =
+                                                    handle.update(app, |_shell, window, _cx| {
+                                                        window.activate_window();
+                                                    });
+                                            }
                                         });
                                     }
                                     TrayCommand::Hide => {
