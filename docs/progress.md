@@ -26,7 +26,7 @@ Last updated: 2026-11-10
 ## Phase 3 — Playback and MPRIS
 - [x] Task 11: GStreamer player thread + state machine (wired)
 - [x] Task 12: Queue, shuffle, repeat, next/previous, EOS auto-advance
-- [~] Task 13: Player bar, seek ±10s, volume; global keyboard shortcuts pending
+- [x] Task 13: Player bar, seek ±10s, volume, global shortcuts (Space/arrows/Ctrl+K/Ctrl+P)
 - [x] Task 14: MPRIS (metadata, status, next/prev, seek, volume)
 
 ## Phase 4 — Lyrics
@@ -35,13 +35,13 @@ Last updated: 2026-11-10
 - [x] Task 17: Shared lyrics view + Now Playing screen with cover
 
 ## Phase 5 — Pinned Overlay
-- [~] Task 18: Overlay window/view/toggle + lyrics sync implemented; geometry persistence pending
+- [x] Task 18: Overlay window/view/toggle, lyrics sync, geometry persistence
 - [~] Task 19: GNOME extension present; install script; version matrix notes pending
 
 ## Phase 6 — Settings, Polish, Integrity
 - [x] Task 20: Settings (quality, scrobble, lyrics offset/source, reduced motion, accent)
 - [x] Task 21: Scrobbling (now-playing + submit), favorites, queue actions
-- [~] Task 22: Error toasts, setup errors, URL/token log redaction, aria labels;
+- [~] Task 22: Error toasts, setup errors, URL/token log redaction, aria labels, global shortcuts;
   full keyboard focus order + automated a11y tree pending (see docs/accessibility.md)
 - [ ] Task 23: Design polish and anti-slop audit
 - [~] Task 24: Memory measured (idle 125 MB, playing 159 MB); stress tests pending
@@ -56,8 +56,6 @@ Last updated: 2026-11-10
 - See `docs/testing.md` for the coverage map.
 
 ## Known gaps
-- Global keyboard shortcuts (Space, arrows, Ctrl+K, Ctrl+P) are not bound yet.
-- Overlay geometry is not persisted across restarts.
 - Playlist/artist detail screens are read/play only; no editing.
 - Settings cover quality/scrobble/lyrics/motion; account password change is via setup.
 - Stress tests (20k tracks, rapid skips, 24 h idle) are not automated.
