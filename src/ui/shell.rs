@@ -28,6 +28,8 @@ pub struct Shell {
     search_view: gpui::Entity<SearchView>,
     settings_view: gpui::Entity<SettingsView>,
     mpris_handle: Option<MprisHandle>,
+    overlay_state: gpui::Entity<crate::overlay::OverlayState>,
+    overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
 }
 
 impl Shell {
@@ -40,6 +42,8 @@ impl Shell {
         let now_playing = cx.new(|cx| NowPlayingView::new(cx));
         let search_view = cx.new(|_cx| SearchView::new());
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
+        let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
+        let overlay_handle = None;
         let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
@@ -50,6 +54,7 @@ impl Shell {
         let rx = player_handle.rx.clone();
         let mpris_for_loop = mpris_handle.clone();
         let now_playing_for_loop = now_playing.clone();
+        let overlay_for_loop = overlay_state.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
             let hs = home_state.clone();
@@ -92,6 +97,14 @@ impl Shell {
                         cx.update(|app| {
                             app.update_entity(&np, |v, cx| {
                                 v.set_position(cx, pos.as_secs_f64(), dur);
+                            });
+                        });
+                        let os = overlay_for_loop.clone();
+                        cx.update(|app| {
+                            let lines = os.read(app).lines.clone();
+                            let idx = crate::lyrics::lrc::active_line(&lines, pos);
+                            app.update_entity(&os, |st, _cx| {
+                                st.active = idx;
                             });
                         });
                     }
@@ -137,6 +150,8 @@ impl Shell {
             now_playing,
             search_view,
             settings_view,
+            overlay_state,
+            overlay_handle,
             mpris_handle,
         }
     }
@@ -179,14 +194,19 @@ impl Shell {
             titlebar: None,
             ..Default::default()
         };
-        let handle = cx.open_window(opts, |_window, cx| {
-            cx.new(|_cx| crate::overlay::PinnedLyricsView::new())
+        if self.overlay_handle.is_some() {
+            return;
+        }
+        let state = self.overlay_state.clone();
+        let handle = cx.open_window(opts, move |_window, cx| {
+            cx.new(|_cx| crate::overlay::PinnedLyricsView::new(state))
         });
         if let Ok(h) = handle {
             h.update(cx, |_view, window, _cx| {
                 window.set_window_title(crate::overlay::OVERLAY_TITLE);
             })
             .ok();
+            self.overlay_handle = Some(h);
         }
     }
 
@@ -253,12 +273,29 @@ impl Shell {
             let c = client.clone();
             let t = track.clone();
             let np = self.now_playing.clone();
+            let os = self.overlay_state.clone();
             cx.spawn(async move |cx| {
                 let status = c.lyrics(&t.id).ok().flatten().unwrap_or(crate::lyrics::model::LyricsStatus::NotFound);
                 cx.update(|app| {
                     app.update_entity(&np, |v, cx| {
                         v.set_track(t.title.clone(), t.artist.clone(), t.album.clone());
-                        v.set_lyrics(cx, status);
+                        v.set_lyrics(cx, status.clone());
+                    });
+                    app.update_entity(&os, |st, _cx| {
+                        st.title = t.title.clone();
+                        st.artist = t.artist.clone();
+                        st.active = None;
+                        st.lines = match status {
+                            crate::lyrics::model::LyricsStatus::Synced(lines) => lines,
+                            crate::lyrics::model::LyricsStatus::Plain(text) => text
+                                .lines()
+                                .map(|l| crate::lyrics::model::LyricLine {
+                                    time: std::time::Duration::ZERO,
+                                    text: l.to_string(),
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
                     });
                 });
             }).detach();

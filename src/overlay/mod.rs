@@ -102,38 +102,29 @@ impl OverlayWindow {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct OverlayState {
+    pub title: String,
+    pub artist: String,
+    pub lines: Vec<crate::lyrics::model::LyricLine>,
+    pub active: Option<usize>,
+}
+
 pub struct PinnedLyricsView {
-    title: String,
-    artist: String,
-    lines: Vec<String>,
-    active: Option<usize>,
+    state: gpui::Entity<OverlayState>,
 }
 
 impl PinnedLyricsView {
-    pub fn new() -> Self {
-        Self {
-            title: "Myuzik".to_string(),
-            artist: "No track playing".to_string(),
-            lines: vec!["Lyrics will appear here.".to_string()],
-            active: None,
-        }
-    }
-
-    pub fn set_track(&mut self, title: String, artist: String) {
-        self.title = title;
-        self.artist = artist;
-    }
-
-    pub fn set_lines(&mut self, lines: Vec<String>, active: Option<usize>) {
-        self.lines = lines;
-        self.active = active;
+    pub fn new(state: gpui::Entity<OverlayState>) -> Self {
+        Self { state }
     }
 }
 
 impl Render for PinnedLyricsView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+        let state = self.state.read(cx).clone();
 
         let mut lines_container = div()
             .flex()
@@ -142,8 +133,8 @@ impl Render for PinnedLyricsView {
             .px(gpui::px(16.0))
             .py(gpui::px(12.0));
 
-        for (i, line) in self.lines.iter().enumerate() {
-            let is_active = self.active == Some(i);
+        for (i, line) in state.lines.iter().enumerate() {
+            let is_active = state.active == Some(i);
             let line_color = if is_active { t.gold_light } else { t.text_secondary };
             let line_size = if is_active { 13.0 } else { 11.0 };
             let line_weight = if is_active {
@@ -156,7 +147,7 @@ impl Render for PinnedLyricsView {
                 .font_family(theme.ui_font)
                 .font_weight(line_weight)
                 .text_color(line_color)
-                .child(line.clone());
+                .child(line.text.clone());
             if is_active {
                 line_div = line_div.child(
                     div()
@@ -226,7 +217,7 @@ impl Render for PinnedLyricsView {
                         div()
                             .text_size(gpui::px(9.0))
                             .text_color(t.text_secondary)
-                            .child(format!("{} — {}", self.title, self.artist)),
+                            .child(format!("{} — {}", state.title, state.artist)),
                     )
                     .child(
                         div()
@@ -241,7 +232,7 @@ impl Render for PinnedLyricsView {
 }
 
 /// Open the overlay window. Returns the window handle.
-pub fn open_overlay(cx: &mut gpui::App) -> gpui::WindowHandle<PinnedLyricsView> {
+pub fn open_overlay(cx: &mut gpui::App, state: gpui::Entity<OverlayState>) -> gpui::WindowHandle<PinnedLyricsView> {
     let opts = WindowOptions {
         window_background: WindowBackgroundAppearance::Blurred,
         window_decorations: None,
@@ -251,8 +242,8 @@ pub fn open_overlay(cx: &mut gpui::App) -> gpui::WindowHandle<PinnedLyricsView> 
         titlebar: None,
         ..Default::default()
     };
-    cx.open_window(opts, |_window, cx| {
-        cx.new(|_cx| PinnedLyricsView::new())
+    cx.open_window(opts, move |_window, cx| {
+        cx.new(|_cx| PinnedLyricsView::new(state))
     })
     .expect("failed to open overlay window")
 }
@@ -267,8 +258,3 @@ impl Default for OverlayWindow {
     }
 }
 
-impl Default for PinnedLyricsView {
-    fn default() -> Self {
-        Self::new()
-    }
-}
