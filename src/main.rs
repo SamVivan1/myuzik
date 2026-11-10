@@ -174,11 +174,7 @@ fn main() {
                                     TrayCommand::PinLyrics => {
                                         cx.update(|app| {
                                             let _ = handle.update(app, |shell, _window, cx| {
-                                                if shell.overlay_open() {
-                                                    shell.close_overlay(cx);
-                                                } else {
-                                                    shell.open_overlay(cx);
-                                                }
+                                                shell.toggle_overlay(cx);
                                             });
                                         });
                                     }

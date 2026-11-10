@@ -36,6 +36,8 @@ pub struct Shell {
     mpris_handle: Option<MprisHandle>,
     overlay_state: gpui::Entity<crate::overlay::OverlayState>,
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
+    /// Window id of the pinned overlay, so a close event can be matched to it.
+    overlay_window_id: Option<gpui::WindowId>,
     overlay_geometry: Arc<std::sync::Mutex<crate::overlay::OverlayGeometry>>,
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
@@ -116,7 +118,36 @@ impl Shell {
             },
         );
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
+
+        // The overlay closes its own window, so react to the close event instead of
+        // waiting for the main window's next frame: while that window is occluded no
+        // frame is drawn, and the tray kept offering "Unpin lyrics" for a window that
+        // was already gone (pressing it did nothing).
+        let self_weak_on_closed = cx.entity().downgrade();
+        cx.on_window_closed(move |app, closed| {
+            let Some(shell) = self_weak_on_closed.upgrade() else {
+                return;
+            };
+            // This fires from inside the window update that removed the window, so the
+            // shell entity is leased right now: updating it here panics with
+            // "already being updated" and kills the tray task. Defer to the next
+            // effect cycle instead.
+            app.defer(move |app| {
+                shell.update(app, |this, cx| {
+                    if this.overlay_window_id == Some(closed) {
+                        this.overlay_window_id = None;
+                        this.overlay_handle = None;
+                        if let Some(tray) = this.tray() {
+                            tray.set_pinned(false);
+                        }
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
         let overlay_handle = None;
+        let overlay_window_id = None;
         let overlay_geometry = Arc::new(std::sync::Mutex::new(crate::overlay::OverlayGeometry {
             x: config.overlay_x,
             y: config.overlay_y,
@@ -389,6 +420,7 @@ impl Shell {
             _np_subscription: np_subscription,
             overlay_state,
             overlay_handle,
+            overlay_window_id,
             overlay_geometry,
             resize_start,
             toast,
@@ -528,18 +560,37 @@ impl Shell {
         keys
     }
 
+    /// Whether the pinned window is still on screen. Reads the open-window list
+    /// instead of calling `WindowHandle::update`, which panics while the shell entity
+    /// is leased.
+    fn overlay_alive(&self, cx: &gpui::App) -> bool {
+        let Some(id) = self.overlay_window_id else {
+            return false;
+        };
+        cx.windows().iter().any(|window| window.window_id() == id)
+    }
+
+    /// Toggle the pinned overlay, deciding from the window that actually exists.
+    pub fn toggle_overlay(&mut self, cx: &mut gpui::App) {
+        if self.overlay_alive(cx) {
+            self.close_overlay(cx);
+        } else {
+            self.overlay_handle = None;
+            self.overlay_window_id = None;
+            self.open_overlay(cx);
+        }
+    }
+
     pub fn open_overlay(&mut self, cx: &mut gpui::App) {
         if let Some(tray) = self.tray() {
             tray.set_pinned(true);
         }
-        if let Some(handle) = self.overlay_handle {
-            if handle.update(cx, |_view, _window, _cx| {}).is_err() {
-                self.overlay_handle = None;
-            } else {
-                tracing::debug!("overlay is already open");
-                return;
-            }
+        if self.overlay_alive(cx) {
+            tracing::debug!("overlay is already open");
+            return;
         }
+        self.overlay_handle = None;
+        self.overlay_window_id = None;
         self.persist_overlay_geometry();
         let g = *self.overlay_geometry.lock().unwrap();
         let clamped = match cx.displays().first() {
@@ -590,6 +641,7 @@ impl Shell {
                 window.set_window_title(crate::overlay::OVERLAY_TITLE);
             })
             .ok();
+        self.overlay_window_id = Some(gpui::AnyWindowHandle::from(handle).window_id());
         self.overlay_handle = Some(handle);
     }
 
@@ -1411,16 +1463,15 @@ impl Shell {
     /// Drop the handle once the overlay window is gone, so the pin toggles and the
     /// tray stay in step with what is actually on screen.
     fn prune_overlay_handle(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(handle) = self.overlay_handle else {
+        if self.overlay_handle.is_none() || self.overlay_alive(cx) {
             return;
-        };
-        if handle.update(cx, |_view, _window, _cx| {}).is_err() {
-            self.overlay_handle = None;
-            if let Some(tray) = self.tray() {
-                tray.set_pinned(false);
-            }
-            cx.notify();
         }
+        self.overlay_handle = None;
+        self.overlay_window_id = None;
+        if let Some(tray) = self.tray() {
+            tray.set_pinned(false);
+        }
+        cx.notify();
     }
 
     pub fn search_query(&self) -> &str {
@@ -1450,6 +1501,7 @@ impl Shell {
         if let Some(tray) = self.tray() {
             tray.set_pinned(false);
         }
+        self.overlay_window_id = None;
         if let Some(handle) = self.overlay_handle.take() {
             let geometry = self.overlay_geometry.clone();
             let _ = handle.update(cx, move |_view, window, _cx| {
