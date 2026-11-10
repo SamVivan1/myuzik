@@ -617,7 +617,20 @@ impl Render for Shell {
                                     .opacity(0.7)
                                     .child(current_artist.clone()),
                             ),
-                    ),
+                    )
+                    .child(if is_playing {
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap(gpui::px(2.0))
+                            .h(gpui::px(14.0))
+                            .child(eq_bar("eq1", 620, 4.0, 12.0, t.gold_deep))
+                            .child(eq_bar("eq2", 780, 6.0, 14.0, t.gold))
+                            .child(eq_bar("eq3", 700, 3.0, 10.0, t.gold_light))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }),
             )
             .child(
                 // Transport
@@ -1454,6 +1467,21 @@ impl Render for Shell {
             )
             .into_any_element()
     }
+}
+
+fn eq_bar(id: &'static str, duration_ms: u64, min: f32, max: f32, color: gpui::Rgba) -> impl IntoElement {
+    div()
+        .w(gpui::px(3.0))
+        .h(gpui::px(max))
+        .rounded(gpui::px(999.0))
+        .bg(color)
+        .with_animation(
+            id,
+            gpui::Animation::new(std::time::Duration::from_millis(duration_ms))
+                .repeat()
+                .with_easing(gpui::bounce(gpui::linear)),
+            move |el, delta| el.h(gpui::px(min + (max - min) * delta)),
+        )
 }
 
 fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
