@@ -189,3 +189,39 @@ fn configured_volume_is_applied(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(shell.read_with(&cx, |s, cx| s.volume(cx)), 0.35);
 }
+
+#[gpui::test]
+fn setup_form_validates_and_types(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("setupform");
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Setup);
+
+    // The server field starts with "https://"; typing appends.
+    cx.simulate_keystrokes("abc");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.setup_server_value().to_string()),
+        "https://abc"
+    );
+
+    // Invalid scheme is rejected.
+    shell.update(&mut cx, |s, _cx| s.set_setup_fields("ftp://bad", "u", "p"));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let connect = cx.debug_bounds("setup-connect").expect("setup-connect");
+    cx.simulate_click(connect.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Setup);
+    assert!(
+        shell.read_with(&cx, |s, _| s.setup_error().unwrap_or("").contains("http")),
+        "invalid URL not rejected"
+    );
+}

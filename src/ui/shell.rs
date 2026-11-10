@@ -42,6 +42,14 @@ pub struct Shell {
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
+    setup_server: String,
+    setup_user: String,
+    setup_pass: String,
+    setup_field: usize,
+    setup_error: Option<String>,
+    setup_connecting: bool,
+    setup_focus: gpui::FocusHandle,
+    setup_focus_requested: bool,
 }
 
 impl Shell {
@@ -74,6 +82,18 @@ impl Shell {
         let resize_start = None;
         let toast = None;
         let lyrics_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let setup_server = if config.server_url.is_empty() {
+            "https://".to_string()
+        } else {
+            config.server_url.clone()
+        };
+        let setup_user = config.username.clone();
+        let setup_pass = String::new();
+        let setup_field = 0;
+        let setup_error = None;
+        let setup_connecting = false;
+        let setup_focus = cx.focus_handle();
+        let setup_focus_requested = false;
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password
@@ -103,133 +123,11 @@ impl Shell {
         let mpris_for_loop = mpris_handle.clone();
         let now_playing_for_loop = now_playing.clone();
         let self_entity = cx.entity();
-        let self_entity_fetch = self_entity.clone();
         let scrobble_client = client.clone();
         let overlay_for_loop = overlay_state.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
-            let hs = home_state.clone();
-            cx.spawn(async move |_, cx| {
-                cx.update(|app| {
-                    app.update_entity(&hs, |h, _| {
-                        h.loading = true;
-                    });
-                });
-                let client_bg = client.clone();
-                let res = cx
-                    .background_executor()
-                    .spawn(async move {
-                        client_bg.album_list(
-                            crate::navidrome::client::AlbumListKind::Newest,
-                            100,
-                            0,
-                        )
-                    })
-                    .await;
-                let albums = match res {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let entity = self_entity_fetch.clone();
-                        let msg = format!("Library error: {e:?}");
-                        cx.update(|app| {
-                            app.update_entity(&hs, |h, _| {
-                                h.loading = false;
-                                h.error = Some(msg.clone());
-                            });
-                            entity.update(app, |shell, _cx| {
-                                shell.toast = Some(msg);
-                            });
-                        });
-                        return;
-                    }
-                };
-                cx.update(|app| {
-                    app.update_entity(&hs, |h, _| {
-                        h.loading = false;
-                        h.albums = albums.clone();
-                    });
-                });
-                let client_bg = client.clone();
-                let artists = cx
-                    .background_executor()
-                    .spawn(async move { client_bg.artists() })
-                    .await
-                    .unwrap_or_default();
-                let client_bg = client.clone();
-                let playlists = cx
-                    .background_executor()
-                    .spawn(async move { client_bg.playlists() })
-                    .await
-                    .unwrap_or_default();
-                let client_bg = client.clone();
-                let favorites = cx
-                    .background_executor()
-                    .spawn(async move {
-                        client_bg.album_list(
-                            crate::navidrome::client::AlbumListKind::Starred,
-                            100,
-                            0,
-                        )
-                    })
-                    .await
-                    .unwrap_or_default();
-                cx.update(|app| {
-                    app.update_entity(&hs, |h, _| {
-                        h.artists = artists;
-                        h.playlists = playlists;
-                        h.favorites = favorites;
-                    });
-                });
-                // Fetch covers for the first 8 albums
-                for album in albums.iter().take(24) {
-                    if let Some(cover_id) = &album.cover_art_id {
-                        let cid_bg = cover_id.clone();
-                        let client_bg = client.clone();
-                        let fetched = cx
-                            .background_executor()
-                            .spawn(async move { client_bg.cover_bytes(&cid_bg, 512) })
-                            .await;
-                        if let Ok(bytes) = fetched {
-                            let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-                                gpui::ImageFormat::Png
-                            } else {
-                                gpui::ImageFormat::Jpeg
-                            };
-                            let image = std::sync::Arc::new(gpui::Image {
-                                format,
-                                bytes,
-                                id: fxhash_id(cover_id),
-                            });
-                            let cid = cover_id.clone();
-                            cx.update(|app| {
-                                app.update_entity(&hs, |h, _| {
-                                    h.covers.insert(cid, image);
-                                });
-                            });
-                        }
-                    }
-                }
-
-                if std::env::var("MYUZIK_AUTOPLAY").ok().as_deref() == Some("1")
-                    && let Some(first) = albums.first()
-                {
-                    let client_bg = client.clone();
-                    let aid = first.id.clone();
-                    if let Ok(detail) = cx
-                        .background_executor()
-                        .spawn(async move { client_bg.album(&aid) })
-                        .await
-                    {
-                        let entity = self_entity_fetch.clone();
-                        cx.update(|app| {
-                            entity.update(app, |shell, cx| {
-                                shell.play_tracks(detail.songs, 0, cx);
-                            });
-                        });
-                    }
-                }
-            })
-            .detach();
+            spawn_home_fetch(client, home_state.clone(), self_entity.clone(), cx);
         }
         cx.spawn(async move |_, cx| {
             let mut scrobble = crate::player::scrobble::ScrobbleTracker::new();
@@ -397,6 +295,14 @@ impl Shell {
             resize_start,
             toast,
             lyrics_generation,
+            setup_server,
+            setup_user,
+            setup_pass,
+            setup_field,
+            setup_error,
+            setup_connecting,
+            setup_focus,
+            setup_focus_requested,
             mpris_handle,
         }
     }
@@ -640,6 +546,89 @@ impl Shell {
         }
     }
 
+    pub fn set_setup_fields(&mut self, server: &str, user: &str, pass: &str) {
+        self.setup_server = server.to_string();
+        self.setup_user = user.to_string();
+        self.setup_pass = pass.to_string();
+    }
+
+    pub fn setup_error(&self) -> Option<&str> {
+        self.setup_error.as_deref()
+    }
+
+    pub fn setup_server_value(&self) -> &str {
+        &self.setup_server
+    }
+
+    fn active_setup_mut(&mut self) -> &mut String {
+        match self.setup_field {
+            0 => &mut self.setup_server,
+            1 => &mut self.setup_user,
+            _ => &mut self.setup_pass,
+        }
+    }
+
+    pub fn connect_setup(&mut self, cx: &mut gpui::Context<Self>) {
+        let server = self.setup_server.trim().trim_end_matches('/').to_string();
+        let user = self.setup_user.trim().to_string();
+        let pass = self.setup_pass.clone();
+        if !(server.starts_with("http://") || server.starts_with("https://")) {
+            self.setup_error = Some("Server URL must start with http:// or https://".to_string());
+            return;
+        }
+        if user.is_empty() || pass.is_empty() {
+            self.setup_error = Some("Username and password are required".to_string());
+            return;
+        }
+        let probe = match NavidromeClient::new(&server, &user, &pass) {
+            Ok(c) => c,
+            Err(e) => {
+                self.setup_error = Some(format!("Invalid server URL: {e}"));
+                return;
+            }
+        };
+        self.setup_connecting = true;
+        self.setup_error = None;
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { probe.ping() })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, cx| {
+                    shell.setup_connecting = false;
+                    match res {
+                        Ok(_) => {
+                            shell.config.server_url = server.clone();
+                            shell.config.username = user.clone();
+                            let _ = crate::config::save_config(&shell.paths, &shell.config);
+                            let _ = crate::config::save_password(&shell.paths, &pass);
+                            let make = || {
+                                NavidromeClient::new(&server, &user, &pass)
+                                    .expect("validated client")
+                            };
+                            shell.client = Some(Arc::new(make()));
+                            shell.lyrics_provider = Some(Arc::new(LyricsProvider::new(
+                                make(),
+                                crate::lyrics::cache::LyricsCache::new(shell.paths.lyrics.clone()),
+                                shell.config.prefer_navidrome_lyrics,
+                            )));
+                            shell.route = Route::Home;
+                            if let Some(client) = shell.client.clone() {
+                                spawn_home_fetch(client, shell.home_state.clone(), cx.entity(), cx);
+                            }
+                        }
+                        Err(e) => {
+                            shell.setup_error = Some(format!("Connection failed: {e}"));
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn open_album(&mut self, id: String, cx: &mut gpui::Context<Self>) {
         self.selected_album = Some(id.clone());
         self.album_detail = None;
@@ -834,15 +823,69 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
 
         if self.route == Route::Setup {
-            let cfg_path = self.paths.config.display().to_string();
-            let cred_path = crate::config::credentials_path(&self.paths)
-                .display()
-                .to_string();
+            if !self.setup_focus_requested {
+                window.focus(&self.setup_focus, cx);
+                self.setup_focus_requested = true;
+            }
+            let setup_entity = cx.entity();
+            let row = |idx: usize, label: &str, value: &str, secret: bool| {
+                let shown = if secret {
+                    "•".repeat(value.chars().count())
+                } else {
+                    value.to_string()
+                };
+                let active = self.setup_field == idx;
+                let e = setup_entity.clone();
+                div()
+                    .id(format!("setup-field-{}", idx))
+                    .debug_selector({
+                        let d = idx;
+                        move || format!("setup-field-{}", d)
+                    })
+                    .on_mouse_down(gpui::MouseButton::Left, move |_ev, window, app| {
+                        app.update_entity(&e, |this, _cx| {
+                            this.setup_field = idx;
+                        });
+                        let handle = app.update_entity(&e, |this, _cx| this.setup_focus.clone());
+                        window.focus(&handle, app);
+                    })
+                    .flex()
+                    .flex_col()
+                    .gap(gpui::px(4.0))
+                    .child(
+                        div()
+                            .text_size(gpui::px(9.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(t.text_tertiary)
+                            .child(label.to_uppercase()),
+                    )
+                    .child(
+                        div()
+                            .px(gpui::px(12.0))
+                            .py(gpui::px(9.0))
+                            .rounded(gpui::px(10.0))
+                            .bg(t.glass_tint)
+                            .border_2()
+                            .border_color(if active { t.os_accent } else { t.glass_border })
+                            .text_size(gpui::px(12.0))
+                            .text_color(if shown.is_empty() {
+                                t.text_tertiary
+                            } else {
+                                t.text_primary
+                            })
+                            .child(if shown.is_empty() {
+                                "…".to_string()
+                            } else {
+                                shown
+                            }),
+                    )
+            };
+            let key_entity = setup_entity.clone();
             return div()
                 .size_full()
                 .bg(t.bg_base)
@@ -852,6 +895,36 @@ impl Render for Shell {
                 .justify_center()
                 .child(
                     div()
+                        .id("setup-card")
+                        .track_focus(&self.setup_focus)
+                        .focusable()
+                        .on_key_down(move |ev, _window, app| {
+                            app.update_entity(&key_entity, |this, cx| {
+                                match ev.keystroke.key.as_str() {
+                                    "backspace" => {
+                                        this.active_setup_mut().pop();
+                                    }
+                                    "tab" => {
+                                        this.setup_field = (this.setup_field + 1) % 3;
+                                    }
+                                    "enter" => {
+                                        this.connect_setup(cx);
+                                    }
+                                    key
+                                        if !ev.keystroke.modifiers.control
+                                            && !ev.keystroke.modifiers.alt =>
+                                    {
+                                        if let Some(ch) = &ev.keystroke.key_char {
+                                            this.active_setup_mut().push_str(ch);
+                                        } else if key.len() == 1 {
+                                            this.active_setup_mut().push_str(key);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                cx.notify();
+                            });
+                        })
                         .w(gpui::px(560.0))
                         .flex()
                         .flex_col()
@@ -870,43 +943,46 @@ impl Render for Shell {
                         )
                         .child(
                             div()
-                                .text_size(gpui::px(12.0))
+                                .text_size(gpui::px(11.0))
                                 .text_color(t.text_secondary)
-                                .child("Edit the config file below, then press Reload. Restart the app after changing the server URL."),
+                                .child("Tab switches fields · Enter connects. Credentials are stored in the Secret Service or a 0600 file."),
                         )
+                        .child(row(0, "Server URL", &self.setup_server, false))
+                        .child(row(1, "Username", &self.setup_user, false))
+                        .child(row(2, "Password", &self.setup_pass, true))
+                        .child(if let Some(err) = &self.setup_error {
+                            div()
+                                .text_size(gpui::px(11.0))
+                                .text_color(t.danger)
+                                .child(err.clone())
+                                .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        })
                         .child(
                             div()
-                                .flex()
-                                .flex_col()
-                                .gap(gpui::px(2.0))
-                                .p(gpui::px(12.0))
-                                .rounded(gpui::px(12.0))
-                                .bg(gpui::rgba(0xFFFFFF05))
-                                .child(div().text_size(gpui::px(11.0)).child(cfg_path))
-                                .child(div().text_size(gpui::px(9.0)).text_color(t.text_tertiary).child("[server_url] [username] [quality]"))
-                                .child(div().text_size(gpui::px(11.0)).child(cred_path))
-                                .child(div().text_size(gpui::px(9.0)).text_color(t.text_tertiary).child("password only (chmod 600)")),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(gpui::px(10.0))
-                                .child(
-                                    div()
-                                        .px(gpui::px(18.0))
-                                        .py(gpui::px(10.0))
-                                        .rounded(gpui::px(999.0))
-                                        .bg(t.gold)
-                                        .text_color(t.clay_ink)
-                                        .text_size(gpui::px(11.0))
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .cursor_pointer()
-                                        .id("setup-reload")
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.reload_config(cx);
-                                        }))
-                                        .child("Reload config"),
-                                ),
+                                .id("setup-connect")
+                                .debug_selector(|| "setup-connect".to_string())
+                                .cursor_pointer()
+                                .px(gpui::px(18.0))
+                                .py(gpui::px(10.0))
+                                .rounded(gpui::px(999.0))
+                                .bg(gpui::linear_gradient(
+                                    145.0,
+                                    gpui::linear_color_stop(t.gold_light, 0.0),
+                                    gpui::linear_color_stop(t.gold, 1.0),
+                                ))
+                                .text_color(t.clay_ink)
+                                .text_size(gpui::px(11.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.connect_setup(cx);
+                                }))
+                                .child(if self.setup_connecting {
+                                    "Connecting…".to_string()
+                                } else {
+                                    "Connect".to_string()
+                                }),
                         ),
                 )
                 .into_any_element();
@@ -2206,6 +2282,126 @@ fn eq_bar(
                 .with_easing(gpui::bounce(gpui::linear)),
             move |el, delta| el.h(gpui::px(min + (max - min) * delta)),
         )
+}
+
+fn spawn_home_fetch(
+    client: Arc<NavidromeClient>,
+    hs: gpui::Entity<HomeState>,
+    entity: gpui::Entity<Shell>,
+    cx: &mut gpui::Context<Shell>,
+) {
+    cx.spawn(async move |_, cx| {
+        cx.update(|app| {
+            app.update_entity(&hs, |h, _| {
+                h.loading = true;
+            });
+        });
+        let client_bg = client.clone();
+        let res = cx
+            .background_executor()
+            .spawn(async move {
+                client_bg.album_list(crate::navidrome::client::AlbumListKind::Newest, 100, 0)
+            })
+            .await;
+        let albums = match res {
+            Ok(a) => a,
+            Err(e) => {
+                let entity = entity.clone();
+                let msg = format!("Library error: {e:?}");
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| {
+                        h.loading = false;
+                        h.error = Some(msg.clone());
+                    });
+                    entity.update(app, |shell, _cx| {
+                        shell.toast = Some(msg);
+                    });
+                });
+                return;
+            }
+        };
+        cx.update(|app| {
+            app.update_entity(&hs, |h, _| {
+                h.loading = false;
+                h.albums = albums.clone();
+            });
+        });
+        let client_bg = client.clone();
+        let artists = cx
+            .background_executor()
+            .spawn(async move { client_bg.artists() })
+            .await
+            .unwrap_or_default();
+        let client_bg = client.clone();
+        let playlists = cx
+            .background_executor()
+            .spawn(async move { client_bg.playlists() })
+            .await
+            .unwrap_or_default();
+        let client_bg = client.clone();
+        let favorites = cx
+            .background_executor()
+            .spawn(async move {
+                client_bg.album_list(crate::navidrome::client::AlbumListKind::Starred, 100, 0)
+            })
+            .await
+            .unwrap_or_default();
+        cx.update(|app| {
+            app.update_entity(&hs, |h, _| {
+                h.artists = artists;
+                h.playlists = playlists;
+                h.favorites = favorites;
+            });
+        });
+        for album in albums.iter().take(24) {
+            if let Some(cover_id) = &album.cover_art_id {
+                let cid_bg = cover_id.clone();
+                let client_bg = client.clone();
+                let fetched = cx
+                    .background_executor()
+                    .spawn(async move { client_bg.cover_bytes(&cid_bg, 512) })
+                    .await;
+                if let Ok(bytes) = fetched {
+                    let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                        gpui::ImageFormat::Png
+                    } else {
+                        gpui::ImageFormat::Jpeg
+                    };
+                    let image = std::sync::Arc::new(gpui::Image {
+                        format,
+                        bytes,
+                        id: fxhash_id(cover_id),
+                    });
+                    let cid = cover_id.clone();
+                    cx.update(|app| {
+                        app.update_entity(&hs, |h, _| {
+                            h.covers.insert(cid, image);
+                        });
+                    });
+                }
+            }
+        }
+
+        if std::env::var("MYUZIK_AUTOPLAY").ok().as_deref() == Some("1")
+            && let Some(first) = albums.first()
+        {
+            let client_bg = client.clone();
+            let aid = first.id.clone();
+            if let Ok(detail) = cx
+                .background_executor()
+                .spawn(async move { client_bg.album(&aid) })
+                .await
+            {
+                let entity = entity.clone();
+                cx.update(|app| {
+                    entity.update(app, |shell, cx| {
+                        shell.play_tracks(detail.songs, 0, cx);
+                    });
+                });
+            }
+        }
+    })
+    .detach();
 }
 
 fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {

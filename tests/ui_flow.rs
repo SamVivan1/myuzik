@@ -3,6 +3,7 @@
 
 use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
 use httpmock::prelude::*;
+use myuzik::app::Route;
 use myuzik::config::{AppConfig, Paths};
 use myuzik::player::engine::PlayerHandle;
 use myuzik::ui::Shell;
@@ -669,4 +670,109 @@ fn stale_lyrics_response_is_discarded(cx: &mut TestAppContext) {
         "stale lyrics overwrote newer lyrics"
     );
     assert!(slow.calls() >= 1);
+}
+
+#[gpui::test]
+fn setup_form_connects_and_saves(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let ping = server.mock(|when, then| {
+        when.method(GET).path("/rest/ping.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#);
+    });
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""albumList2":{"album":[{"id":"a1","name":"Alpha","artist":"A","songCount":1,"duration":100,"year":2026}]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("setupflow");
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, _crx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(_crx);
+            cx.new(|cx| {
+                Shell::new(
+                    cx,
+                    PlayerHandle { tx, rx },
+                    AppConfig::default(),
+                    paths,
+                    None,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Setup);
+
+    shell.update(&mut cx, |s, _cx| {
+        s.set_setup_fields(&base, "tester", "secret")
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let connect = cx.debug_bounds("setup-connect").expect("setup connect");
+    cx.simulate_click(connect.center(), gpui::Modifiers::default());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.route()) == Route::Home {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.route()),
+        Route::Home,
+        "setup did not connect"
+    );
+    assert!(ping.calls() >= 1, "ping not called");
+
+    let paths = temp_paths("setupflow");
+    assert!(paths.config.exists(), "config not saved");
+    let text = std::fs::read_to_string(&paths.config).unwrap();
+    assert!(text.contains(&base), "server URL not saved");
+    let cred_path = paths.config.parent().unwrap().join("credentials");
+    let cred = std::fs::read_to_string(&cred_path).unwrap();
+    assert_eq!(cred, "secret");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&cred_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "credentials file must be 0600"
+        );
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.loaded_album_count(cx)) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(shell.read_with(&cx, |s, cx| s.loaded_album_count(cx)), 1);
 }
