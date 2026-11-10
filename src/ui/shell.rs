@@ -44,11 +44,11 @@ impl Shell {
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
         let overlay_handle = None;
-        let route = if config.server_url.is_empty() { Route::Setup } else { Route::Home };
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok()).map(Arc::new)
         } else { None };
+        let route = if client.is_none() { Route::Setup } else { Route::Home };
         // Poll player events in background
         let state = player_state.clone();
         let rx = player_handle.rx.clone();
@@ -210,6 +210,32 @@ impl Shell {
         }
     }
 
+    pub fn reload_config(&mut self, cx: &mut gpui::App) {
+        if let Ok(cfg) = crate::config::load_config(&self.paths) {
+            self.config = cfg.clone();
+            let password = crate::config::load_password(&self.paths);
+            self.client = if !cfg.server_url.is_empty() {
+                password.and_then(|pw| NavidromeClient::new(&cfg.server_url, &cfg.username, &pw).ok()).map(Arc::new)
+            } else { None };
+            self.route = if cfg.server_url.is_empty() { Route::Setup } else { Route::Home };
+            if let Some(client) = self.client.clone() {
+                let hs = self.home_state.clone();
+                cx.spawn(async move |cx| {
+                    let res = client.album_list(crate::navidrome::client::AlbumListKind::Newest, 20, 0);
+                    cx.update(|app| {
+                        app.update_entity(&hs, |h, _| {
+                            h.loading = false;
+                            match res {
+                                Ok(albums) => h.albums = albums,
+                                Err(e) => h.error = Some(format!("{:?}", e)),
+                            }
+                        });
+                    });
+                }).detach();
+            }
+        }
+    }
+
     pub fn play_track(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
         self.player_state.update(cx, |ps, _cx| {
             // play_now with single track
@@ -309,6 +335,78 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+
+        if self.route == Route::Setup {
+            let cfg_path = self.paths.config.display().to_string();
+            let cred_path = crate::config::credentials_path(&self.paths).display().to_string();
+            return div()
+                .size_full()
+                .bg(t.bg_base)
+                .text_color(t.text_primary)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .w(gpui::px(560.0))
+                        .flex()
+                        .flex_col()
+                        .gap(gpui::px(14.0))
+                        .p(gpui::px(28.0))
+                        .rounded(gpui::px(24.0))
+                        .bg(t.glass_tint)
+                        .border_1()
+                        .border_color(t.glass_border)
+                        .child(
+                            div()
+                                .font_family(theme.display_font)
+                                .text_size(gpui::px(26.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Connect to Navidrome"),
+                        )
+                        .child(
+                            div()
+                                .text_size(gpui::px(12.0))
+                                .text_color(t.text_secondary)
+                                .child("Edit the config file below, then press Reload. Restart the app after changing the server URL."),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(gpui::px(2.0))
+                                .p(gpui::px(12.0))
+                                .rounded(gpui::px(12.0))
+                                .bg(gpui::rgba(0x0C0C1014))
+                                .child(div().text_size(gpui::px(11.0)).child(cfg_path))
+                                .child(div().text_size(gpui::px(9.0)).text_color(t.text_tertiary).child("[server_url] [username] [quality]"))
+                                .child(div().text_size(gpui::px(11.0)).child(cred_path))
+                                .child(div().text_size(gpui::px(9.0)).text_color(t.text_tertiary).child("password only (chmod 600)")),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(gpui::px(10.0))
+                                .child(
+                                    div()
+                                        .px(gpui::px(18.0))
+                                        .py(gpui::px(10.0))
+                                        .rounded(gpui::px(999.0))
+                                        .bg(t.gold)
+                                        .text_color(t.clay_ink)
+                                        .text_size(gpui::px(11.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .cursor_pointer()
+                                        .id("setup-reload")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.reload_config(cx);
+                                        }))
+                                        .child("Reload config"),
+                                ),
+                        ),
+                );
+        }
+
         let status = self.player_state.read(cx).status;
         let is_playing = status == PlaybackStatus::Playing;
         let current_title = self.player_state.read(cx).current.as_ref().map(|t| t.title.clone()).unwrap_or_default();
