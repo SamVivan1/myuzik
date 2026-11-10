@@ -7,6 +7,10 @@ Tanggal: 2026-11-11. Sifat: **baca-saja** — tidak ada perubahan pada `src/`, `
 Audit dijalankan oleh **4 auditor paralel** dengan lingkup tulis yang terpisah, lalu
 disintesis oleh Lead. Setiap klaim di laporan asal punya bukti `file:line`.
 
+> **Status perbaikan:** lihat [fixes/README.md](fixes/README.md) — 6 P0 ditangani
+> (1 separuh: kredensial), 20 P1 dan 4 P2 ditutup, gerbang `fmt`/`clippy`/`test` hijau
+> dengan 206 test lulus. Daftar sisa yang belum dikerjakan ada di dokumen itu.
+
 | Laporan | Lingkup | P0 | P1 | P2 | Total |
 |---|---|---:|---:|---:|---:|
 | [ui-ux.md](ui-ux.md) | `src/ui/*`, `theme.rs`, `accent.rs`, `tests/a11y.rs` | 2 | 11 | 17 | 30 |

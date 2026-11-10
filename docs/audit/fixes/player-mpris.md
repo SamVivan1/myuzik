@@ -170,7 +170,7 @@ part is unit-testable; the wiring is proven by the signature change and the call
   hardcoded `0.8` is gone.
 - `src/platform/mpris.rs:119` — publishes `mpris_volume(initial_volume)` as soon as the
   player is built.
-- `src/platform/mpris.rs:158-165` — `mpris_volume(f32) -> f64` clamps to `0.0..=1.0`; also
+- `src/platform/mpris.rs:159-164` — `mpris_volume(f32) -> f64` clamps to `0.0..=1.0`; also
   used for `MprisCommand::UpdateVolume` (`:148`) so a desktop slider request cannot push an
   out-of-range value onto the bus.
 - Call site (out of my file scope, applied by the Lead):
@@ -237,7 +237,7 @@ error[E0432]: unresolved imports `myuzik::platform::mpris::queue_state`, `myuzik
 
 ### Change
 
-- `src/player/queue.rs:222-266` — `Queue::can_go_next()` and `Queue::can_go_previous()`,
+- `src/player/queue.rs:222-261` — `Queue::can_go_next()` and `Queue::can_go_previous()`,
   mirroring the branches of `next()`/`previous()` (shuffle order and repeat included).
 - `src/platform/mpris.rs:19-27` — `QueueState { can_go_next, can_go_previous, loop_status,
   shuffle }`.
@@ -248,7 +248,7 @@ error[E0432]: unresolved imports `myuzik::platform::mpris::queue_state`, `myuzik
 - `src/platform/mpris.rs:125-128` — the forced `set_can_go_next(true)` /
   `set_can_go_previous(true)` in the metadata handler are gone; `can_go_next(true)` /
   `can_go_previous(true)` are gone from the builder (`:60-70`).
-- `src/platform/mpris.rs:270-277` — `MprisHandle::update_queue(&Queue)`.
+- `src/platform/mpris.rs:269-277` — `MprisHandle::update_queue(&Queue)`.
 
 ### Required call site (out of my scope — for the Lead)
 
@@ -310,7 +310,7 @@ One declaration, five writes, zero reads — the real tracker is the local
 
 ### Change
 
-`src/player/state.rs` — removed the field from the struct (`:21`), from `new()` (`:30`) and
+`src/player/state.rs` — removed the field from the struct (`:15-22`), from the constructor (`:24-33`) and
 the four reset writes in `play_now`, `next`, `adopt` and `previous`. No other file
 mentioned it, so nothing else changed.
 
