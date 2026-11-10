@@ -536,11 +536,36 @@ impl Shell {
             if handle.update(cx, |_view, _window, _cx| {}).is_err() {
                 self.overlay_handle = None;
             } else {
+                tracing::debug!("overlay is already open");
                 return;
             }
         }
         self.persist_overlay_geometry();
         let g = *self.overlay_geometry.lock().unwrap();
+        let clamped = match cx.displays().first() {
+            Some(display) => {
+                let area = display.bounds();
+                crate::overlay::clamp_geometry(
+                    g,
+                    f32::from(area.origin.x) as i32,
+                    f32::from(area.origin.y) as i32,
+                    f32::from(area.size.width) as u32,
+                    f32::from(area.size.height) as u32,
+                )
+            }
+            None => g,
+        };
+        if let Ok(mut stored) = self.overlay_geometry.lock() {
+            *stored = clamped;
+        }
+        let g = clamped;
+        tracing::debug!(
+            x = g.x,
+            y = g.y,
+            w = g.width,
+            h = g.height,
+            "opening lyrics overlay"
+        );
         let bounds = if g.x != 0 || g.y != 0 {
             gpui::Bounds {
                 origin: gpui::point(gpui::px(g.x as f32), gpui::px(g.y as f32)),
@@ -553,28 +578,19 @@ impl Shell {
                 cx,
             )
         };
-        let opts = gpui::WindowOptions {
-            window_background: gpui::WindowBackgroundAppearance::Blurred,
-            window_decorations: None,
-            focus: false,
-            show: true,
-            app_id: Some(crate::overlay::APP_ID.to_string()),
-            titlebar: None,
-            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        };
+        // One place creates the overlay window. This used to build its own
+        // `WindowOptions` with stale values (an opaque `Blurred` background and no
+        // minimum size), so the window opened from the app or the tray never picked
+        // up the fixes made to `overlay::open_overlay`.
         let state = self.overlay_state.clone();
         let geometry = self.overlay_geometry.clone();
-        let handle = cx.open_window(opts, move |_window, cx| {
-            cx.new(|cx| crate::overlay::PinnedLyricsView::new(state, geometry, cx))
-        });
-        if let Ok(h) = handle {
-            h.update(cx, |_view, window, _cx| {
+        let handle = crate::overlay::open_overlay(cx, state, geometry, bounds);
+        handle
+            .update(cx, |_view, window, _cx| {
                 window.set_window_title(crate::overlay::OVERLAY_TITLE);
             })
             .ok();
-            self.overlay_handle = Some(h);
-        }
+        self.overlay_handle = Some(handle);
     }
 
     fn persist_overlay_geometry(&mut self) {

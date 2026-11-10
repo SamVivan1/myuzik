@@ -126,6 +126,7 @@ fn main() {
                         }
                         cx.spawn(async move |cx| {
                             while let Ok(command) = commands.recv_async().await {
+                                tracing::debug!(?command, "tray command received");
                                 match command {
                                     TrayCommand::Show => {
                                         cx.update(|app| {
@@ -186,6 +187,12 @@ fn main() {
                                         break;
                                     }
                                 }
+                                cx.update(|app| {
+                                    tracing::debug!(
+                                        windows = app.windows().len(),
+                                        "tray command handled"
+                                    );
+                                });
                             }
                         })
                         .detach();
