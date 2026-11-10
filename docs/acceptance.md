@@ -27,7 +27,7 @@ cargo test -- --test-threads=1                 → 102 passed, 0 failed, 10 igno
 MYUZIK_LIVE=1 cargo test --test live_navidrome -- --ignored → 7 passed, 0 failed
 MYUZIK_LIVE=1 cargo test --test live_player    -- --ignored → 1 passed, 0 failed
 desktop-file-validate packaging/*.desktop      → exit 0
-appstreamcli validate packaging/*.metainfo.xml → 2 warnings (unpublished repo URL only)
+appstreamcli validate packaging/*.metainfo.xml → ✓ validation successful (1 pedantic note)
 bash -n scripts/*.sh                           → clean
 gjs -m gnome-extension/test-extension.js       → 18 passed, 0 failed
 ```
@@ -158,7 +158,7 @@ Details and method: [docs/performance.md](performance.md).
 | Check | Result |
 |---|---|
 | Desktop file valid | ✅ run today — `desktop-file-validate` exit 0 |
-| AppStream metadata valid | ⚠️ `appstreamcli` exits 3: 2 `url-not-reachable` warnings for `https://github.com/SamVivan1/myuzik` (not published yet) plus 1 unreported pedantic finding. No content/format errors. |
+| AppStream metadata valid | ✅ run today — `appstreamcli validate` exits 0 ("Validation was successful: pedantic: 1"). The two `url-not-reachable` warnings cleared once `https://github.com/SamVivan1/myuzik` was actually published. |
 | Icon, install script, uninstall path | ✅ earlier — `scripts/install.sh` (idempotent, `--uninstall`) |
 | CI workflow present | ✅ `.github/workflows/ci.yml` (not executed on GitHub from here) |
 | Docs: setup, troubleshooting, testing, performance, accessibility, GNOME extension | ✅ run today — present and consistent with the code |
