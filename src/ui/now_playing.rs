@@ -155,6 +155,7 @@ impl Render for NowPlayingView {
                                         gpui::img(source)
                                             .w(gpui::px(288.0))
                                             .h(gpui::px(288.0))
+                                            .rounded(gpui::px(24.0))
                                             .object_fit(gpui::ObjectFit::Cover)
                                             .into_any_element()
                                     } else {

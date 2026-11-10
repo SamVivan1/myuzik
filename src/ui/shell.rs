@@ -1343,6 +1343,7 @@ impl Render for Shell {
                                 gpui::img(gpui::ImageSource::Image(image))
                                     .w(gpui::px(52.0))
                                     .h(gpui::px(52.0))
+                                    .rounded(gpui::px(14.0))
                                     .object_fit(gpui::ObjectFit::Cover)
                                     .into_any_element()
                             } else {
@@ -2993,6 +2994,7 @@ fn album_card(
                     gpui::img(gpui::ImageSource::Image(image))
                         .w_full()
                         .h_full()
+                        .rounded(gpui::px(16.0))
                         .object_fit(gpui::ObjectFit::Cover)
                         .into_any_element()
                 } else {
