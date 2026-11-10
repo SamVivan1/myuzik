@@ -43,7 +43,7 @@ Last updated: 2026-11-10
 - [x] Task 21: Scrobbling (now-playing + submit), favorites, queue actions
 - [~] Task 22: Error toasts, setup errors, URL/token log redaction, aria labels, global shortcuts;
   full keyboard focus order + automated a11y tree pending (see docs/accessibility.md)
-- [ ] Task 23: Design polish and anti-slop audit
+- [x] Task 23: Design polish and anti-slop audit (docs/design-audit.md)
 - [~] Task 24: Memory measured (idle 125 MB, playing 159 MB); stress tests pending
 
 ## Phase 7 — Packaging, Docs, Release

@@ -44,6 +44,19 @@ window traffic-light semantics (red/yellow/green) and transparent shadows.
 - Reduced motion: `App::set_reduce_motion` renders animation end states; Settings toggle.
 - No idle animation (equalizer only while playing).
 
+## Polish pass (2026-11-10)
+
+- Removed the eyebrow/kicker labels above page headings (craft-floor ban); the heading and the
+  active sidebar item carry the context.
+- Typography scale raised for readability: nav 13, album title 12 / artist 10, track 12 / artist
+  10, settings 12, player title 13 / artist 10.
+- Album detail now has a 160 px clay-framed cover, year/song-count/duration metadata, and a
+  compact Favorite/Play-all row.
+- Synced lyrics: active line 21 px gold with a dot + underline, inactive 15 px; the list centers
+  the active line with a 380 ms ease-out translation and snap on seek; active-line cross-fade.
+- Home loading state uses pulsing glass skeletons instead of an empty state.
+- Press feedback on nav/clay/play controls; clay hover pills on transport buttons.
+
 ## Typography pass
 
 - Nav 13 px; album title 12 px / artist 10 px; track title 12 px / artist 10 px; settings rows
