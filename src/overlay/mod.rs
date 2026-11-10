@@ -210,6 +210,7 @@ impl Render for PinnedLyricsView {
                     .border_b_1()
                     .border_color(t.glass_border)
                     .id("overlay-header")
+                    .aria_label("Drag lyrics overlay")
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|_this, _event, window, _cx| window.start_window_move()),
@@ -229,6 +230,7 @@ impl Render for PinnedLyricsView {
                     .child(
                         div()
                             .id("overlay-close")
+                            .aria_label("Close lyrics overlay")
                             .cursor_pointer()
                             .on_click(
                                 cx.listener(|_this, _event, window, _cx| window.remove_window()),

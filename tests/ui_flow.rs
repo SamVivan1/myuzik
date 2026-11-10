@@ -65,7 +65,7 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
             .query_param("id", "cov1");
         then.status(200)
             .header("content-type", "image/png")
-            .body(PNG.to_vec());
+            .body(PNG);
     });
     let _track_cover = server.mock(|when, then| {
         when.method(GET)
@@ -73,7 +73,7 @@ fn home_album_track_play_flow(cx: &mut TestAppContext) {
             .query_param("id", "scov1");
         then.status(200)
             .header("content-type", "image/png")
-            .body(PNG.to_vec());
+            .body(PNG);
     });
     let now_playing = server.mock(|when, then| {
         when.method(GET)

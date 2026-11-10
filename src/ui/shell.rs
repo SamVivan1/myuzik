@@ -1329,6 +1329,7 @@ impl Render for Shell {
                                     .text_color(t.clay_ink)
                                     .cursor_pointer()
                                     .id("prev-btn")
+                                    .aria_label("Previous track")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.play_previous(cx);
                                     }))
@@ -1384,6 +1385,7 @@ impl Render for Shell {
                                     .text_color(t.clay_ink)
                                     .cursor_pointer()
                                     .id("next-btn")
+                                    .aria_label("Next track")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.play_next(cx);
                                     }))
@@ -1681,7 +1683,7 @@ impl Render for Shell {
                                     .gap(gpui::px(8.0))
                                     .child(
                                         div()
-                                            .id("win-close").debug_selector(|| "win-close".to_string())
+                                            .id("win-close").debug_selector(|| "win-close".to_string()).aria_label("Close window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1694,7 +1696,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-min").debug_selector(|| "win-min".to_string())
+                                            .id("win-min").debug_selector(|| "win-min".to_string()).aria_label("Minimize window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -1707,7 +1709,7 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
-                                            .id("win-max").debug_selector(|| "win-max".to_string())
+                                            .id("win-max").debug_selector(|| "win-max".to_string()).aria_label("Maximize window")
                                             .cursor_pointer()
                                             .w(gpui::px(14.0))
                                             .h(gpui::px(14.0))
@@ -2078,6 +2080,7 @@ impl Render for Shell {
                                             col = col.child(
                                                 div()
                                                     .id(format!("search-song-{}", i))
+                                                    .aria_label(format!("Play {}", tr.title))
                                                     .cursor_pointer()
                                                     .px(gpui::px(12.0))
                                                     .py(gpui::px(8.0))
@@ -2335,6 +2338,7 @@ impl Render for Shell {
                                                     let d = aid.clone();
                                                     move || format!("album-{}", d)
                                                 })
+                                                .aria_label(format!("Open album {}", a.name))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                                     this.open_album(aid.clone(), cx);
@@ -2451,6 +2455,7 @@ impl Render for Shell {
                                         )
                                         .id(format!("track-{}", i))
                                         .debug_selector(move || format!("track-{}", i))
+                                        .aria_label(format!("Play {}", t_.title))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
                                             this.play_tracks(songs2.clone(), i, cx);

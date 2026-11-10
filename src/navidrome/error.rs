@@ -1,3 +1,4 @@
+use crate::platform::logging::redact_url;
 use std::io;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +21,7 @@ pub enum NavidromeError {
 
 impl From<io::Error> for NavidromeError {
     fn from(e: io::Error) -> Self {
-        NavidromeError::Network(e.to_string())
+        NavidromeError::Network(redact_url(&e.to_string()))
     }
 }
 
@@ -39,7 +40,7 @@ impl From<ureq::Error> for NavidromeError {
                 _ => NavidromeError::Server(format!("HTTP {code}")),
             },
             ureq::Error::Io(io) => {
-                let msg = io.to_string();
+                let msg = redact_url(&io.to_string());
                 if msg.to_lowercase().contains("tls") {
                     NavidromeError::Tls(msg)
                 } else {
@@ -47,7 +48,7 @@ impl From<ureq::Error> for NavidromeError {
                 }
             }
             ureq::Error::Timeout(_) => NavidromeError::Network("timeout".to_string()),
-            other => NavidromeError::Network(other.to_string()),
+            other => NavidromeError::Network(redact_url(&other.to_string())),
         }
     }
 }
