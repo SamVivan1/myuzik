@@ -42,7 +42,7 @@ They are `#[ignore]` by default and cover:
 MYUZIK_LIVE=1 cargo test --test screenshots -- --ignored --test-threads=1 --nocapture
 ```
 
-Writes `docs/screenshots/{home,settings,search,now-playing,favorites,artists}.png` using GPUI's
+Writes `docs/screenshots/{home,settings,search,now-playing,favorites,artists,artist-detail,album-detail}.png` using GPUI's
 headless wgpu renderer. The headless renderer does not draw image textures, so covers appear as
 gradient placeholders in captures.
 

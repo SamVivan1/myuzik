@@ -136,4 +136,17 @@ fn capture_ui() {
 
     cx.update(|app| shell.update(app, |s, _cx| s.go(Route::Artists)));
     save(&mut cx, any, "artists");
+
+    // Artist detail + album detail from the real server (nested getArtist albums).
+    cx.update(|app| shell.update(app, |s, cx| s.select_first_artist_with_albums(cx)));
+    wait(&mut cx, &shell, |app| {
+        shell.read(app).selected_artist_album_count().unwrap_or(0) > 0
+    });
+    save(&mut cx, any, "artist-detail");
+
+    cx.update(|app| shell.update(app, |s, cx| s.open_first_artist_album(cx)));
+    wait(&mut cx, &shell, |app| {
+        shell.read(app).current_album_song_count().unwrap_or(0) > 0
+    });
+    save(&mut cx, any, "album-detail");
 }

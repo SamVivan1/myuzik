@@ -967,6 +967,35 @@ impl Shell {
         self.home_state.read(cx).artists.len()
     }
 
+    pub fn artist_with_albums(&self, cx: &gpui::App) -> Option<String> {
+        self.home_state
+            .read(cx)
+            .artists
+            .iter()
+            .find(|a| a.album_count.unwrap_or(0) > 0)
+            .map(|a| a.id.clone())
+    }
+
+    pub fn first_artist_album_id(&self) -> Option<String> {
+        self.artist_detail
+            .as_ref()
+            .and_then(|d| d.albums.first().map(|a| a.id.clone()))
+    }
+
+    pub fn select_first_artist_with_albums(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(id) = self.artist_with_albums(cx) {
+            self.route = Route::Artists;
+            self.select_artist(id, cx);
+        }
+    }
+
+    pub fn open_first_artist_album(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(id) = self.first_artist_album_id() {
+            self.route = Route::Home;
+            self.open_album(id, cx);
+        }
+    }
+
     pub fn loaded_cover_count(&self, cx: &gpui::App) -> usize {
         self.home_state.read(cx).covers.len()
     }
@@ -2083,6 +2112,10 @@ impl Render for Shell {
                                                         crate::app::Route::Search => "SEARCH",
                                                         crate::app::Route::NowPlaying => "NOW PLAYING",
                                                         crate::app::Route::Settings => "SETTINGS",
+                                                        crate::app::Route::Albums => "ALBUMS",
+                                                        crate::app::Route::Artists => "ARTISTS",
+                                                        crate::app::Route::Playlists => "PLAYLISTS",
+                                                        crate::app::Route::Favorites => "FAVORITES",
                                                         _ => "MYUZIK",
                                                     }),
                                             )
@@ -2097,6 +2130,10 @@ impl Render for Shell {
                                                         crate::app::Route::NowPlaying => "Now Playing",
                                                         crate::app::Route::Settings => "Settings",
                                                         crate::app::Route::Setup => "Setup",
+                                                        crate::app::Route::Albums => "Albums",
+                                                        crate::app::Route::Artists => "Artists",
+                                                        crate::app::Route::Playlists => "Playlists",
+                                                        crate::app::Route::Favorites => "Favorites",
                                                         _ => "Myuzik",
                                                     }),
                                             )

@@ -67,7 +67,7 @@ window traffic-light semantics (red/yellow/green) and transparent shadows.
 
 `MYUZIK_LIVE=1 cargo test --test screenshots -- --ignored --test-threads=1 --nocapture`
 writes 1280×800 PNGs to `docs/screenshots/` (Home, Settings, Search, Now Playing, Favorites,
-Artists). The headless wgpu renderer does not draw image textures, so album/cover art appears as
+Artists, Artist detail, Album detail). The headless wgpu renderer does not draw image textures, so album/cover art appears as
 the brass gradient placeholder in those captures; the real app renders the cover art.
 
 ## Remaining review items
