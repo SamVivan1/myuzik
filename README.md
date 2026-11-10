@@ -54,13 +54,30 @@ Service if available, otherwise in `~/.config/myuzik/credentials` with mode `060
 
 ### Install for the current user
 
+One command, no sudo:
+
 ```bash
-scripts/install.sh                # binary + desktop entry + icon in ~/.local
-scripts/install.sh --with-extension  # also install the GNOME pin extension
-myuzik
+./install.sh          # release build + binary, desktop entry, icon, caches, GNOME extension
+./install.sh --no-extension   # skip the GNOME pin extension
+./install.sh --skip-build     # reuse an existing target/release/myuzik
 ```
 
-`scripts/install.sh --uninstall` removes only Myuzik files.
+Then launch it as `myuzik`, from the app grid, or by searching **Myuzik** in Activities.
+
+The desktop entry is written with an **absolute** `Exec` path on purpose: GNOME Shell
+launches apps with the systemd session PATH, which usually does not contain
+`~/.local/bin`, and an entry whose executable cannot be resolved is not listed in
+search at all. `install.sh` writes the absolute path and then verifies through
+`GAppInfo` (the registry GNOME search uses) that the entry is visible. See
+[docs/troubleshooting.md](docs/troubleshooting.md) if it does not show up.
+
+Remove everything again with:
+
+```bash
+./uninstall.sh                # binary, desktop entry, icon, metadata, extension
+./uninstall.sh --purge        # also delete config and caches
+./uninstall.sh --dry-run      # show what would be removed
+```
 
 ## GNOME pin extension
 

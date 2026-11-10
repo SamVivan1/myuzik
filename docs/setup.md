@@ -13,7 +13,7 @@ A `subsonic-response` JSON body means the server is reachable. The form in Myuzi
 
 ## 2. First launch
 
-`cargo run --release` or `myuzik` after `scripts/install.sh`.
+`cargo run --release`, or `./install.sh` once and then `myuzik` / the Activities entry.
 
 The setup form asks for:
 
@@ -26,6 +26,8 @@ The password is stored through the Secret Service (`keyring`), with a `0600` fil
 `~/.config/myuzik/credentials`.
 
 ## 3. GNOME pin extension (optional)
+
+`./install.sh` already does this; to (re)install just the extension:
 
 ```bash
 scripts/install-extension.sh

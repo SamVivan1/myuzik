@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `./install.sh` — one command installs the release binary, a desktop entry, the icon,
+  AppStream metadata, refreshes the desktop/icon caches, and installs the GNOME pin
+  extension. Options: `--no-extension`, `--skip-build`, `--prefix=DIR`.
+- `./uninstall.sh` — one command removes all of the above plus the extension; `--purge`
+  also deletes config and caches, `--dry-run` shows what would go, `--keep-extension`
+  leaves the extension alone. Both scripts are idempotent.
+- `scripts/install.sh` is now a thin wrapper for the root installer, so the documented
+  `--uninstall`/`--with-extension` paths keep working.
+
+### Fixed
+- **Myuzik did not appear in GNOME Activities search.** The desktop entry shipped
+  `Exec=myuzik`, but GNOME Shell launches apps with the systemd *session* PATH, which
+  does not include `~/.local/bin` on this system; `GAppInfo` therefore failed to load
+  the entry (`gio: Unable to load application information`) and an entry that cannot be
+  loaded is never listed or searched. `install.sh` now writes the absolute executable
+  path and verifies the result through `GAppInfo`. Documented in
+  [docs/troubleshooting.md](docs/troubleshooting.md).
+
 ## v0.1.0 — 2026-11-10
 
 First functional release.
