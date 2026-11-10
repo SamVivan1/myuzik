@@ -245,6 +245,30 @@ fn capture_overlay_states() {
         }
     }
 
+    // ---- 1c. position at zero: the track must still be drawn ----
+    {
+        let st = state.clone();
+        let cover = cover.clone();
+        cx.update(move |app| {
+            st.update(app, |s, _| {
+                s.begin("Tarot".to_string(), ".Feast".to_string());
+                s.set_status(&LyricsStatus::Synced(synced_lines()));
+                s.set_cover(Some(cover.clone()));
+                s.sync_position(Duration::ZERO, 0, Some(Duration::from_secs(306)));
+            });
+        });
+        cx.update(|app| app.refresh_windows());
+        let any = cx.update(|app| {
+            app.windows()
+                .iter()
+                .find(|w| w.downcast::<myuzik::overlay::PinnedLyricsView>().is_some())
+                .copied()
+        });
+        if let Some(any) = any {
+            capture("overlay-zero", &mut cx, any, false);
+        }
+    }
+
     // ---- 2. unsynced transcript ----
     {
         let st = state.clone();

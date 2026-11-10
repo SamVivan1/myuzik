@@ -567,7 +567,8 @@ impl Render for PinnedLyricsView {
             .child(art)
             .child(
                 div()
-                    .mt(gpui::px(13.0))
+                    .flex_none()
+                    .mt(gpui::px(10.0))
                     .font_family(theme.display_font)
                     .text_size(gpui::px(20.0))
                     .line_height(gpui::px(25.0))
@@ -577,6 +578,7 @@ impl Render for PinnedLyricsView {
             )
             .child(
                 div()
+                    .flex_none()
                     .mt(gpui::px(4.0))
                     .flex()
                     .items_center()
@@ -605,9 +607,11 @@ impl Render for PinnedLyricsView {
             .child(
                 // Real progress, not decoration.
                 div()
-                    .mt(gpui::px(16.0))
+                    .flex_none()
+                    .mt(gpui::px(12.0))
                     .w(gpui::px(LEFT_COLUMN))
                     .h(gpui::px(5.0))
+                    .min_h(gpui::px(5.0))
                     .rounded(gpui::px(999.0))
                     .bg(gpui::rgba(0xFFFFFF2E))
                     .overflow_hidden()
@@ -625,7 +629,8 @@ impl Render for PinnedLyricsView {
             )
             .child(
                 div()
-                    .mt(gpui::px(8.0))
+                    .flex_none()
+                    .mt(gpui::px(6.0))
                     .w(gpui::px(LEFT_COLUMN))
                     .flex()
                     .items_center()
@@ -925,6 +930,12 @@ pub fn open_overlay(
 ) -> gpui::WindowHandle<PinnedLyricsView> {
     let opts = WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+        // The layout needs this much room; without a floor the window could be
+        // dragged smaller and flex would squeeze the progress bar to nothing.
+        window_min_size: Some(gpui::size(
+            gpui::px(MIN_WIDTH as f32),
+            gpui::px(MIN_HEIGHT as f32),
+        )),
         window_background: WindowBackgroundAppearance::Blurred,
         window_decorations: None,
         focus: false,
