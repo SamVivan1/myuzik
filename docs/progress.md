@@ -35,13 +35,14 @@ Last updated: 2026-11-10
 - [x] Task 17: Shared lyrics view + Now Playing screen with cover
 
 ## Phase 5 — Pinned Overlay
-- [~] Task 18: Overlay window/view/toggle implemented; geometry persistence pending
+- [~] Task 18: Overlay window/view/toggle + lyrics sync implemented; geometry persistence pending
 - [~] Task 19: GNOME extension present; install script; version matrix notes pending
 
 ## Phase 6 — Settings, Polish, Integrity
 - [x] Task 20: Settings (quality, scrobble, lyrics offset/source, reduced motion, accent)
 - [x] Task 21: Scrobbling (now-playing + submit), favorites, queue actions
-- [~] Task 22: Error toasts + setup errors; log redaction + accessibility audit pending
+- [~] Task 22: Error toasts, setup errors, URL/token log redaction, aria labels;
+  full keyboard focus order + automated a11y tree pending (see docs/accessibility.md)
 - [ ] Task 23: Design polish and anti-slop audit
 - [~] Task 24: Memory measured (idle 125 MB, playing 159 MB); stress tests pending
 
@@ -55,9 +56,8 @@ Last updated: 2026-11-10
 - See `docs/testing.md` for the coverage map.
 
 ## Known gaps
-- Keyboard shortcuts (Space, arrows, Ctrl+K) are not bound globally.
+- Global keyboard shortcuts (Space, arrows, Ctrl+K, Ctrl+P) are not bound yet.
 - Overlay geometry is not persisted across restarts.
 - Playlist/artist detail screens are read/play only; no editing.
-- MPRIS art URL is not populated (covers are in-memory only).
-- Log redaction tests and the accessibility audit are not written yet.
+- Settings cover quality/scrobble/lyrics/motion; account password change is via setup.
 - Stress tests (20k tracks, rapid skips, 24 h idle) are not automated.
