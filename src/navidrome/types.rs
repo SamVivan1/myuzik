@@ -84,6 +84,8 @@ pub struct SongDto {
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
     pub starred: Option<String>,
+    /// Genre of the song; the seed for autoplay radio.
+    pub genre: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -148,6 +150,37 @@ pub struct PlaylistDetailData {
     pub playlist: Option<PlaylistDto>,
     #[serde(default)]
     pub entry: Vec<SongDto>,
+}
+
+/// A `{"song": [...]}` payload, shared by the radio endpoints.
+#[derive(Deserialize, Debug, Default)]
+pub struct SongList {
+    #[serde(default)]
+    pub song: Vec<SongDto>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct SimilarSongs2Data {
+    #[serde(rename = "similarSongs2")]
+    pub similar_songs2: Option<SongList>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct SimilarSongsData {
+    #[serde(rename = "similarSongs")]
+    pub similar_songs: Option<SongList>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct SongsByGenreData {
+    #[serde(rename = "songsByGenre")]
+    pub songs_by_genre: Option<SongList>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct RandomSongsData {
+    #[serde(rename = "randomSongs")]
+    pub random_songs: Option<SongList>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -223,6 +256,7 @@ pub fn song_dto_to_track(s: SongDto) -> Track {
         disc_number: s.disc_number,
         year: s.year,
         starred: s.starred.is_some(),
+        genre: s.genre.filter(|g| !g.trim().is_empty()),
     }
 }
 

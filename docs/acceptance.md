@@ -23,7 +23,7 @@ inline `#[cfg(test)]` modules in `src/` (31 tests), not separate files under `te
 ```text
 cargo fmt --check                              → clean
 cargo clippy --all-targets -- -D warnings      → clean
-cargo test -- --test-threads=1                 → 79 passed, 0 failed, 9 ignored
+cargo test -- --test-threads=1                 → 102 passed, 0 failed, 10 ignored
 MYUZIK_LIVE=1 cargo test --test live_navidrome -- --ignored → 7 passed, 0 failed
 MYUZIK_LIVE=1 cargo test --test live_player    -- --ignored → 1 passed, 0 failed
 desktop-file-validate packaging/*.desktop      → exit 0
@@ -76,6 +76,20 @@ server, enabled with `MYUZIK_LIVE=1`) and the 1 `screenshots` capture.
 | Player bar: play/pause, ±10 s, volume ±, progress, cover | ✅ run today — `home_album_track_play_flow` (tests/ui_flow.rs) |
 | Global shortcuts: Space, arrows, Shift+arrows, Ctrl+K, Ctrl+P, Esc | ✅ run today — `global_shortcuts_work` (tests/ui_flow.rs) |
 | EOS advances to the next track | ✅ earlier — `play_next` path; MPRIS `next` verified with `playerctl` in the earlier acceptance run |
+
+### Autoplay radio
+
+| Check | Result |
+|---|---|
+| Playing one track queues similar music and continues at end of stream | ✅ run today — `playing_one_track_queues_similar_music_and_continues` (tests/autoplay_flow.rs) |
+| Sources tried in order: similar song → similar artist → genre → random | ✅ run today — `sources_are_tried_in_priority_order` (tests/radio.rs) |
+| Nothing already queued, recently played, or the seed is re-queued | ✅ run today — `already_queued_recent_and_the_seed_are_never_repeated`, `ids_reflects_the_queue_for_deduplication` |
+| Genre paging advances and wraps at the end of the pool | ✅ run today — `genre_pagination_advances_then_wraps_at_the_end_of_the_pool`, `short_genre_page_resets_the_offset_so_the_pool_cycles` |
+| A failing source does not abort the batch; total failure shows one toast | ✅ run today — `one_failing_source_does_not_abort_the_batch`, `all_sources_failing_surfaces_an_error_once`, `a_failing_radio_shows_one_toast_and_leaves_the_queue_alone` |
+| Autoplay off queues nothing and stops at the end | ✅ run today — `autoplay_off_stops_at_the_end_of_the_queue` |
+| Queue resumes after running out and stays bounded | ✅ run today — `append_continue_resumes_after_the_queue_ran_out`, `trim_front_to_bounds_the_queue_and_keeps_the_current_track`, `trim_under_shuffle_keeps_the_order_valid` |
+| Radio stalls instead of hammering a server that keeps returning nothing | ✅ run today — `the_radio_stalls_after_repeated_empty_batches_and_recovers_on_a_new_seed` |
+| Real server: batch produced, seed excluded, no overlap between batches, genre paging advances | ✅ run today — live `live_radio_sources` (batch 1 = 20 tracks by a different artist than the seed; batch 2 = 20 tracks, 0 overlap) |
 
 ### MPRIS
 

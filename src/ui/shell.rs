@@ -42,6 +42,16 @@ pub struct Shell {
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
     scrobble_enabled: Arc<std::sync::atomic::AtomicBool>,
     search_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Autoplay radio state (genre paging, recent-history filter).
+    radio: Arc<std::sync::Mutex<crate::library::radio::Radio>>,
+    /// Mirrors `config.autoplay` so the async completion can re-check it.
+    autoplay_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// One radio fetch at a time, so repeated triggers cannot stampede.
+    radio_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when playback ran out before the fetch landed: resume on arrival.
+    radio_continue_pending: Arc<std::sync::atomic::AtomicBool>,
+    /// Handle used to resume playback from the async radio completion.
+    self_weak: gpui::WeakEntity<Shell>,
     setup_server: String,
     setup_user: String,
     setup_pass: String,
@@ -142,6 +152,11 @@ impl Shell {
                 config.prefer_navidrome_lyrics,
             ))
         });
+        let radio = Arc::new(std::sync::Mutex::new(crate::library::radio::Radio::new()));
+        let autoplay_enabled = Arc::new(std::sync::atomic::AtomicBool::new(config.autoplay));
+        let radio_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let radio_continue_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let self_weak = cx.entity().downgrade();
         let route = if client.is_none() {
             Route::Setup
         } else {
@@ -353,6 +368,11 @@ impl Shell {
             lyrics_generation,
             scrobble_enabled,
             search_generation,
+            radio,
+            autoplay_enabled,
+            radio_in_flight,
+            radio_continue_pending,
+            self_weak,
             setup_server,
             setup_user,
             setup_pass,
@@ -587,6 +607,16 @@ impl Shell {
                 .ok();
             self.player_handle.tx.send(PlayerCommand::Play).ok();
         }
+        // A single track leaves nothing queued, so autoplay has to seed itself
+        // from this track while it plays.
+        self.radio.lock().unwrap_or_else(|e| e.into_inner()).reset();
+        self.radio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .note_played(&track.id);
+        if self.config.autoplay {
+            self.ensure_radio(false, cx);
+        }
         // fetch lyrics
         if let Some(client) = &self.client {
             let c = client.clone();
@@ -628,13 +658,21 @@ impl Shell {
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(tracks.clone(), start);
         });
+        self.radio.lock().unwrap_or_else(|e| e.into_inner()).reset();
         self.load_and_play(&tracks[start], cx);
     }
 
     pub fn play_next(&mut self, cx: &mut gpui::App) {
         let next = self.player_state.update(cx, |ps, _cx| ps.next());
-        if let Some(track) = next {
-            self.load_and_play(&track, cx);
+        match next {
+            Some(track) => self.load_and_play(&track, cx),
+            None => {
+                // The queue ran out. With autoplay on, fetch similar tracks and
+                // resume on the first of them once they arrive.
+                if self.config.autoplay {
+                    self.ensure_radio(true, cx);
+                }
+            }
         }
     }
 
@@ -773,6 +811,115 @@ impl Shell {
             })
             .detach();
         }
+
+        // Autoplay bookkeeping: remember this track so the radio will not
+        // suggest it again soon, and top the queue up *before* it runs dry so
+        // the next track starts without waiting for the network.
+        self.radio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .note_played(&track.id);
+        if self.config.autoplay && self.player_state.read(cx).queue.remaining() == 0 {
+            self.ensure_radio(false, cx);
+        }
+    }
+
+    /// Autoplay: keep the queue from running dry.
+    ///
+    /// `continue_playback` means playback already stopped at the end of the
+    /// queue, so the batch has to resume playback instead of only extending it.
+    /// Everything happens off the UI thread; the flags make repeated calls
+    /// (prefetch + end-of-stream racing) collapse into one fetch.
+    fn ensure_radio(&mut self, continue_playback: bool, cx: &mut gpui::App) {
+        use std::sync::atomic::Ordering;
+
+        if !self.config.autoplay {
+            return;
+        }
+        if self.radio_in_flight.swap(true, Ordering::SeqCst) {
+            // A fetch is already running; it must resume playback when it lands.
+            if continue_playback {
+                self.radio_continue_pending.store(true, Ordering::SeqCst);
+            }
+            return;
+        }
+        let reset = |flag: &Arc<std::sync::atomic::AtomicBool>| flag.store(false, Ordering::SeqCst);
+        let Some(client) = self.client.clone() else {
+            reset(&self.radio_in_flight);
+            return;
+        };
+        let Some(seed) = self.player_state.read(cx).current.clone() else {
+            reset(&self.radio_in_flight);
+            return;
+        };
+        {
+            let radio = self.radio.lock().unwrap_or_else(|e| e.into_inner());
+            if radio.is_stalled() {
+                drop(radio);
+                reset(&self.radio_in_flight);
+                return;
+            }
+        }
+        if continue_playback {
+            self.radio_continue_pending.store(true, Ordering::SeqCst);
+        }
+
+        let exclude = self.player_state.read(cx).queue.ids();
+        let radio = self.radio.clone();
+        let inflight = self.radio_in_flight.clone();
+        let pending = self.radio_continue_pending.clone();
+        let autoplay = self.autoplay_enabled.clone();
+        let weak = self.self_weak.clone();
+        let ps = self.player_state.clone();
+
+        cx.spawn(async move |cx| {
+            let seed_bg = seed.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut guard = radio.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.next_batch(&client, &seed_bg, &exclude)
+                })
+                .await;
+            let want_continue = pending.swap(false, Ordering::SeqCst);
+            cx.update(|app| {
+                inflight.store(false, Ordering::SeqCst);
+                if !autoplay.load(Ordering::SeqCst) {
+                    return;
+                }
+                match result {
+                    Ok(tracks) if !tracks.is_empty() => {
+                        if want_continue {
+                            let resumed = ps.update(app, |ps, _| {
+                                let resumed = ps.queue.append_continue(tracks);
+                                if let Some(t) = &resumed {
+                                    ps.adopt(t.clone());
+                                }
+                                ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+                                resumed
+                            });
+                            if let Some(track) = resumed {
+                                let _ = weak.update(app, |shell, cx| {
+                                    shell.load_and_play(&track, cx);
+                                });
+                            }
+                        } else {
+                            ps.update(app, |ps, _| {
+                                ps.queue.append(tracks);
+                                ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+                            });
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("autoplay radio failed: {e:?}");
+                        let msg = format!("Autoplay unavailable: {e:?}");
+                        let _ = weak.update(app, |shell, _cx| shell.toast = Some(msg));
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn set_setup_fields(&mut self, server: &str, user: &str, pass: &str) {
@@ -881,6 +1028,14 @@ impl Shell {
         self.config.scrobble = !self.config.scrobble;
         self.scrobble_enabled
             .store(self.config.scrobble, std::sync::atomic::Ordering::Relaxed);
+        self.persist_config();
+    }
+
+    /// Turn autoplay radio on or off; the choice is persisted.
+    pub fn toggle_autoplay(&mut self) {
+        self.config.autoplay = !self.config.autoplay;
+        self.autoplay_enabled
+            .store(self.config.autoplay, std::sync::atomic::Ordering::Relaxed);
         self.persist_config();
     }
 
@@ -1065,6 +1220,30 @@ impl Shell {
 
     pub fn loaded_album_count(&self, cx: &gpui::App) -> usize {
         self.home_state.read(cx).albums.len()
+    }
+
+    /// Number of tracks in the queue (used by the autoplay tests and MPRIS).
+    pub fn queue_len(&self, cx: &gpui::App) -> usize {
+        self.player_state.read(cx).queue.len()
+    }
+
+    /// Tracks still to play before the queue runs out.
+    pub fn queue_remaining(&self, cx: &gpui::App) -> usize {
+        self.player_state.read(cx).queue.remaining()
+    }
+
+    /// Id of the track that is playing, if any.
+    pub fn current_track_id(&self, cx: &gpui::App) -> Option<String> {
+        self.player_state
+            .read(cx)
+            .current
+            .as_ref()
+            .map(|t| t.id.clone())
+    }
+
+    /// Whether autoplay radio is enabled.
+    pub fn autoplay_on(&self) -> bool {
+        self.config.autoplay
     }
 
     pub fn loaded_artist_count(&self, cx: &gpui::App) -> usize {
@@ -2616,6 +2795,8 @@ impl Render for Shell {
                                     self.focus_for("settings-lyrics-source", Self::TAB_CONTENT, cx);
                                 let f_set_reduce_motion =
                                     self.focus_for("settings-reduce-motion", Self::TAB_CONTENT, cx);
+                                let f_set_autoplay =
+                                    self.focus_for("settings-autoplay", Self::TAB_CONTENT, cx);
                                 let f_offset_down = self.focus_for("settings-offset-down", Self::TAB_CONTENT, cx);
                                 let f_offset_up = self.focus_for("settings-offset-up", Self::TAB_CONTENT, cx);
                                 col = col
@@ -2643,6 +2824,21 @@ impl Render for Shell {
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _event, _window, _cx| {
                                             this.toggle_scrobble();
+                                        })),
+                                    )
+                                    .child(
+                                        setting_row(
+                                            "Autoplay similar",
+                                            if self.config.autoplay { "On" } else { "Off" },
+                                            t,
+                                        )
+                                        .id("set-autoplay").debug_selector(|| "set-autoplay".to_string())
+                                        .track_focus(&f_set_autoplay).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button)
+                                        .aria_label(format!("Autoplay similar tracks, {}", if self.config.autoplay { "on" } else { "off" }))
+                                        .border_2().border_color(self.focus_border(&f_set_autoplay, window, t.glass_border, t))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                                            this.toggle_autoplay();
                                         })),
                                     )
                                     .child(setting_row(

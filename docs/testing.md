@@ -8,7 +8,7 @@ Run the full suite:
 
 This runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and all tests serially
 (GPUI tests share process-global state, so `--test-threads=1` is required). The default run is
-79 tests (31 unit + 48 integration); 9 more (`live_navidrome` ×7, `live_player` ×1,
+102 tests (34 unit + 68 integration); 10 more (`live_navidrome` ×8, `live_player` ×1,
 `screenshots` ×1) are `#[ignore]`d because they need a real server or a GPU renderer.
 
 ## Live server tests
@@ -22,14 +22,17 @@ MYUZIK_LIVE=1 ./scripts/test-all.sh
 They are `#[ignore]` by default and cover:
 
 - `tests/live_navidrome.rs`: ping, newest albums, album detail + songs, cover bytes, artists,
-  playlists, search, stream URL fetch, Navidrome `lyricsList` parsing, lyrics provider pipeline.
+  playlists, search, stream URL fetch, Navidrome `lyricsList` parsing, lyrics provider pipeline,
+  and the autoplay sources (`live_radio_sources`: a real batch, no seed in it, no overlap
+  between two batches, genre paging advancing).
 - `tests/live_player.rs`: GStreamer play, position advance, duration, seek, pause.
 
 ## Unit tests (inline in `src/`)
 
-31 tests, run by the same `cargo test`: config defaults/round-trip (2), LRC parsing and
+34 tests, run by the same `cargo test`: config defaults/round-trip (2), LRC parsing and
 offsets (6), Subsonic DTO parsing incl. lyrics shapes (3), overlay geometry clamping (4),
-OS accent mapping (3), log redaction (2), scrobble thresholds (6), theme contrast (5).
+OS accent mapping (3), log redaction (2), scrobble thresholds (6), theme contrast (5),
+autoplay-radio selection helpers (3).
 
 ## Mocked UI/integration tests
 
@@ -49,7 +52,15 @@ OS accent mapping (3), log redaction (2), scrobble thresholds (6), theme contras
   every icon-only control carries a role, a focus handle and an `aria_label` (checked against the
   rendering code, because accesskit's tree is not built in the headless harness — see
   [accessibility.md](accessibility.md)).
-- `tests/queue.rs`: queue semantics, repeat/shuffle, and rapid next/previous.
+- `tests/queue.rs`: queue semantics, repeat/shuffle, rapid next/previous, and the autoplay
+  primitives (`remaining`, `append`, `append_continue` resuming an exhausted queue, and
+  `trim_front_to` bounding the queue under both linear and shuffle playback).
+- `tests/radio.rs`: autoplay radio against a mocked server — source priority, dedup against
+  the queue/history/seed, genre pagination advancing and wrapping, the random backstop, a
+  failing source not aborting the batch, and the stall guard.
+- `tests/autoplay_flow.rs`: the real `Shell` — playing a single track queues similar music and
+  continues into it at end of stream; autoplay off queues nothing and stops at the end; a
+  broken radio shows one toast and leaves the queue alone.
 - `tests/cover_lru.rs`: cover cache eviction and no growth on re-insert.
 - `tests/navidrome_auth.rs`: Subsonic token/salt and auth parameters.
 - `tests/stress.rs`: 6 capacity tests — a 20 000-track library (DTO mapping and windowed

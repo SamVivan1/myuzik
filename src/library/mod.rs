@@ -12,6 +12,8 @@ pub struct Track {
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
     pub starred: bool,
+    /// Genre from the server, used to seed autoplay radio.
+    pub genre: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,3 +79,7 @@ pub struct HomeData {
     pub playlists: Vec<Playlist>,
     pub random: Vec<Album>,
 }
+
+pub mod radio;
+
+pub use radio::Radio;

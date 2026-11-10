@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub quality: StreamQuality,
     pub scrobble: bool,
     pub volume: f32,
+    /// Keep playing similar tracks when the queue runs out (autoplay radio).
+    pub autoplay: bool,
     pub lyrics_offset_ms: i64,
     pub prefer_navidrome_lyrics: bool,
     pub overlay_x: i32,
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             quality: StreamQuality::Original,
             scrobble: true,
             volume: 0.8,
+            autoplay: true,
             lyrics_offset_ms: 0,
             prefer_navidrome_lyrics: true,
             overlay_x: 0,

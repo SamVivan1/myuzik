@@ -60,9 +60,18 @@ Last updated: 2026-11-10
 - [x] Task 26: Final acceptance matrix re-executed and corrected (`docs/acceptance.md` now
   cites the real test names), v0.1.0 release docs, `git tag v0.1.0`.
 
+## Post-0.1.0 — Autoplay radio
+- [x] Endless playback: when the queue runs out, similar music continues automatically
+  (`getSimilarSongs` → `getSimilarSongs2` → paged `getSongsByGenre` → `getRandomSongs`, with
+  deduplication against the queue and a bounded recent-history ring). Prefetches before the
+  queue runs dry so there is no gap, resumes if the fetch arrives after the track ended,
+  caps the queue at 500 tracks, and stops after repeated empty batches instead of hammering
+  the server. Toggle in Settings → Playback (`autoplay` in the config). Nine engine tests,
+  three end-to-end flow tests, eight queue tests and one live test cover it.
+
 ## Testing
-- `./scripts/test-all.sh` — fmt, clippy, 79 tests serial (31 unit + 48 headless integration;
-  9 live/screenshot tests are `#[ignore]`d).
+- `./scripts/test-all.sh` — fmt, clippy, 102 tests serial (34 unit + 68 headless integration;
+  10 live/screenshot tests are `#[ignore]`d).
 - `MYUZIK_LIVE=1 ./scripts/test-all.sh` — adds the live Navidrome (7) and GStreamer (1) suites.
 - `scripts/measure-ram.sh` — RSS / CPU / startup of the release binary (see `docs/performance.md`).
 - `tests/a11y.rs` — keyboard focus order, roles/labels, search not hijacked.

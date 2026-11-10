@@ -65,6 +65,7 @@ fn song_dto(i: usize) -> SongDto {
         starred: i
             .is_multiple_of(5)
             .then(|| "2026-11-10T00:00:00Z".to_string()),
+        genre: Some(format!("Genre {}", i % 5)),
     }
 }
 
@@ -112,6 +113,7 @@ fn queue_track(i: usize) -> Track {
         disc_number: Some(1),
         year: None,
         starred: false,
+        genre: None,
     }
 }
 

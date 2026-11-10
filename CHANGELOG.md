@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- **Endless autoplay radio.** When the queue runs out, playback continues with similar music
+  instead of stopping: tracks similar to the current song, then to its artist, then more from
+  the same genre (paged with a rotating offset so a large genre keeps producing tracks the
+  queue has not seen), then random as a backstop. Playing a single song is enough to start it.
+  It prefetches before the queue runs dry so the transition has no gap, resumes playback when
+  a fetch lands after the track already ended, filters out anything already queued or
+  recently played (bounded 100-track history), caps the queue at 500 tracks so a long session
+  cannot grow without limit, and stops querying after repeated empty batches instead of
+  hammering the server. New setting: Settings → Playback → **Autoplay similar**
+  (`autoplay = true` in `config.toml`, on by default).
+- `Track.genre` is now populated from the Subsonic payload (the field was already returned by
+  the server and previously dropped), giving the radio its genre seed.
+- New client methods: `similar_songs`, `similar_songs_for_song`, `songs_by_genre`,
+  `random_songs`.
 - `./install.sh` — one command installs the release binary, a desktop entry, the icon,
   AppStream metadata, refreshes the desktop/icon caches, and installs the GNOME pin
   extension. Options: `--no-extension`, `--skip-build`, `--prefix=DIR`.
@@ -11,6 +25,20 @@
   leaves the extension alone. Both scripts are idempotent.
 - `scripts/install.sh` is now a thin wrapper for the root installer, so the documented
   `--uninstall`/`--with-extension` paths keep working.
+- `scripts/render-icons.sh` — regenerates the PNG icon set from the scalable SVG master, with a
+  `--check` mode that verifies the set exists and is not older than the master (no Inkscape
+  needed for `--check`).
+
+### Changed
+- **New app icon.** The placeholder was an "M" set in Georgia — a font glyph, which changes
+  shape on a system without that font and was never drawn for a 16 px grid. It is replaced by a
+  path-only mark: a brass M whose valley descends into a tilted stylus, inside a single brass
+  ring on a warm near-black plate. The monogram and the stylus are one unioned contour, so no
+  seam shows where they meet; the file has no text elements, no font attributes and no external
+  references. Ships with a symbolic variant and eight PNG sizes (16–512 px); `install.sh` and
+  `uninstall.sh` now install and remove the whole set, and stop with a clear message when the
+  generated set is missing. Design, alternatives and evidence:
+  [docs/superpowers/specs/2026-11-10-logo-design.md](docs/superpowers/specs/2026-11-10-logo-design.md).
 
 ### Fixed
 - **Myuzik did not appear in GNOME Activities search.** The desktop entry shipped

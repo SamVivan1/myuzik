@@ -16,6 +16,7 @@ fn sample_track() -> Track {
         disc_number: Some(1),
         year: Some(2026),
         starred: false,
+        genre: None,
     }
 }
 

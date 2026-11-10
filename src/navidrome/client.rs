@@ -214,6 +214,92 @@ impl NavidromeClient {
         ))
     }
 
+    /// Songs similar to an artist (`getSimilarSongs2`). One of the autoplay
+    /// radio sources; verified against Navidrome 0.64.
+    pub fn similar_songs(
+        &self,
+        artist_id: &str,
+        count: u32,
+    ) -> Result<Vec<crate::library::Track>, NavidromeError> {
+        let count_s = count.to_string();
+        let resp: SubsonicResponse<SimilarSongs2Data> = self.get_json(
+            "getSimilarSongs2",
+            &[("id", artist_id), ("count", &count_s)],
+        )?;
+        Self::check_status(&resp)?;
+        Ok(resp
+            .data
+            .similar_songs2
+            .unwrap_or_default()
+            .song
+            .into_iter()
+            .map(song_dto_to_track)
+            .collect())
+    }
+
+    /// Songs similar to a specific song (`getSimilarSongs`). More precise than
+    /// the artist variant, so the radio prefers it.
+    pub fn similar_songs_for_song(
+        &self,
+        song_id: &str,
+        count: u32,
+    ) -> Result<Vec<crate::library::Track>, NavidromeError> {
+        let count_s = count.to_string();
+        let resp: SubsonicResponse<SimilarSongsData> =
+            self.get_json("getSimilarSongs", &[("id", song_id), ("count", &count_s)])?;
+        Self::check_status(&resp)?;
+        Ok(resp
+            .data
+            .similar_songs
+            .unwrap_or_default()
+            .song
+            .into_iter()
+            .map(song_dto_to_track)
+            .collect())
+    }
+
+    /// One page of songs in a genre (`getSongsByGenre`). The radio pages through
+    /// this so a long session keeps finding songs the queue has not seen.
+    pub fn songs_by_genre(
+        &self,
+        genre: &str,
+        count: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::library::Track>, NavidromeError> {
+        let count_s = count.to_string();
+        let offset_s = offset.to_string();
+        let resp: SubsonicResponse<SongsByGenreData> = self.get_json(
+            "getSongsByGenre",
+            &[("genre", genre), ("count", &count_s), ("offset", &offset_s)],
+        )?;
+        Self::check_status(&resp)?;
+        Ok(resp
+            .data
+            .songs_by_genre
+            .unwrap_or_default()
+            .song
+            .into_iter()
+            .map(song_dto_to_track)
+            .collect())
+    }
+
+    /// Random songs (`getRandomSongs`). The radio's backstop: whatever else the
+    /// server cannot suggest, this keeps playback going.
+    pub fn random_songs(&self, count: u32) -> Result<Vec<crate::library::Track>, NavidromeError> {
+        let count_s = count.to_string();
+        let resp: SubsonicResponse<RandomSongsData> =
+            self.get_json("getRandomSongs", &[("size", &count_s)])?;
+        Self::check_status(&resp)?;
+        Ok(resp
+            .data
+            .random_songs
+            .unwrap_or_default()
+            .song
+            .into_iter()
+            .map(song_dto_to_track)
+            .collect())
+    }
+
     pub fn stream_url(
         &self,
         track_id: &str,

@@ -206,3 +206,73 @@ fn live_lyrics_pipeline() {
     }
     assert!(checked > 0);
 }
+
+/// Autoplay radio sources against the real server: all four endpoints must
+/// answer for a real song, and genre paging must advance rather than repeat.
+#[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
+fn live_radio_sources() {
+    if live_client().is_none() {
+        eprintln!("skipped: MYUZIK_LIVE not set or no credentials");
+        return;
+    }
+    use myuzik::library::radio::Radio;
+
+    let (_paths, c, _cfg) = setup();
+
+    // Seed from the newest album's first song.
+    let albums = c
+        .album_list(AlbumListKind::Newest, 5, 0)
+        .expect("album list");
+    let album = c.album(&albums[0].id).expect("album detail");
+    let seed = album.songs.first().expect("album has no songs").clone();
+    eprintln!(
+        "seed: '{}' by '{}' genre={:?}",
+        seed.title, seed.artist, seed.genre
+    );
+    assert!(
+        seed.genre.is_some(),
+        "the server should expose a genre for this song"
+    );
+
+    let mut radio = Radio::new();
+    let batch = radio
+        .next_batch(&c, &seed, &std::collections::HashSet::new())
+        .expect("radio batch");
+    assert!(!batch.is_empty(), "the radio produced no tracks");
+    assert!(
+        !batch.iter().any(|t| t.id == seed.id),
+        "the radio must not queue the seed itself"
+    );
+    eprintln!(
+        "batch: {} tracks, first '{}' by '{}'",
+        batch.len(),
+        batch[0].title,
+        batch[0].artist
+    );
+
+    // A second batch must not repeat the first one.
+    let exclude: std::collections::HashSet<String> = batch.iter().map(|t| t.id.clone()).collect();
+    let batch2 = radio.next_batch(&c, &seed, &exclude).expect("second batch");
+    let overlap = batch2.iter().filter(|t| exclude.contains(&t.id)).count();
+    eprintln!("second batch: {} tracks, {overlap} overlaps", batch2.len());
+    assert_eq!(overlap, 0, "second batch repeated tracks already queued");
+
+    // The genre pool pages forward when it is big enough to be paged.
+    let genre = seed.genre.clone().expect("genre");
+    let page0 = c.songs_by_genre(&genre, 10, 0).expect("genre page 0");
+    let page1 = c.songs_by_genre(&genre, 10, 10).expect("genre page 1");
+    eprintln!(
+        "genre '{}': page0={} page1={}",
+        genre,
+        page0.len(),
+        page1.len()
+    );
+    if page0.len() == 10 && !page1.is_empty() {
+        let first: std::collections::HashSet<&String> = page0.iter().map(|t| &t.id).collect();
+        assert!(
+            page1.iter().all(|t| !first.contains(&t.id)),
+            "offset was ignored: page 1 repeats page 0"
+        );
+    }
+}

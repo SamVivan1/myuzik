@@ -18,6 +18,9 @@ and GStreamer.
   pins it above other windows and across workspaces.
 - **MPRIS** controls and metadata (works with `playerctl`, GNOME media menu, etc.).
 - **Scrobbling** (now-playing + submitted) to Navidrome.
+- **Endless autoplay**: when a track ends, Myuzik keeps going with similar music — first
+  songs similar to the track and its artist, then more from the same genre (paged so a big
+  genre keeps yielding new tracks), then random as a backstop. Toggle in Settings → Playback.
 - Debounced, keyboard-driven **search**.
 - **Settings** for stream quality, scrobbling, lyric offset/source, reduced motion, accent.
 - Midnight Brass design: warm black glass, ivory clay, champagne gold, OS accent focus rings.
@@ -137,6 +140,7 @@ server_url = "https://navidrome.example.com"
 username = "you"
 quality = "original"          # original | kbps320 | kbps192
 scrobble = true
+autoplay = true              # keep playing similar tracks when the queue ends
 volume = 0.8
 lyrics_offset_ms = 0
 prefer_navidrome_lyrics = true

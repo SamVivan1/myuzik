@@ -58,6 +58,17 @@ impl PlayerState {
         Some(t)
     }
 
+    /// Move playback onto `track` without touching the queue. Used when the
+    /// autoplay radio appends tracks after the queue ran out and playback has
+    /// to resume on the first of them.
+    pub fn adopt(&mut self, track: Track) {
+        self.current = Some(track.clone());
+        self.status = PlaybackStatus::Playing;
+        self.position = Duration::ZERO;
+        self.duration = Some(track.duration);
+        self.scrobble_submitted = false;
+    }
+
     pub fn previous(&mut self) -> Option<Track> {
         let t = self.queue.previous()?;
         self.current = Some(t.clone());
