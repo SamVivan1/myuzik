@@ -21,6 +21,7 @@ pub struct MprisHandle {
 
 pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<MprisHandle, String> {
     let (cmd_tx, cmd_rx) = flume::unbounded::<MprisCommand>();
+    let handle_tx = cmd_tx.clone();
 
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -62,11 +63,11 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
             });
             let player_tx_clone = player_tx.clone();
             player.connect_next(move |_p| {
-                let _ = player_tx_clone.send(PlayerCommand::Stop); // placeholder: next
+                let _ = player_tx_clone.send(PlayerCommand::Next);
             });
             let player_tx_clone = player_tx.clone();
             player.connect_previous(move |_p| {
-                let _ = player_tx_clone.send(PlayerCommand::Stop); // placeholder: previous
+                let _ = player_tx_clone.send(PlayerCommand::Previous);
             });
             let player_tx_clone = player_tx.clone();
             player.connect_seek(move |_p, time| {
@@ -74,40 +75,25 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
                 let _ = player_tx_clone.send(PlayerCommand::Seek(pos));
             });
             let player_tx_clone = player_tx.clone();
+            let volume_cmd_tx = cmd_tx.clone();
+            player.connect_set_volume(move |_p, volume| {
+                let _ = player_tx_clone.send(PlayerCommand::SetVolume(volume as f32));
+                let _ = volume_cmd_tx.send(MprisCommand::UpdateVolume(volume as f32));
+            });
+            let player_tx_clone = player_tx.clone();
             player.connect_set_position(move |_p, _track_id, time| {
                 let pos = Duration::from_micros(time.as_micros() as u64);
                 let _ = player_tx_clone.send(PlayerCommand::Seek(pos));
             });
 
+            let _ = player.set_volume(0.8).await;
             tokio::task::spawn_local(player.run());
 
             // Process commands
             while let Ok(cmd) = cmd_rx.recv_async().await {
                 match cmd {
                     MprisCommand::UpdateMetadata(track, art_url) => {
-                        let mut meta = mpris_server::Metadata::new();
-                        meta.set_title(Some(track.title.clone()));
-                        meta.set_artist(Some(vec![track.artist.clone()]));
-                        meta.set_album(Some(track.album.clone()));
-                        meta.set_album_artist(Some(vec![track.artist.clone()]));
-                        meta.set_length(Some(mpris_server::Time::from_micros(
-                            track.duration.as_micros() as i64,
-                        )));
-                        if let Some(url) = art_url {
-                            meta.set_art_url(Some(url));
-                        }
-                        if let Ok(tid) = mpris_server::TrackId::try_from(format!(
-                            "/org/mpris/MediaPlayer2/Track/{}",
-                            track.id
-                        )) {
-                            meta.set_trackid(Some(tid));
-                        }
-                        if let Some(n) = track.track_number {
-                            meta.set_track_number(Some(n as i32));
-                        }
-                        if let Some(n) = track.disc_number {
-                            meta.set_disc_number(Some(n as i32));
-                        }
+                        let meta = metadata_for(&track, art_url);
                         let _ = player.set_metadata(meta).await;
                         let _ = player.set_can_go_next(true).await;
                         let _ = player.set_can_go_previous(true).await;
@@ -134,7 +120,37 @@ pub fn start_mpris(player_tx: Sender<PlayerCommand>) -> std::result::Result<Mpri
         });
     });
 
-    Ok(MprisHandle { cmd_tx })
+    Ok(MprisHandle { cmd_tx: handle_tx })
+}
+
+pub fn position_us(position: Duration) -> i64 {
+    position.as_micros() as i64
+}
+
+pub fn metadata_for(track: &Track, art_url: Option<String>) -> mpris_server::Metadata {
+    let mut meta = mpris_server::Metadata::new();
+    meta.set_title(Some(track.title.clone()));
+    meta.set_artist(Some(vec![track.artist.clone()]));
+    meta.set_album(Some(track.album.clone()));
+    meta.set_album_artist(Some(vec![track.artist.clone()]));
+    meta.set_length(Some(mpris_server::Time::from_micros(position_us(
+        track.duration,
+    ))));
+    if let Some(url) = art_url {
+        meta.set_art_url(Some(url));
+    }
+    if let Ok(tid) =
+        mpris_server::TrackId::try_from(format!("/org/mpris/MediaPlayer2/Track/{}", track.id))
+    {
+        meta.set_trackid(Some(tid));
+    }
+    if let Some(n) = track.track_number {
+        meta.set_track_number(Some(n as i32));
+    }
+    if let Some(n) = track.disc_number {
+        meta.set_disc_number(Some(n as i32));
+    }
+    meta
 }
 
 impl MprisHandle {

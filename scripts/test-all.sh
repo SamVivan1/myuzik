@@ -14,7 +14,7 @@ cargo test -- --test-threads=1
 
 if [ "${MYUZIK_LIVE:-0}" = "1" ]; then
   echo "== live Navidrome + GStreamer tests =="
-  cargo test --test live_navidrome --test live_player -- --nocapture --test-threads=1
+  cargo test --test live_navidrome --test live_player -- --ignored --nocapture --test-threads=1
 else
   echo "== live tests skipped (set MYUZIK_LIVE=1 to run) =="
 fi

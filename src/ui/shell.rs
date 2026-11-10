@@ -39,6 +39,7 @@ pub struct Shell {
     overlay_state: gpui::Entity<crate::overlay::OverlayState>,
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
+    toast: Option<String>,
 }
 
 impl Shell {
@@ -63,6 +64,7 @@ impl Shell {
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
         let overlay_handle = None;
         let resize_start = None;
+        let toast = None;
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password
@@ -92,6 +94,8 @@ impl Shell {
         let mpris_for_loop = mpris_handle.clone();
         let now_playing_for_loop = now_playing.clone();
         let self_entity = cx.entity();
+        let self_entity_fetch = self_entity.clone();
+        let scrobble_client = client.clone();
         let overlay_for_loop = overlay_state.clone();
         // Fetch home data asynchronously
         if let Some(client) = client.clone() {
@@ -116,10 +120,15 @@ impl Shell {
                 let albums = match res {
                     Ok(a) => a,
                     Err(e) => {
+                        let entity = self_entity_fetch.clone();
+                        let msg = format!("Library error: {e:?}");
                         cx.update(|app| {
                             app.update_entity(&hs, |h, _| {
                                 h.loading = false;
-                                h.error = Some(format!("{:?}", e));
+                                h.error = Some(msg.clone());
+                            });
+                            entity.update(app, |shell, _cx| {
+                                shell.toast = Some(msg);
                             });
                         });
                         return;
@@ -143,10 +152,23 @@ impl Shell {
                     .spawn(async move { client_bg.playlists() })
                     .await
                     .unwrap_or_default();
+                let client_bg = client.clone();
+                let favorites = cx
+                    .background_executor()
+                    .spawn(async move {
+                        client_bg.album_list(
+                            crate::navidrome::client::AlbumListKind::Starred,
+                            100,
+                            0,
+                        )
+                    })
+                    .await
+                    .unwrap_or_default();
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
                         h.artists = artists;
                         h.playlists = playlists;
+                        h.favorites = favorites;
                     });
                 });
                 // Fetch covers for the first 8 albums
@@ -178,10 +200,33 @@ impl Shell {
                         }
                     }
                 }
+
+                if std::env::var("MYUZIK_AUTOPLAY").ok().as_deref() == Some("1")
+                    && let Some(first) = albums.first()
+                {
+                    let client_bg = client.clone();
+                    let aid = first.id.clone();
+                    if let Ok(detail) = cx
+                        .background_executor()
+                        .spawn(async move { client_bg.album(&aid) })
+                        .await
+                    {
+                        let entity = self_entity_fetch.clone();
+                        cx.update(|app| {
+                            entity.update(app, |shell, cx| {
+                                shell.play_tracks(detail.songs, 0, cx);
+                            });
+                        });
+                    }
+                }
             })
             .detach();
         }
         cx.spawn(async move |_, cx| {
+            let mut scrobble = crate::player::scrobble::ScrobbleTracker::new();
+            let mut last_pos = std::time::Duration::ZERO;
+            let mut track_duration = std::time::Duration::ZERO;
+            let mut scrobble_track: Option<String> = None;
             loop {
                 match rx.recv_async().await {
                     Ok(PlayerEvent::StateChanged(s)) => {
@@ -202,6 +247,26 @@ impl Shell {
                         });
                         if let Some(mh) = &mpris_for_loop {
                             mh.update_position(pos);
+                        }
+                        let delta = pos.saturating_sub(last_pos);
+                        last_pos = pos;
+                        if delta < std::time::Duration::from_secs(2)
+                            && delta > std::time::Duration::ZERO
+                            && scrobble.tick(delta, track_duration)
+                            && let Some(id) = &scrobble_track
+                            && let Some(client) = &scrobble_client
+                        {
+                            let id = id.clone();
+                            let client = client.clone();
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            cx.background_executor()
+                                .spawn(async move {
+                                    let _ = client.scrobble(&id, true, now_ms);
+                                })
+                                .detach();
                         }
                         let np = now_playing_for_loop.clone();
                         let dur = cx.update(|app| {
@@ -226,6 +291,7 @@ impl Shell {
                         });
                     }
                     Ok(PlayerEvent::Duration(dur)) => {
+                        track_duration = dur;
                         cx.update(|app| {
                             state.update(app, |ps, _cx| {
                                 ps.duration = Some(dur);
@@ -245,12 +311,52 @@ impl Shell {
                     }
                     Ok(PlayerEvent::Error(e)) => {
                         tracing::error!("player error: {:?}", e);
+                        let entity = self_entity.clone();
+                        let msg = format!("Playback error: {e:?}");
+                        cx.update(|app| {
+                            entity.update(app, |shell, _cx| {
+                                shell.toast = Some(msg);
+                            });
+                        });
                     }
                     Ok(PlayerEvent::TrackStarted(id)) => {
                         tracing::info!("track started: {}", id);
+                        scrobble.reset();
+                        last_pos = std::time::Duration::ZERO;
+                        scrobble_track = Some(id.clone());
+                        if let Some(mh) = &mpris_for_loop {
+                            let current = cx.update(|app| state.read(app).current.clone());
+                            if let Some(track) = current {
+                                mh.update_metadata(&track, None);
+                            }
+                        }
+                        if let Some(client) = &scrobble_client {
+                            let client = client.clone();
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            cx.background_executor()
+                                .spawn(async move {
+                                    let _ = client.scrobble(&id, false, now_ms);
+                                })
+                                .detach();
+                        }
                     }
                     Ok(PlayerEvent::Buffering(p)) => {
                         tracing::debug!("buffering: {}%", p);
+                    }
+                    Ok(PlayerEvent::NextRequested) => {
+                        let entity = self_entity.clone();
+                        cx.update(|app| {
+                            entity.update(app, |shell, cx| shell.play_next(cx));
+                        });
+                    }
+                    Ok(PlayerEvent::PreviousRequested) => {
+                        let entity = self_entity.clone();
+                        cx.update(|app| {
+                            entity.update(app, |shell, cx| shell.play_previous(cx));
+                        });
                     }
                     Err(_) => break,
                 }
@@ -279,6 +385,7 @@ impl Shell {
             overlay_state,
             overlay_handle,
             resize_start,
+            toast,
             mpris_handle,
         }
     }
@@ -522,12 +629,99 @@ impl Shell {
         }
     }
 
+    pub fn toggle_album_star(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(detail) = &self.album_detail else {
+            return;
+        };
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let id = detail.album.id.clone();
+        let next = !detail.album.starred;
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { client.set_starred(&id, next) })
+                .await;
+            cx.update(|app| {
+                if res.is_ok() {
+                    app.update_entity(&entity, |shell, _cx| {
+                        if let Some(d) = &mut shell.album_detail {
+                            d.album.starred = next;
+                        }
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn go(&mut self, route: Route) {
         self.route = route;
     }
 
     pub fn route(&self) -> Route {
         self.route.clone()
+    }
+
+    pub fn loaded_album_count(&self, cx: &gpui::App) -> usize {
+        self.home_state.read(cx).albums.len()
+    }
+
+    pub fn loaded_artist_count(&self, cx: &gpui::App) -> usize {
+        self.home_state.read(cx).artists.len()
+    }
+
+    pub fn selected_album_id(&self) -> Option<&str> {
+        self.selected_album.as_deref()
+    }
+
+    pub fn current_album_song_count(&self) -> Option<usize> {
+        self.album_detail.as_ref().map(|d| d.songs.len())
+    }
+
+    pub fn current_album_starred(&self) -> Option<bool> {
+        self.album_detail.as_ref().map(|d| d.album.starred)
+    }
+
+    pub fn volume(&self, cx: &gpui::App) -> f32 {
+        self.player_state.read(cx).volume
+    }
+
+    pub fn playhead(&self, cx: &gpui::App) -> std::time::Duration {
+        self.player_state.read(cx).position
+    }
+
+    pub fn current_track_title(&self, cx: &gpui::App) -> Option<String> {
+        self.player_state
+            .read(cx)
+            .current
+            .as_ref()
+            .map(|t| t.title.clone())
+    }
+
+    pub fn toast_text(&self) -> Option<&str> {
+        self.toast.as_deref()
+    }
+
+    pub fn overlay_open(&self) -> bool {
+        self.overlay_handle.is_some()
+    }
+
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    pub fn search_result_count(&self) -> usize {
+        self.search_results
+            .as_ref()
+            .map(|r| r.songs.len() + r.albums.len() + r.artists.len())
+            .unwrap_or(0)
+    }
+
+    pub fn favorites_count(&self, cx: &gpui::App) -> usize {
+        self.home_state.read(cx).favorites.len()
     }
 
     pub fn close_overlay(&mut self, cx: &mut gpui::App) {
@@ -786,6 +980,26 @@ impl Render for Shell {
                             .gap(gpui::px(14.0))
                             .child(
                                 div()
+                                    .w(gpui::px(30.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(9.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .cursor_pointer()
+                                    .id("seek-back")
+                                    .debug_selector(|| "seek-back".to_string())
+                                    .on_click(cx.listener(move |this, _event, _window, _cx| {
+                                        let back = position
+                                            .saturating_sub(std::time::Duration::from_secs(10));
+                                        this.player_handle.tx.send(PlayerCommand::Seek(back)).ok();
+                                    }))
+                                    .child("−10"),
+                            )
+                            .child(
+                                div()
                                     .w(gpui::px(24.0))
                                     .h(gpui::px(24.0))
                                     .flex()
@@ -853,6 +1067,26 @@ impl Render for Shell {
                                         this.play_next(cx);
                                     }))
                                     .child("⏭"),
+                            )
+                            .child(
+                                div()
+                                    .w(gpui::px(30.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(9.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .cursor_pointer()
+                                    .id("seek-fwd")
+                                    .debug_selector(|| "seek-fwd".to_string())
+                                    .on_click(cx.listener(move |this, _event, _window, _cx| {
+                                        let fwd = position
+                                            .saturating_add(std::time::Duration::from_secs(10));
+                                        this.player_handle.tx.send(PlayerCommand::Seek(fwd)).ok();
+                                    }))
+                                    .child("+10"),
                             ),
                     )
                     .child(
@@ -906,17 +1140,55 @@ impl Render for Shell {
                     )
                     .child(
                         div()
+                            .id("vol-down")
+                            .debug_selector(|| "vol-down".to_string())
+                            .cursor_pointer()
+                            .px(gpui::px(4.0))
+                            .text_size(gpui::px(11.0))
+                            .text_color(t.clay_ink)
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                let v = (this.player_state.read(cx).volume - 0.05).clamp(0.0, 1.0);
+                                this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                                this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                                if let Some(mh) = &this.mpris_handle {
+                                    mh.update_volume(v);
+                                }
+                            }))
+                            .child("−"),
+                    )
+                    .child(
+                        div()
                             .w(gpui::px(60.0))
                             .h(gpui::px(5.0))
                             .rounded(gpui::px(999.0))
                             .bg(t.clay_shade)
                             .child(
                                 div()
-                                    .w(gpui::px(37.0))
+                                    .w(gpui::px(
+                                        (self.player_state.read(cx).volume * 60.0).max(2.0),
+                                    ))
                                     .h_full()
                                     .rounded(gpui::px(999.0))
                                     .bg(t.os_accent),
                             ),
+                    )
+                    .child(
+                        div()
+                            .id("vol-up")
+                            .debug_selector(|| "vol-up".to_string())
+                            .cursor_pointer()
+                            .px(gpui::px(4.0))
+                            .text_size(gpui::px(11.0))
+                            .text_color(t.clay_ink)
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                let v = (this.player_state.read(cx).volume + 0.05).clamp(0.0, 1.0);
+                                this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                                this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                                if let Some(mh) = &this.mpris_handle {
+                                    mh.update_volume(v);
+                                }
+                            }))
+                            .child("+"),
                     )
                     .child(
                         div()
@@ -1551,13 +1823,18 @@ impl Render for Shell {
                                 if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
-                                    let limit = if self.route == Route::Albums { hs.albums.len() } else { 8 };
-                                    for a in hs.albums.iter().take(limit) {
+                                    let source = if self.route == Route::Favorites { &hs.favorites } else { &hs.albums };
+                                let limit = if matches!(self.route, Route::Albums | Route::Favorites) { source.len() } else { 8 };
+                                    for a in source.iter().take(limit) {
                                         let aid = a.id.clone();
                                         let cover = a.cover_art_id.as_ref().and_then(|cid| hs.covers.get(cid)).cloned();
                                         grid = grid.child(
                                             album_card(&a.name, &a.artist, cover, t)
                                                 .id(format!("album-{}", aid))
+                                                .debug_selector({
+                                                    let d = aid.clone();
+                                                    move || format!("album-{}", d)
+                                                })
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                                     let aid2 = aid.clone();
@@ -1597,6 +1874,7 @@ impl Render for Shell {
                                     div()
                                         .flex()
                                         .flex_col()
+                                        .items_start()
                                         .gap(gpui::px(8.0))
                                         .child(
                                             div()
@@ -1625,7 +1903,25 @@ impl Render for Shell {
                                         )
                                         .child(
                                             div()
-                                                .id("album-play-all")
+                                                .id("album-star").debug_selector(|| "album-star".to_string())
+                                                .cursor_pointer()
+                                                .px(gpui::px(14.0))
+                                                .py(gpui::px(8.0))
+                                                .rounded(gpui::px(999.0))
+                                                .bg(gpui::rgba(0xFFFFFF0A))
+                                                .border_1()
+                                                .border_color(t.glass_border)
+                                                .text_color(t.gold_light)
+                                                .text_size(gpui::px(10.0))
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                                    this.toggle_album_star(cx);
+                                                }))
+                                                .child(if detail.album.starred { "★ Favorited" } else { "☆ Favorite" }),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("album-play-all").debug_selector(|| "album-play-all".to_string())
                                                 .cursor_pointer()
                                                 .px(gpui::px(16.0))
                                                 .py(gpui::px(8.0))
@@ -1675,6 +1971,7 @@ impl Render for Shell {
                                             t,
                                         )
                                         .id(format!("track-{}", i))
+                                        .debug_selector(move || format!("track-{}", i))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
                                             this.play_tracks(songs2.clone(), i, cx);
@@ -1986,6 +2283,7 @@ pub struct HomeState {
     pub covers: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
     pub artists: Vec<crate::library::Artist>,
     pub playlists: Vec<crate::library::Playlist>,
+    pub favorites: Vec<crate::library::Album>,
 }
 
 fn fxhash_id(s: &str) -> u64 {

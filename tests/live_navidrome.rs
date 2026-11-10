@@ -27,6 +27,7 @@ fn setup() -> (Paths, NavidromeClient, myuzik::config::AppConfig) {
 }
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_ping_and_library() {
     if live_client().is_none() {
         eprintln!("skipped: MYUZIK_LIVE not set or no credentials");
@@ -43,6 +44,7 @@ fn live_ping_and_library() {
 }
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_album_detail_and_cover() {
     if live_client().is_none() {
         return;
@@ -65,6 +67,7 @@ fn live_album_detail_and_cover() {
 }
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_artists_playlists_search() {
     if live_client().is_none() {
         return;
@@ -81,6 +84,7 @@ fn live_artists_playlists_search() {
 }
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_stream_url_fetches_audio() {
     if live_client().is_none() {
         return;
@@ -111,6 +115,7 @@ fn live_stream_url_fetches_audio() {
 }
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_lyrics_pipeline() {
     if live_client().is_none() {
         return;

@@ -20,6 +20,8 @@ pub enum PlayerCommand {
     Seek(Duration),
     SetVolume(f32),
     Stop,
+    Next,
+    Previous,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,8 @@ pub enum PlayerEvent {
     Error(PlayerError),
     Buffering(u8),
     TrackStarted(String),
+    NextRequested,
+    PreviousRequested,
 }
 
 pub struct PlayerHandle {
@@ -167,6 +171,12 @@ fn handle_command(
         PlayerCommand::Stop => {
             let _ = pipeline.set_state(gst::State::Null);
             let _ = evt_tx.send(PlayerEvent::StateChanged(PlaybackStatus::Stopped));
+        }
+        PlayerCommand::Next => {
+            let _ = evt_tx.send(PlayerEvent::NextRequested);
+        }
+        PlayerCommand::Previous => {
+            let _ = evt_tx.send(PlayerEvent::PreviousRequested);
         }
     }
 }

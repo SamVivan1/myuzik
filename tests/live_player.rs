@@ -7,6 +7,7 @@ use myuzik::player::state::PlaybackStatus;
 use std::time::{Duration, Instant};
 
 #[test]
+#[ignore = "live server test; run with --ignored and MYUZIK_LIVE=1"]
 fn live_player_plays_pauses_seeks() {
     if std::env::var("MYUZIK_LIVE").ok().as_deref() != Some("1") {
         eprintln!("skipped: MYUZIK_LIVE not set");

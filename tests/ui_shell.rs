@@ -110,3 +110,29 @@ fn sidebar_clicks_navigate(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::NowPlaying);
 }
+
+#[gpui::test]
+fn overlay_opens_and_closes(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("overlay");
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+    shell.update(&mut cx, |shell, cx| shell.open_overlay(cx));
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.overlay_open()),
+        "overlay did not open"
+    );
+    shell.update(&mut cx, |shell, cx| shell.close_overlay(cx));
+    cx.run_until_parked();
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.overlay_open()),
+        "overlay did not close"
+    );
+}
