@@ -1057,14 +1057,6 @@ impl Shell {
             reset(&self.radio_in_flight);
             return;
         };
-        {
-            let radio = self.radio.lock().unwrap_or_else(|e| e.into_inner());
-            if radio.is_stalled() {
-                drop(radio);
-                reset(&self.radio_in_flight);
-                return;
-            }
-        }
         if continue_playback {
             self.radio_continue_pending.store(true, Ordering::SeqCst);
         }
@@ -1082,8 +1074,21 @@ impl Shell {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    // Plan under a short lock, fetch with no lock held, commit
+                    // under a short lock. The UI thread therefore only ever waits
+                    // for these two brief sections, never for the up-to-seven
+                    // blocking requests a batch can make.
+                    let plan = {
+                        let mut guard = radio.lock().unwrap_or_else(|e| e.into_inner());
+                        guard.begin(&seed_bg, &exclude)
+                    };
+                    let Some(plan) = plan else {
+                        // This seed is stalled; a different one clears it.
+                        return Ok(Vec::new());
+                    };
+                    let outcome = crate::library::radio::fetch(&client, &plan);
                     let mut guard = radio.lock().unwrap_or_else(|e| e.into_inner());
-                    guard.next_batch(&client, &seed_bg, &exclude)
+                    guard.commit(&plan, outcome)
                 })
                 .await;
             let want_continue = pending.swap(false, Ordering::SeqCst);
