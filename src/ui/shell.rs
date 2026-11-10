@@ -266,8 +266,12 @@ impl Shell {
             titlebar: None,
             ..Default::default()
         };
-        if self.overlay_handle.is_some() {
-            return;
+        if let Some(handle) = self.overlay_handle.clone() {
+            if handle.update(cx, |_view, _window, _cx| {}).is_err() {
+                self.overlay_handle = None;
+            } else {
+                return;
+            }
         }
         let state = self.overlay_state.clone();
         let handle = cx.open_window(opts, move |_window, cx| {
@@ -414,7 +418,11 @@ impl Shell {
         }
     }
 
-    pub fn close_overlay(&mut self, _cx: &mut gpui::App) {}
+    pub fn close_overlay(&mut self, cx: &mut gpui::App) {
+        if let Some(handle) = self.overlay_handle.take() {
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        }
+    }
 }
 
 impl Render for Shell {
@@ -732,7 +740,7 @@ impl Render for Shell {
                             .cursor_pointer()
                             .id("pin-btn")
                             .on_click(cx.listener(|this, _event, _window, _cx| {
-                                this.open_overlay(_cx);
+                                if this.overlay_handle.is_some() { this.close_overlay(_cx); } else { this.open_overlay(_cx); }
                             }))
                             .child("Pin lyrics"),
                     ),
@@ -804,6 +812,8 @@ impl Render for Shell {
                     .child(
                         // Titlebar
                         div()
+                            .id("titlebar")
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_this, _event, window, _cx| window.start_window_move()))
                             .h(gpui::px(38.0))
                             .flex_shrink_0()
                             .flex()
@@ -922,7 +932,7 @@ impl Render for Shell {
                                             .cursor_pointer()
                                             .id("pin-btn")
                                             .on_click(cx.listener(|this, _event, _window, _cx| {
-                                                this.open_overlay(_cx);
+                                                if this.overlay_handle.is_some() { this.close_overlay(_cx); } else { this.open_overlay(_cx); }
                                             }))
                                             .child("Pin lyrics"),
                                     ),

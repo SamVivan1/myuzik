@@ -177,6 +177,8 @@ impl Render for PinnedLyricsView {
                     .py(gpui::px(10.0))
                     .border_b_1()
                     .border_color(t.glass_border)
+                    .id("overlay-header")
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_this, _event, window, _cx| window.start_window_move()))
                     .child(
                         div()
                             .px(gpui::px(8.0))
@@ -191,6 +193,9 @@ impl Render for PinnedLyricsView {
                     )
                     .child(
                         div()
+                            .id("overlay-close")
+                            .cursor_pointer()
+                            .on_click(cx.listener(|_this, _event, window, _cx| window.remove_window()))
                             .w(gpui::px(24.0))
                             .h(gpui::px(24.0))
                             .rounded(gpui::px(999.0))
