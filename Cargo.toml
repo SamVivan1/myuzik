@@ -39,3 +39,5 @@ audio = ["dep:gstreamer"]
 [dev-dependencies]
 httpmock = "0.8"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "14b7b0ef3764d62a85070c8b5ccea105a2ad3235", features = ["test-support"] }
+gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "14b7b0ef3764d62a85070c8b5ccea105a2ad3235" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "14b7b0ef3764d62a85070c8b5ccea105a2ad3235", features = ["wayland", "test-support"] }

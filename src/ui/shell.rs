@@ -967,6 +967,10 @@ impl Shell {
         self.home_state.read(cx).artists.len()
     }
 
+    pub fn loaded_cover_count(&self, cx: &gpui::App) -> usize {
+        self.home_state.read(cx).covers.len()
+    }
+
     pub fn selected_album_id(&self) -> Option<&str> {
         self.selected_album.as_deref()
     }
@@ -1920,7 +1924,8 @@ impl Render for Shell {
                             .flex_col()
                             .gap(gpui::px(12.0))
                             .px(gpui::px(16.0))
-                            .py(gpui::px(18.0))
+                            .pt(gpui::px(18.0))
+                            .pb(gpui::px(118.0))
                             .bg(t.glass_inner)
                             .shadow(vec![gpui::BoxShadow {
                                 color: t.glass_highlight_soft.into(),

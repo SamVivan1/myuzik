@@ -36,6 +36,16 @@ They are `#[ignore]` by default and cover:
 - `tests/mpris_metadata.rs`: MPRIS metadata mapping and microsecond positions.
 - `tests/lyrics_view.rs`: active-line centering math.
 
+## Screenshots
+
+```bash
+MYUZIK_LIVE=1 cargo test --test screenshots -- --ignored --test-threads=1 --nocapture
+```
+
+Writes `docs/screenshots/{home,settings,search,now-playing,favorites,artists}.png` using GPUI's
+headless wgpu renderer. The headless renderer does not draw image textures, so covers appear as
+gradient placeholders in captures.
+
 ## Manual smoke test
 
 ```bash
