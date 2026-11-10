@@ -17,9 +17,27 @@ pub struct LyricsCache {
     dir: PathBuf,
 }
 
+/// Files kept in the lyrics cache. This is the bound documented in
+/// `docs/performance.md` and printed by `scripts/measure-ram.sh`; it is enforced
+/// here so the claim is true.
+pub const MAX_FILES: usize = 500;
+/// Bytes kept in the lyrics cache (50 MB).
+pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
+
 impl LyricsCache {
+    /// Open the cache and enforce the documented bound.
+    ///
+    /// Pruning on construction is what makes the bound real: the cache used to
+    /// grow one file per track forever, because nothing ever called `prune`.
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self::with_limits(dir, MAX_FILES, MAX_BYTES)
+    }
+
+    /// Open the cache with an explicit bound, pruning it once on construction.
+    pub fn with_limits(dir: PathBuf, max_files: usize, max_bytes: u64) -> Self {
+        let cache = Self { dir };
+        cache.prune(max_files, max_bytes);
+        cache
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
@@ -115,5 +133,98 @@ impl LyricsCache {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "myuzik-lyrics-cache-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp cache dir");
+        dir
+    }
+
+    /// Write `count` entries with distinct mtimes so "newest" is well defined.
+    fn write_entries(dir: &PathBuf, count: usize, bytes: usize) -> Vec<String> {
+        let mut names = Vec::new();
+        for i in 0..count {
+            let name = format!("entry{i:03}.json");
+            fs::write(dir.join(&name), "x".repeat(bytes)).expect("write cache entry");
+            std::thread::sleep(Duration::from_millis(5));
+            names.push(name);
+        }
+        names
+    }
+
+    fn remaining(dir: &PathBuf) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .expect("read cache dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_entries_and_drops_the_rest() {
+        let dir = temp_dir("prune-files");
+        write_entries(&dir, 8, 16);
+
+        LyricsCache::new(dir.clone()).prune(3, u64::MAX);
+
+        assert_eq!(
+            remaining(&dir),
+            vec!["entry005.json", "entry006.json", "entry007.json"],
+            "pruning must keep the newest entries"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_respects_the_byte_budget() {
+        let dir = temp_dir("prune-bytes");
+        // Four 100-byte entries; a 250-byte budget can only hold two.
+        write_entries(&dir, 4, 100);
+
+        LyricsCache::new(dir.clone()).prune(100, 250);
+
+        let kept = remaining(&dir);
+        assert_eq!(kept.len(), 2, "kept {kept:?}");
+        assert_eq!(kept, vec!["entry002.json", "entry003.json"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The documented bound (500 files / 50 MB) is only real if something calls
+    /// prune. `new` used to construct the cache and never prune, so the
+    /// directory grew for the life of the install.
+    #[test]
+    fn new_enforces_the_bound_it_is_given() {
+        let dir = temp_dir("new-bound");
+        write_entries(&dir, 6, 16);
+
+        let _cache = LyricsCache::with_limits(dir.clone(), 2, u64::MAX);
+
+        assert_eq!(
+            remaining(&dir),
+            vec!["entry004.json", "entry005.json"],
+            "constructing the cache must prune it"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_on_a_missing_directory_is_harmless() {
+        let dir = temp_dir("new-missing").join("not-created-yet");
+        let cache = LyricsCache::with_limits(dir.clone(), 1, 1);
+        assert!(cache.ensure().is_ok(), "ensure creates the directory later");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

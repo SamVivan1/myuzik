@@ -476,14 +476,6 @@ impl Shell {
         self.player_handle.tx.send(PlayerCommand::Pause).ok();
     }
 
-    pub fn next(&self) {
-        self.player_handle.tx.send(PlayerCommand::Stop).ok();
-    }
-
-    pub fn previous(&self) {
-        self.player_handle.tx.send(PlayerCommand::Stop).ok();
-    }
-
     pub fn seek(&self, pos: std::time::Duration) {
         self.player_handle.tx.send(PlayerCommand::Seek(pos)).ok();
     }
@@ -1752,6 +1744,25 @@ impl Render for Shell {
                                     }
                                     "enter" => {
                                         this.connect_setup(cx);
+                                    }
+                                    "delete" => {
+                                        this.active_setup_mut().clear();
+                                    }
+                                    // These fields are hand-built text inputs, so
+                                    // paste is not free: without this a password
+                                    // manager cannot fill the first screen.
+                                    "v" if ev.keystroke.modifiers.control => {
+                                        if let Some(text) =
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        {
+                                            // A copied URL or password often carries a
+                                            // trailing newline; keep the field single-line.
+                                            let cleaned: String = text
+                                                .chars()
+                                                .filter(|c| *c != '\n' && *c != '\r')
+                                                .collect();
+                                            this.active_setup_mut().push_str(&cleaned);
+                                        }
                                     }
                                     key
                                         if !ev.keystroke.modifiers.control

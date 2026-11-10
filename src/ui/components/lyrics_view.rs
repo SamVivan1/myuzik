@@ -19,6 +19,9 @@ use gpui::{AnimationExt, Context, Render, Window, div, prelude::*};
 use std::time::Duration;
 
 const LYRIC_ROW_H: f32 = 40.0;
+/// Height of one line of lyric text. Two wrapped lines still fit `LYRIC_ROW_H`,
+/// so a fixed row height cannot make a wrapped line spill into its neighbour.
+const LYRIC_TEXT_H: f32 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LyricsMode {
@@ -35,6 +38,11 @@ pub struct LyricsView {
     plain_text: String,
     offset_ms: i64,
     viewport_height: f32,
+    /// Layout geometry of each row, top and height in panel pixels. Filled by
+    /// `relayout` so centering uses the same numbers the layout uses instead of
+    /// assuming `index * row_height`.
+    line_tops: Vec<f32>,
+    line_heights: Vec<f32>,
     last_position: Duration,
     anim_key: usize,
     from_offset: f32,
@@ -52,6 +60,8 @@ impl LyricsView {
             plain_text: String::new(),
             offset_ms: 0,
             viewport_height: 400.0,
+            line_tops: Vec::new(),
+            line_heights: Vec::new(),
             last_position: Duration::ZERO,
             anim_key: 0,
             from_offset: 0.0,
@@ -104,6 +114,7 @@ impl LyricsView {
                 self.active = None;
             }
         }
+        self.relayout();
     }
 
     pub fn set_position(&mut self, position: Duration) {
@@ -125,7 +136,12 @@ impl LyricsView {
             let previous = self.active;
             self.active = idx;
             let active = idx.unwrap_or(0);
-            let target = -(active as f32 * LYRIC_ROW_H);
+            let target = target_offset(
+                &self.line_tops,
+                &self.line_heights,
+                self.viewport_height,
+                active,
+            );
             let seek_jump = position.abs_diff(self.last_position) > Duration::from_secs(2);
             let big_jump = previous.map(|p| p.abs_diff(active) > 2).unwrap_or(false);
             self.from_offset = if seek_jump || big_jump {
@@ -144,8 +160,50 @@ impl LyricsView {
         self.offset_ms = offset;
     }
 
+    /// Tell the view how tall the panel actually is.
+    ///
+    /// The owner must call this with the measured panel height: the padding that
+    /// puts the active line mid-panel is derived from it. It used to stay at the
+    /// 400 px default for every window size.
     pub fn set_viewport_height(&mut self, h: f32) {
+        if (h - self.viewport_height).abs() < f32::EPSILON {
+            return;
+        }
         self.viewport_height = h;
+        self.relayout();
+    }
+
+    /// Vertical padding above and below the rows, so row 0 and the last row can
+    /// both reach the middle of the panel.
+    pub fn content_padding(&self) -> f32 {
+        (self.viewport_height / 2.0 - LYRIC_ROW_H / 2.0).max(0.0)
+    }
+
+    /// The stored layout geometry: `(tops, heights)` per row.
+    pub fn row_geometry(&self) -> (&[f32], &[f32]) {
+        (&self.line_tops, &self.line_heights)
+    }
+
+    /// The current vertical translation of the lyric column.
+    pub fn offset(&self) -> f32 {
+        self.to_offset
+    }
+
+    /// Recompute the row geometry from the current line list and viewport.
+    ///
+    /// Rows are laid out at a fixed height, so this is exact rather than
+    /// estimated; `target_offset` is written to honour per-row heights, which is
+    /// what measuring wrapped rows would need.
+    fn relayout(&mut self) {
+        let pad = self.content_padding();
+        self.line_tops.clear();
+        self.line_heights.clear();
+        let mut top = pad;
+        for _ in 0..self.lines.len() {
+            self.line_tops.push(top);
+            self.line_heights.push(LYRIC_ROW_H);
+            top += LYRIC_ROW_H;
+        }
     }
 
     pub fn active(&self) -> Option<usize> {
@@ -194,7 +252,7 @@ impl Render for LyricsView {
                 )
                 .into_any_element(),
             LyricsMode::Synced => {
-                let pad = (self.viewport_height / 2.0 - LYRIC_ROW_H / 2.0).max(0.0);
+                let pad = self.content_padding();
                 let mut container = div()
                     .flex()
                     .flex_col()
@@ -218,6 +276,7 @@ impl Render for LyricsView {
 
                     let text = div()
                         .text_size(gpui::px(size))
+                        .line_height(gpui::px(LYRIC_TEXT_H))
                         .font_family(theme.ui_font)
                         .font_weight(weight)
                         .text_color(color)
@@ -238,7 +297,7 @@ impl Render for LyricsView {
                         .flex()
                         .items_start()
                         .gap(gpui::px(9.0))
-                        .min_h(gpui::px(LYRIC_ROW_H))
+                        .h(gpui::px(LYRIC_ROW_H))
                         .child(
                             div()
                                 .w(gpui::px(6.0))

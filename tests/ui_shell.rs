@@ -291,3 +291,35 @@ fn settings_controls_update_config(cx: &mut TestAppContext) {
     let text = std::fs::read_to_string(&paths.config).expect("config saved");
     assert!(text.contains("quality") && text.contains("kbps320"));
 }
+
+/// A password manager has to be able to paste into the first screen the user
+/// sees. The setup fields are hand-built text inputs, so paste is not free.
+#[gpui::test]
+fn ctrl_v_pastes_into_the_setup_form(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("paste");
+        // No server configured, so the shell opens on the setup form.
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut vcx).unwrap();
+    vcx.run_until_parked();
+    assert_eq!(shell.read_with(&vcx, |s, _| s.route()), Route::Setup);
+
+    vcx.update(|_window, app| {
+        app.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "https://music.example.com\n".to_string(),
+        ));
+    });
+    vcx.simulate_keystrokes("ctrl-v");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.setup_server_value().to_string()),
+        "https://music.example.com",
+        "Ctrl+V did not paste into the setup form (a trailing newline should be stripped)"
+    );
+}
