@@ -61,7 +61,7 @@ fn main() {
 
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let opts = WindowOptions {
-            window_background: WindowBackgroundAppearance::Blurred,
+            window_background: WindowBackgroundAppearance::Transparent,
             window_decorations: Some(WindowDecorations::Client),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(960.), px(640.))),

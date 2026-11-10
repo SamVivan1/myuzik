@@ -852,21 +852,13 @@ impl Render for PinnedLyricsView {
             .border_1()
             .border_color(gpui::rgba(0xE8D3A342))
             .shadow(vec![
-                // Deep drop shadow: the panel floats above the desktop.
-                gpui::BoxShadow {
-                    color: gpui::rgba(0x000000A0).into(),
-                    offset: gpui::point(gpui::px(0.0), gpui::px(20.0)),
-                    blur_radius: gpui::px(52.0),
-                    spread_radius: gpui::px(0.0),
-                    inset: false,
-                },
                 // Inset top highlight: the glass edge catching the light.
                 gpui::BoxShadow {
                     color: gpui::rgba(0xFFFFFF1A).into(),
                     offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
                     blur_radius: gpui::px(1.0),
                     spread_radius: gpui::px(0.0),
-                    inset: true,
+                    inset: false,
                 },
                 gpui::BoxShadow {
                     color: t.shadow_warm.into(),
@@ -956,7 +948,7 @@ pub fn open_overlay(
             gpui::px(MIN_WIDTH as f32),
             gpui::px(MIN_HEIGHT as f32),
         )),
-        window_background: WindowBackgroundAppearance::Blurred,
+        window_background: WindowBackgroundAppearance::Transparent,
         window_decorations: None,
         focus: false,
         show: true,
