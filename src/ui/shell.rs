@@ -735,8 +735,9 @@ impl Shell {
                     app.update_entity(&np, |view, _cx| {
                         view.set_cover(Some(image.clone()));
                     });
+                    let rounded = crate::overlay::rounded_cover(&image);
                     app.update_entity(&os_for_cover, |state, cx| {
-                        state.set_cover(Some(image.clone()));
+                        state.set_cover(Some(rounded));
                         cx.notify();
                     });
                 });
@@ -769,7 +770,8 @@ impl Shell {
         let cached_cover = track
             .cover_art_id
             .as_ref()
-            .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
+            .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned())
+            .map(|cover| crate::overlay::rounded_cover(&cover));
         self.overlay_state.update(cx, |st, cx| {
             st.begin(track.title.clone(), track.artist.clone());
             st.set_cover(cached_cover);

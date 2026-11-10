@@ -418,6 +418,65 @@ pub fn plain_index(
     ((frac * len as f64) as usize).min(len - 1)
 }
 
+/// Mask the corners of a cover image so they are actually transparent.
+///
+/// An `img` element ignores a corner radius in this GPUI revision and a rounded
+/// parent does not clip its children, so `rounded()` on either of them leaves the
+/// artwork square. Painting the transparency into the pixels is the only way that
+/// holds on every backend.
+pub fn rounded_cover(image: &std::sync::Arc<gpui::Image>) -> std::sync::Arc<gpui::Image> {
+    let Ok(decoded) = image::load_from_memory(&image.bytes) else {
+        return image.clone();
+    };
+    let mut rgba = decoded.to_rgba8();
+    mask_corners(&mut rgba, ART_RADIUS);
+    let (w, h) = rgba.dimensions();
+    let mut bytes = Vec::new();
+    {
+        use image::ImageEncoder as _;
+        let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+        if encoder
+            .write_image(&rgba, w, h, image::ExtendedColorType::Rgba8)
+            .is_err()
+        {
+            return image.clone();
+        }
+    }
+    std::sync::Arc::new(gpui::Image {
+        format: gpui::ImageFormat::Png,
+        bytes,
+        // A distinct id so this is not confused with the unrounded original.
+        id: image.id ^ 0x9E37_79B9,
+    })
+}
+
+/// Clear the alpha outside a rounded rectangle of `radius` at the design size.
+fn mask_corners(pixels: &mut image::RgbaImage, radius: f32) {
+    let (w, h) = pixels.dimensions();
+    if w == 0 || h == 0 {
+        return;
+    }
+    // The radius is specified for the 160 px artwork box; scale it to the cover.
+    let scale = w.min(h) as f32 / LEFT_COLUMN;
+    let r = (radius * scale).clamp(0.0, w.min(h) as f32 / 2.0);
+    if r <= 0.0 {
+        return;
+    }
+    let (wf, hf) = (w as f32, h as f32);
+    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+        let fx = x as f32 + 0.5;
+        let fy = y as f32 + 0.5;
+        // Nearest point of the inner rectangle: inside it the distance is zero.
+        let cx = fx.clamp(r, wf - r);
+        let cy = fy.clamp(r, hf - r);
+        let dx = fx - cx;
+        let dy = fy - cy;
+        if dx * dx + dy * dy > r * r {
+            pixel.0[3] = 0;
+        }
+    }
+}
+
 /// `m:ss` for the progress labels.
 fn fmt_time(d: std::time::Duration) -> String {
     let secs = d.as_secs();
@@ -1047,6 +1106,31 @@ mod band_tests {
             ]
         );
         assert_eq!(rows[3].text, "line 60");
+    }
+
+    #[test]
+    fn cover_corners_are_masked_to_transparent() {
+        // `img` ignores corner radii here, so the rounding has to live in the
+        // pixels. Check the geometry of the mask on a plain buffer.
+        let mut image = image::RgbaImage::from_pixel(160, 160, image::Rgba([255, 255, 255, 255]));
+        mask_corners(&mut image, ART_RADIUS);
+
+        assert_eq!(image.get_pixel(0, 0).0[3], 0, "corner must be cleared");
+        assert_eq!(image.get_pixel(159, 0).0[3], 0);
+        assert_eq!(image.get_pixel(0, 159).0[3], 0);
+        assert_eq!(image.get_pixel(159, 159).0[3], 0);
+        assert_eq!(image.get_pixel(80, 80).0[3], 255, "centre must stay opaque");
+        assert_eq!(
+            image.get_pixel(80, 0).0[3],
+            255,
+            "edge midpoints stay opaque"
+        );
+        assert_eq!(image.get_pixel(0, 80).0[3], 255);
+
+        // The cleared area is a quarter circle of the requested radius: a point just
+        // inside the arc is opaque, one just outside is not.
+        assert_eq!(image.get_pixel(4, 4).0[3], 0, "outside the arc");
+        assert_eq!(image.get_pixel(18, 18).0[3], 255, "inside the arc");
     }
 
     #[test]
