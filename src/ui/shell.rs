@@ -886,7 +886,9 @@ impl Render for Shell {
                                             }),
                                     ),
                             )
-                            .child(
+                            .child(if self.selected_album.is_some() {
+                                div()
+                            } else {
                                 div()
                                     .flex()
                                     .items_center()
@@ -904,10 +906,12 @@ impl Render for Shell {
                                             .text_color(t.text_secondary)
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child("See all"),
-                                    ),
-                            )
+                                    )
+                            })
                             .child(if self.route == Route::NowPlaying {
                                 div().child(self.now_playing.clone())
+                            } else if self.selected_album.is_some() {
+                                div()
                             } else {
                                 let hs = self.home_state.read(cx);
                                 let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
@@ -952,12 +956,55 @@ impl Render for Shell {
                             })
                             .child(if let Some(detail) = &self.album_detail {
                                 let mut col = div().flex().flex_col().gap(gpui::px(6.0));
+                                let songs_all = detail.songs.clone();
+                                let album_name = detail.album.name.clone();
+                                let album_artist = detail.album.artist.clone();
                                 col = col.child(
                                     div()
-                                        .font_family(theme.display_font)
-                                        .text_size(gpui::px(16.0))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(detail.album.name.clone()),
+                                        .flex()
+                                        .flex_col()
+                                        .gap(gpui::px(8.0))
+                                        .child(
+                                            div()
+                                                .id("album-back")
+                                                .cursor_pointer()
+                                                .text_size(gpui::px(10.0))
+                                                .text_color(t.text_secondary)
+                                                .on_click(cx.listener(|this, _event, _window, _cx| {
+                                                    this.selected_album = None;
+                                                    this.album_detail = None;
+                                                }))
+                                                .child("← Back to library"),
+                                        )
+                                        .child(
+                                            div()
+                                                .font_family(theme.display_font)
+                                                .text_size(gpui::px(26.0))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(album_name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(gpui::px(11.0))
+                                                .text_color(t.text_secondary)
+                                                .child(album_artist),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("album-play-all")
+                                                .cursor_pointer()
+                                                .px(gpui::px(16.0))
+                                                .py(gpui::px(8.0))
+                                                .rounded(gpui::px(999.0))
+                                                .bg(t.gold)
+                                                .text_color(t.clay_ink)
+                                                .text_size(gpui::px(10.0))
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    this.play_tracks(songs_all.clone(), 0, cx);
+                                                }))
+                                                .child("Play all"),
+                                        ),
                                 );
                                 let songs = detail.songs.clone();
                                 let current_id = self.player_state.read(cx).current.as_ref().map(|c| c.id.clone());
