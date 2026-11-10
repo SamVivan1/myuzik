@@ -39,6 +39,8 @@ fn main() {
             window_background: WindowBackgroundAppearance::Blurred,
             window_decorations: Some(WindowDecorations::Client),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(960.), px(640.))),
+            is_resizable: true,
             app_id: Some("io.github.samvivan1.Myuzik".to_string()),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Myuzik".into()),

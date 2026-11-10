@@ -35,6 +35,7 @@ pub struct Shell {
     mpris_handle: Option<MprisHandle>,
     overlay_state: gpui::Entity<crate::overlay::OverlayState>,
     overlay_handle: Option<gpui::WindowHandle<crate::overlay::PinnedLyricsView>>,
+    resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
 }
 
 impl Shell {
@@ -52,6 +53,7 @@ impl Shell {
         let settings_view = cx.new(|_cx| SettingsView::new(config.clone()));
         let overlay_state = cx.new(|_cx| crate::overlay::OverlayState::default());
         let overlay_handle = None;
+        let resize_start = None;
         let password = crate::config::load_password(&paths);
         let client = if !config.server_url.is_empty() {
             password.and_then(|pw| NavidromeClient::new(&config.server_url, &config.username, &pw).ok()).map(Arc::new)
@@ -224,6 +226,7 @@ impl Shell {
             settings_view,
             overlay_state,
             overlay_handle,
+            resize_start,
             mpris_handle,
         }
     }
@@ -783,7 +786,27 @@ impl Render for Shell {
                             .px(gpui::px(10.0))
                             .py(gpui::px(6.0))
                             .rounded(gpui::px(999.0))
-                            .bg(gpui::rgb(0x2A241C))
+                            .bg(gpui::linear_gradient(
+                                145.0,
+                                gpui::linear_color_stop(gpui::rgb(0x2A241C), 0.0),
+                                gpui::linear_color_stop(gpui::rgb(0x171310), 1.0),
+                            ))
+                            .shadow(vec![
+                                gpui::BoxShadow {
+                                    color: gpui::rgba(0xFFFFFF14).into(),
+                                    offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                    blur_radius: gpui::px(3.0),
+                                    spread_radius: gpui::px(0.0),
+                                    inset: true,
+                                },
+                                gpui::BoxShadow {
+                                    color: gpui::rgba(0x00000080).into(),
+                                    offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
+                                    blur_radius: gpui::px(7.0),
+                                    spread_radius: gpui::px(0.0),
+                                    inset: true,
+                                },
+                            ])
                             .text_color(t.gold_light)
                             .text_size(gpui::px(8.0))
                             .font_weight(gpui::FontWeight::BOLD)
@@ -897,7 +920,6 @@ impl Render for Shell {
                         // Titlebar
                         div()
                             .id("titlebar")
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_this, _event, window, _cx| window.start_window_move()))
                             .h(gpui::px(38.0))
                             .flex_shrink_0()
                             .flex()
@@ -909,14 +931,26 @@ impl Render for Shell {
                             .border_color(gpui::rgba(0xE8D3A314))
                             .child(
                                 div()
+                                    .flex_1()
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .id("drag-area")
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_this, _event, window, _cx| window.start_window_move()))
+                                    .text_size(gpui::px(10.0))
+                                    .text_color(t.text_tertiary)
+                                    .child("myuzik"),
+                            )
+                            .child(
+                                div()
                                     .flex()
                                     .gap(gpui::px(8.0))
                                     .child(
                                         div()
                                             .id("win-close")
                                             .cursor_pointer()
-                                            .w(gpui::px(12.0))
-                                            .h(gpui::px(12.0))
+                                            .w(gpui::px(14.0))
+                                            .h(gpui::px(14.0))
                                             .rounded(gpui::px(999.0))
                                             .bg(gpui::rgb(0xFF5F57))
                                             .border_1()
@@ -928,8 +962,8 @@ impl Render for Shell {
                                         div()
                                             .id("win-min")
                                             .cursor_pointer()
-                                            .w(gpui::px(12.0))
-                                            .h(gpui::px(12.0))
+                                            .w(gpui::px(14.0))
+                                            .h(gpui::px(14.0))
                                             .rounded(gpui::px(999.0))
                                             .bg(gpui::rgb(0xFEBC2E))
                                             .border_1()
@@ -941,8 +975,8 @@ impl Render for Shell {
                                         div()
                                             .id("win-max")
                                             .cursor_pointer()
-                                            .w(gpui::px(12.0))
-                                            .h(gpui::px(12.0))
+                                            .w(gpui::px(14.0))
+                                            .h(gpui::px(14.0))
                                             .rounded(gpui::px(999.0))
                                             .bg(gpui::rgb(0x28C840))
                                             .border_1()
@@ -950,17 +984,7 @@ impl Render for Shell {
                                             .hover(|style| style.bg(gpui::rgb(0x4AE05F)))
                                             .on_click(cx.listener(|_this, _event, window, _cx| window.zoom_window())),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .justify_center()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.text_tertiary)
-                                    .child("myuzik"),
-                            )
-                            .child(div().w(gpui::px(52.0))),
+                            ),
                     )
                     .child(
                         div()
@@ -979,6 +1003,13 @@ impl Render for Shell {
                             .px(gpui::px(16.0))
                             .py(gpui::px(18.0))
                             .bg(gpui::rgba(0xFFFFFF05))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::rgba(0xFFFFFF0A).into(),
+                                offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+                                blur_radius: gpui::px(0.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: true,
+                            }])
                             .border_r_1()
                             .border_color(t.glass_border)
                             .child(
@@ -1054,7 +1085,27 @@ impl Render for Shell {
                                             .px(gpui::px(14.0))
                                             .py(gpui::px(10.0))
                                             .rounded(gpui::px(theme.radii.button))
-                                            .bg(gpui::rgb(0x2A241C))
+                                            .bg(gpui::linear_gradient(
+                                                145.0,
+                                                gpui::linear_color_stop(gpui::rgb(0x2A241C), 0.0),
+                                                gpui::linear_color_stop(gpui::rgb(0x171310), 1.0),
+                                            ))
+                                            .shadow(vec![
+                                                gpui::BoxShadow {
+                                                    color: gpui::rgba(0xFFFFFF14).into(),
+                                                    offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                                    blur_radius: gpui::px(3.0),
+                                                    spread_radius: gpui::px(0.0),
+                                                    inset: true,
+                                                },
+                                                gpui::BoxShadow {
+                                                    color: gpui::rgba(0x00000080).into(),
+                                                    offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
+                                                    blur_radius: gpui::px(7.0),
+                                                    spread_radius: gpui::px(0.0),
+                                                    inset: true,
+                                                },
+                                            ])
                                             .text_color(t.gold_light)
                                             .font_family(theme.ui_font)
                                             .text_size(gpui::px(9.0))
@@ -1153,6 +1204,22 @@ impl Render for Shell {
                                                 gpui::linear_color_stop(t.clay_surface, 0.0),
                                                 gpui::linear_color_stop(t.clay_shade, 1.0),
                                             ))
+                                            .shadow(vec![
+                                                gpui::BoxShadow {
+                                                    color: gpui::rgba(0xFFFFFFFF).into(),
+                                                    offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                                    blur_radius: gpui::px(3.0),
+                                                    spread_radius: gpui::px(0.0),
+                                                    inset: true,
+                                                },
+                                                gpui::BoxShadow {
+                                                    color: gpui::rgba(0x8C6D3F2E).into(),
+                                                    offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
+                                                    blur_radius: gpui::px(5.0),
+                                                    spread_radius: gpui::px(0.0),
+                                                    inset: true,
+                                                },
+                                            ])
                                             .text_color(t.clay_ink)
                                             .text_size(gpui::px(11.0))
                                             .on_click(cx.listener(|this, _event, window, cx| {
@@ -1459,6 +1526,50 @@ impl Render for Shell {
                 ),
             )
             .child(player)
+            .child({
+                let grip_entity = cx.entity();
+                div()
+                    .absolute()
+                    .right(gpui::px(4.0))
+                    .bottom(gpui::px(4.0))
+                    .w(gpui::px(18.0))
+                    .h(gpui::px(18.0))
+                    .id("resize-grip")
+                    .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
+                    .on_mouse_down(gpui::MouseButton::Left, {
+                        let e = grip_entity.clone();
+                        move |event, window, app| {
+                            let e = e.clone();
+                            app.update_entity(&e, |this, _cx| {
+                                this.resize_start = Some((event.position, window.bounds().size));
+                            });
+                        }
+                    })
+                    .on_mouse_move({
+                        let e = grip_entity.clone();
+                        move |event, window, app| {
+                            let e = e.clone();
+                            app.update_entity(&e, |this, _cx| {
+                                if let Some((start, size)) = this.resize_start {
+                                    let dx = event.position.x - start.x;
+                                    let dy = event.position.y - start.y;
+                                    let w = (size.width + dx).max(gpui::px(960.0));
+                                    let h = (size.height + dy).max(gpui::px(640.0));
+                                    window.resize(gpui::size(w, h));
+                                }
+                            });
+                        }
+                    })
+                    .on_mouse_up(gpui::MouseButton::Left, {
+                        let e = grip_entity.clone();
+                        move |_event, _window, app| {
+                            let e = e.clone();
+                            app.update_entity(&e, |this, _cx| {
+                                this.resize_start = None;
+                            });
+                        }
+                    })
+            })
             .with_animation(
                 format!("route-{:?}", self.route),
                 gpui::Animation::new(std::time::Duration::from_millis(180))
