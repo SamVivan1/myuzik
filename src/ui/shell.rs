@@ -1236,6 +1236,13 @@ impl Render for Shell {
                 .into_any_element();
         }
 
+        let decorations = window.window_decorations();
+        let (shadow_size, rounded_window) = match decorations {
+            gpui::Decorations::Client { tiling } if !tiling.is_tiled() => (gpui::px(10.0), true),
+            _ => (gpui::px(0.0), false),
+        };
+        window.set_client_inset(shadow_size);
+
         let status = self.player_state.read(cx).status;
         let is_playing = status == PlaybackStatus::Playing;
         let current_title = self
@@ -1275,9 +1282,9 @@ impl Render for Shell {
         // Player bar
         let player = div()
             .absolute()
-            .left(gpui::px(18.0))
-            .right(gpui::px(18.0))
-            .bottom(gpui::px(18.0))
+            .left(shadow_size + gpui::px(18.0))
+            .right(shadow_size + gpui::px(18.0))
+            .bottom(shadow_size + gpui::px(18.0))
             .h(gpui::px(88.0))
             .rounded(gpui::px(30.0))
             .bg(gpui::linear_gradient(
@@ -1666,7 +1673,6 @@ impl Render for Shell {
             self.root_focus_requested = true;
         }
         let key_entity = cx.entity();
-
         // Glass shell with home content
         div()
             .size_full()
@@ -1738,20 +1744,18 @@ impl Render for Shell {
             .child(
                 div()
                     .absolute()
-                    .inset_0()
-                    .rounded(gpui::px(24.0))
+                    .inset(shadow_size)
+                    .rounded(if rounded_window { gpui::px(24.0) } else { gpui::px(0.0) })
                     .bg(gpui::linear_gradient(
                         135.0,
                         gpui::linear_color_stop(t.glass_gradient_start, 0.0),
                         gpui::linear_color_stop(t.glass_gradient_end, 1.0),
                     ))
-                    .border_1()
-                    .border_color(t.glass_border)
                     .shadow(vec![
                         gpui::BoxShadow {
-                            color: gpui::hsla(0.0, 0.0, 0.0, 0.6),
-                            offset: gpui::point(gpui::px(0.0), gpui::px(40.0)),
-                            blur_radius: gpui::px(100.0),
+                            color: gpui::hsla(0.0, 0.0, 0.0, 0.5),
+                            offset: gpui::point(gpui::px(0.0), gpui::px(4.0)),
+                            blur_radius: gpui::px(20.0),
                             spread_radius: gpui::px(0.0),
                             inset: false,
                         },
@@ -2672,8 +2676,8 @@ impl Render for Shell {
                 let grip_entity = cx.entity();
                 div()
                     .absolute()
-                    .right(gpui::px(4.0))
-                    .bottom(gpui::px(4.0))
+                    .right(shadow_size + gpui::px(4.0))
+                    .bottom(shadow_size + gpui::px(4.0))
                     .w(gpui::px(18.0))
                     .h(gpui::px(18.0))
                     .id("resize-grip")
@@ -2712,6 +2716,54 @@ impl Render for Shell {
                         }
                     })
             })
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(shadow_size)
+                    .cursor(gpui::CursorStyle::ResizeUpDown)
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, window, _cx| {
+                        window.start_window_resize(gpui::ResizeEdge::Top);
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(shadow_size)
+                    .cursor(gpui::CursorStyle::ResizeUpDown)
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, window, _cx| {
+                        window.start_window_resize(gpui::ResizeEdge::Bottom);
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(shadow_size)
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, window, _cx| {
+                        window.start_window_resize(gpui::ResizeEdge::Left);
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(shadow_size)
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, window, _cx| {
+                        window.start_window_resize(gpui::ResizeEdge::Right);
+                    }),
+            )
             .with_animation(
                 format!("route-{:?}", self.route),
                 gpui::Animation::new(std::time::Duration::from_millis(180))
