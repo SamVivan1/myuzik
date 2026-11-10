@@ -25,7 +25,10 @@ Last updated: 2026-11-10
 
 ## Phase 3 — Playback and MPRIS
 - [x] Task 11: GStreamer player thread + state machine (wired)
-- [x] Task 12: Queue, shuffle, repeat, next/previous, EOS auto-advance
+- [x] Task 12: Queue, next/previous, EOS auto-advance. Shuffle and repeat exist
+  in `Queue` and are covered by tests, but no control or shortcut exposes them
+  yet, and MPRIS does not advertise `LoopStatus`/`Shuffle` (see
+  `docs/audit/flow-logic.md` FL-08 / `docs/audit/integration.md` INT-04).
 - [x] Task 13: Player bar, seek ±10s, volume, global shortcuts (Space/arrows/Ctrl+K/Ctrl+P)
 - [x] Task 14: MPRIS (metadata, status, next/prev, seek, volume)
 

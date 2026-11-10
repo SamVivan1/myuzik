@@ -577,12 +577,10 @@ impl Shell {
                 } else if let Some(index) = other
                     .strip_prefix("search-song-")
                     .and_then(|i| i.parse::<usize>().ok())
+                    && let Some(songs) = self.search_results.as_ref().map(|r| r.songs.clone())
+                    && index < songs.len()
                 {
-                    if let Some(songs) = self.search_results.as_ref().map(|r| r.songs.clone())
-                        && index < songs.len()
-                    {
-                        self.play_tracks(songs, index, cx);
-                    }
+                    self.play_tracks(songs, index, cx);
                 }
             }
         }
@@ -801,7 +799,7 @@ impl Shell {
                             h.loading = false;
                             match res {
                                 Ok(albums) => h.albums = albums,
-                                Err(e) => h.error = Some(format!("{:?}", e)),
+                                Err(e) => h.error = Some(error_text(&e)),
                             }
                         });
                     });
@@ -1124,7 +1122,7 @@ impl Shell {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!("autoplay radio failed: {e:?}");
-                        let msg = format!("Autoplay unavailable: {e:?}");
+                        let msg = format!("Autoplay unavailable. {}", error_text(&e));
                         let _ = weak.update(app, |shell, cx| shell.show_toast(msg, cx));
                     }
                 }
@@ -1190,7 +1188,18 @@ impl Shell {
                             shell.config.server_url = server.clone();
                             shell.config.username = user.clone();
                             let _ = crate::config::save_config(&shell.paths, &shell.config);
-                            let _ = crate::config::save_password(&shell.paths, &pass);
+                            match crate::config::save_password(&shell.paths, &pass) {
+                                Ok(store) => {
+                                    shell.show_toast(store.describe(), cx);
+                                }
+                                Err(error) => {
+                                    shell.setup_error = Some(format!(
+                                        "Could not save your password: {error}. \
+                                         You will be asked for it again."
+                                    ));
+                                    return;
+                                }
+                            }
                             let make = || {
                                 NavidromeClient::new(&server, &user, &pass)
                                     .expect("validated client")
@@ -1213,7 +1222,8 @@ impl Shell {
                             }
                         }
                         Err(e) => {
-                            shell.setup_error = Some(format!("Connection failed: {e}"));
+                            shell.setup_error =
+                                Some(format!("Connection failed. {}", error_text(&e)));
                         }
                     }
                 });
@@ -2313,9 +2323,7 @@ impl Render for Shell {
                             .bg(t.clay_shade)
                             .child(
                                 div()
-                                    .w(gpui::px(
-                                        self.player_state.read(cx).volume * 60.0,
-                                    ))
+                                    .w(gpui::px(self.player_state.read(cx).volume * 60.0))
                                     .h_full()
                                     .rounded(gpui::px(999.0))
                                     .bg(t.gold),
@@ -2443,11 +2451,13 @@ impl Render for Shell {
                     // play/pause shortcut (documented in docs/design.md and
                     // covered by tests), so a keyboard user gets one unambiguous
                     // activation key for every control in the ring.
-                    if key == "enter" && !mods.control && !mods.alt {
-                        if let Some(focused) = this.focused_control(window) {
-                            this.activate_focused(&focused, window, cx);
-                            return;
-                        }
+                    if key == "enter"
+                        && !mods.control
+                        && !mods.alt
+                        && let Some(focused) = this.focused_control(window)
+                    {
+                        this.activate_focused(&focused, window, cx);
+                        return;
                     }
                     match key {
                         "space" if !mods.control && !mods.alt => {
@@ -3907,6 +3917,17 @@ fn eq_bar(
         )
 }
 
+/// Turn a library/server failure into something a user can act on.
+///
+/// The UI used to print `Debug` (`Server("HTTP 500")`), which tells the user
+/// nothing about whether the password, the network or the server is at fault.
+fn error_text(error: &crate::navidrome::error::NavidromeError) -> String {
+    match error.hint() {
+        Some(hint) => format!("{} {}", error.user_message(), hint),
+        None => error.user_message().to_string(),
+    }
+}
+
 fn spawn_home_fetch(
     client: Arc<NavidromeClient>,
     hs: gpui::Entity<HomeState>,
@@ -3931,7 +3952,7 @@ fn spawn_home_fetch(
             Ok(a) => a,
             Err(e) => {
                 let entity = entity.clone();
-                let msg = format!("Library error: {e:?}");
+                let msg = format!("Library error. {}", error_text(&e));
                 cx.update(|app| {
                     app.update_entity(&hs, |h, _| {
                         h.loading = false;

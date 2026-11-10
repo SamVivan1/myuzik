@@ -1373,7 +1373,11 @@ mod band_tests {
         assert_eq!(state.artist, "Someone");
         let kept = state.cover.as_ref().expect("the artwork must survive");
         assert!(std::sync::Arc::ptr_eq(kept, &cover));
-        assert_eq!(state.position, Duration::from_secs(30), "progress untouched");
+        assert_eq!(
+            state.position,
+            Duration::from_secs(30),
+            "progress untouched"
+        );
         assert_eq!(state.line_count(), 4, "lyrics untouched");
     }
 

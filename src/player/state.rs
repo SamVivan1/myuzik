@@ -19,7 +19,6 @@ pub struct PlayerState {
     pub duration: Option<Duration>,
     pub volume: f32,
     pub queue: Queue,
-    pub scrobble_submitted: bool,
 }
 
 impl PlayerState {
@@ -31,7 +30,6 @@ impl PlayerState {
             duration: None,
             volume: 0.8,
             queue: Queue::new(),
-            scrobble_submitted: false,
         }
     }
 
@@ -44,7 +42,6 @@ impl PlayerState {
         self.status = PlaybackStatus::Playing;
         self.position = Duration::ZERO;
         self.duration = self.current.as_ref().map(|t| t.duration);
-        self.scrobble_submitted = false;
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -54,7 +51,6 @@ impl PlayerState {
         self.status = PlaybackStatus::Playing;
         self.position = Duration::ZERO;
         self.duration = Some(t.duration);
-        self.scrobble_submitted = false;
         Some(t)
     }
 
@@ -66,7 +62,6 @@ impl PlayerState {
         self.status = PlaybackStatus::Playing;
         self.position = Duration::ZERO;
         self.duration = Some(track.duration);
-        self.scrobble_submitted = false;
     }
 
     pub fn previous(&mut self) -> Option<Track> {
@@ -75,7 +70,6 @@ impl PlayerState {
         self.status = PlaybackStatus::Playing;
         self.position = Duration::ZERO;
         self.duration = Some(t.duration);
-        self.scrobble_submitted = false;
         Some(t)
     }
 

@@ -55,6 +55,54 @@ fn previous_returns_previous_track() {
 }
 
 #[test]
+fn previous_after_exhaustion_restarts_last_track() {
+    let mut q = Queue::new();
+    q.play_now(tracks(3), 0);
+    q.next();
+    q.next();
+    // Repeat off: the queue ran to the end and cleared its position.
+    assert!(q.next().is_none());
+    assert!(q.current().is_none(), "precondition: exhausted queue");
+
+    // Pressing Previous there must restart the last track, not do nothing.
+    let restarted = q.previous();
+    assert_eq!(
+        restarted.map(|t| t.id),
+        Some("t2".to_string()),
+        "Previous on an exhausted queue should restart the last track"
+    );
+    assert_eq!(
+        q.current().map(|t| t.id.clone()),
+        Some("t2".to_string()),
+        "the queue should be positioned on that track again"
+    );
+    assert!(
+        q.next().is_none(),
+        "restarting the last track must not invent a track after it"
+    );
+}
+
+#[test]
+fn previous_after_exhaustion_restarts_the_last_shuffle_track() {
+    let mut q = Queue::new();
+    q.play_now(tracks(4), 0);
+    q.set_shuffle(true);
+    let mut played = vec![q.current().unwrap().id.clone()];
+    while let Some(t) = q.next() {
+        played.push(t.id);
+    }
+    assert_eq!(played.len(), 4);
+    assert!(q.current().is_none(), "precondition: exhausted shuffle");
+
+    let restarted = q.previous();
+    assert_eq!(
+        restarted.map(|t| t.id),
+        played.last().cloned(),
+        "the shuffle round should restart on the last track it played"
+    );
+}
+
+#[test]
 fn shuffle_preserves_current_and_visits_all() {
     let mut q = Queue::new();
     q.play_now(vec![track("a"), track("b"), track("c"), track("d")], 0);

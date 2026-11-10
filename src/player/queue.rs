@@ -139,6 +139,15 @@ impl Queue {
                 self.current = Some(idx);
                 return Some(self.items[idx].clone());
             }
+            if self.current.is_none() {
+                // The shuffle round ended (no current track); restart it on the
+                // last track of the order instead of staying dead.
+                let last = self.shuffle_order.len().checked_sub(1)?;
+                let idx = self.shuffle_order[last];
+                self.shuffle_pos = last;
+                self.current = Some(idx);
+                return Some(self.items[idx].clone());
+            }
             return self.current.map(|i| self.items[i].clone());
         }
         if let Some(i) = self.current {
@@ -150,8 +159,13 @@ impl Queue {
                 self.current = Some(self.items.len() - 1);
                 return Some(self.items[self.items.len() - 1].clone());
             }
+            return Some(self.items[i].clone());
         }
-        self.current.map(|i| self.items[i].clone())
+        // The queue ran to its end and cleared its position; Previous is the
+        // most natural thing to press there, so restart on the last track.
+        let last = self.items.len() - 1;
+        self.current = Some(last);
+        Some(self.items[last].clone())
     }
 
     pub fn set_repeat(&mut self, mode: RepeatMode) {
@@ -204,6 +218,44 @@ impl Queue {
             Some(i) => self.items.len().saturating_sub(i + 1),
             None => 0,
         }
+    }
+
+    /// Whether a `next()` would produce another track instead of running out.
+    /// Mirrors the branches of [`Queue::next`], including shuffle and repeat.
+    pub fn can_go_next(&self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        if self.repeat == RepeatMode::One {
+            return self.current.is_some();
+        }
+        if self.shuffle {
+            if self.shuffle_order.is_empty() {
+                return false;
+            }
+            return self.shuffle_pos + 1 < self.shuffle_order.len()
+                || self.repeat == RepeatMode::All;
+        }
+        match self.current {
+            Some(i) => i + 1 < self.items.len() || self.repeat == RepeatMode::All,
+            // `next()` gives up once the position was cleared; autoplay, not
+            // the queue, is what resumes playback there.
+            None => false,
+        }
+    }
+
+    /// Whether a `previous()` would produce a track. True for any non-empty
+    /// queue: once the queue has run out, `previous` restarts the last track.
+    pub fn can_go_previous(&self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        if self.shuffle {
+            // The shuffle order is the way back; without one there is only the
+            // current track to repeat.
+            return self.current.is_some() || !self.shuffle_order.is_empty();
+        }
+        true
     }
 
     /// Ids currently in the queue, for deduplicating what autoplay adds.

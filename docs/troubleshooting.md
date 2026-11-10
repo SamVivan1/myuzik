@@ -81,9 +81,11 @@ Use the error toast/`RUST_LOG=debug` to see the pipeline message.
 
 ## Credentials
 
-- Preferred: Secret Service (`org.freedesktop.secrets`).
-- Fallback: `~/.config/myuzik/credentials` (mode 0600).
-- To reset: delete that file and run the app; the setup form appears again.
+- Default: `~/.config/myuzik/credentials`, created with mode `0600` from the first byte.
+- Opt-in Secret Service (`org.freedesktop.secrets`): run with `MYUZIK_KEYRING=1`. The setup
+  form says which store was used.
+- To reset: delete the file (and, with the keyring enabled, the `myuzik` entry in your
+  keyring) and run the app; the setup form appears again.
 
 ## MPRIS
 

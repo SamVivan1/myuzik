@@ -142,17 +142,15 @@ mod tests {
     use std::time::Duration;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "myuzik-lyrics-cache-{}-{tag}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("myuzik-lyrics-cache-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp cache dir");
         dir
     }
 
     /// Write `count` entries with distinct mtimes so "newest" is well defined.
-    fn write_entries(dir: &PathBuf, count: usize, bytes: usize) -> Vec<String> {
+    fn write_entries(dir: &std::path::Path, count: usize, bytes: usize) -> Vec<String> {
         let mut names = Vec::new();
         for i in 0..count {
             let name = format!("entry{i:03}.json");
@@ -163,7 +161,7 @@ mod tests {
         names
     }
 
-    fn remaining(dir: &PathBuf) -> Vec<String> {
+    fn remaining(dir: &std::path::Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(dir)
             .expect("read cache dir")
             .flatten()

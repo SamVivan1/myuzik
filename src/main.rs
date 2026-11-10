@@ -1,12 +1,14 @@
 use myuzik::config;
 use myuzik::platform::mpris::start_mpris;
-use myuzik::platform::tray::{Tray, TrayCommand};
+use myuzik::platform::tray::{
+    ShowAction, Tray, TrayCommand, report_registration, show_action, tray_visibility,
+};
 use myuzik::player::engine::{PlayerCommand, spawn_player};
 use myuzik::ui::Shell;
 
 use gpui::{
-    Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, prelude::*,
-    px, size,
+    AnyWindowHandle, Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions, prelude::*, px, size,
 };
 use gpui_platform::application;
 
@@ -26,6 +28,20 @@ fn main_window_options(bounds: Bounds<gpui::Pixels>) -> WindowOptions {
         }),
         ..Default::default()
     }
+}
+
+/// Whether the *main* window is still open.
+///
+/// INT-02: the tray must not follow `app.windows()`, because the lyrics overlay
+/// is a window on this same `App`. It follows the main window's handle instead.
+fn main_window_alive(
+    app: &gpui::App,
+    main_window: &std::sync::Mutex<Option<AnyWindowHandle>>,
+) -> bool {
+    let handle = *main_window
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    handle.is_some_and(|handle| app.windows().contains(&handle))
 }
 
 fn main() {
@@ -59,7 +75,7 @@ fn main() {
 
         let player_handle = spawn_player();
         let tray_player_tx = player_handle.tx.clone();
-        let mpris_handle = start_mpris(player_handle.tx.clone()).ok();
+        let mpris_handle = start_mpris(player_handle.tx.clone(), cfg.volume).ok();
 
         let config = cfg.clone();
         let paths = paths.clone();
@@ -87,13 +103,19 @@ fn main() {
         // window keeps the queue, the player and MPRIS alive and reopening it
         // restores the same view.
         let shell = cx.new(|cx| Shell::new(cx, player_handle, config, paths, mpris_handle));
-        let mut handle = cx
+        let handle = cx
             .open_window(opts, {
                 let shell = shell.clone();
                 move |_window, _cx| shell.clone()
             })
             .expect("failed to open window");
         let bounds_for_tray = bounds;
+        // INT-02: the tray asks "is the main window there?", not "how many
+        // windows are there?". The lyrics overlay is a window too, and counting
+        // windows made the icon `Passive` — invisible — while the main window was
+        // closed with the overlay open, which left the app with no way back.
+        let main_window: std::sync::Arc<std::sync::Mutex<Option<AnyWindowHandle>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(AnyWindowHandle::from(handle))));
 
         // System tray: keeps the app reachable when the window is closed
         // (close-to-tray) and gives playback controls from the top bar.
@@ -103,29 +125,43 @@ fn main() {
             Ok(decoded) => {
                 let rgba = decoded.to_rgba8();
                 let (w, h) = rgba.dimensions();
-                match Tray::start(rgba.into_raw(), w.min(h)) {
-                    Ok((tray, commands)) => {
+                let pixels = rgba.into_raw();
+                let icon_side = w.min(h);
+                // PF-09: registering on the session bus must not hold the first
+                // frame. The worker starts here; its result is reported from a
+                // background task, so a slow or absent bus costs nothing.
+                match Tray::start_background(pixels, icon_side) {
+                    Ok((tray, commands, ready)) => {
+                        cx.background_executor()
+                            .spawn(async move { report_registration(ready) })
+                            .detach();
                         let tray = std::sync::Arc::new(tray);
                         shell.update(cx, |shell, _cx| shell.attach_tray(tray.clone()));
-                        // The icon is only useful when the window is gone.
-                        tray.set_visible(false);
+                        // The icon is only useful while the main window is gone.
+                        let main_window_alive_now = main_window_alive(cx, &main_window);
+                        tray.set_visible(tray_visibility(main_window_alive_now));
                         let tray_player_tx = tray_player_tx.clone();
-                        // One supervisor keeps the icon and the window in step,
-                        // whichever way the window was closed (red button, WM,
-                        // Alt+F4), so the two never contradict each other.
+                        // One supervisor keeps the icon and the main window in
+                        // step, whichever way the window was closed (red button,
+                        // WM, Alt+F4), so the two never contradict each other.
                         {
                             let tray = tray.clone();
                             let shell = shell.clone();
+                            let main_window = main_window.clone();
                             cx.spawn(async move |cx| {
                                 loop {
                                     cx.background_executor()
                                         .timer(std::time::Duration::from_millis(400))
                                         .await;
-                                    let empty = cx.update(|app| app.windows().is_empty());
+                                    let alive =
+                                        cx.update(|app| main_window_alive(app, &main_window));
                                     let close_to_tray =
                                         cx.update(|app| shell.read(app).close_to_tray());
-                                    tray.set_visible(empty);
-                                    if empty && !close_to_tray {
+                                    tray.set_visible(tray_visibility(alive));
+                                    // The main window is the app: losing it with
+                                    // close-to-tray off means quit, even while the
+                                    // lyrics overlay is still on screen.
+                                    if !alive && !close_to_tray {
                                         cx.update(|app| app.quit());
                                         break;
                                     }
@@ -139,28 +175,66 @@ fn main() {
                                 match command {
                                     TrayCommand::Show => {
                                         cx.update(|app| {
-                                            if app.windows().is_empty() {
-                                                let opts = main_window_options(bounds_for_tray);
-                                                let shell = shell.clone();
-                                                if let Ok(reopened) = app.open_window(opts, {
-                                                    let shell = shell.clone();
-                                                    move |_window, _cx| shell.clone()
-                                                }) {
-                                                    handle = reopened;
+                                            match show_action(main_window_alive(app, &main_window))
+                                            {
+                                                ShowAction::Focus => {
+                                                    let handle =
+                                                        *main_window.lock().unwrap_or_else(
+                                                            |poisoned| poisoned.into_inner(),
+                                                        );
+                                                    if let Some(handle) = handle
+                                                        && let Err(error) = handle.update(
+                                                            app,
+                                                            |_shell, window, _cx| {
+                                                                window.activate_window()
+                                                            },
+                                                        )
+                                                    {
+                                                        tracing::warn!(
+                                                            "tray: could not raise the main \
+                                                             window: {error}"
+                                                        );
+                                                    }
                                                 }
-                                            } else {
-                                                let _ =
-                                                    handle.update(app, |_shell, window, _cx| {
-                                                        window.activate_window();
-                                                    });
+                                                ShowAction::Reopen => {
+                                                    // The main window was destroyed;
+                                                    // build a new one so the tray is
+                                                    // never a dead end.
+                                                    let opts = main_window_options(bounds_for_tray);
+                                                    let shell = shell.clone();
+                                                    let mut slot =
+                                                        main_window.lock().unwrap_or_else(
+                                                            |poisoned| poisoned.into_inner(),
+                                                        );
+                                                    match app.open_window(opts, {
+                                                        let shell = shell.clone();
+                                                        move |_window, _cx| shell.clone()
+                                                    }) {
+                                                        Ok(reopened) => {
+                                                            *slot = Some(reopened.into());
+                                                        }
+                                                        Err(error) => tracing::warn!(
+                                                            "tray: could not reopen the main \
+                                                             window: {error}"
+                                                        ),
+                                                    }
+                                                }
                                             }
                                         });
                                     }
                                     TrayCommand::Hide => {
                                         cx.update(|app| {
-                                            let _ = handle.update(app, |_shell, window, _cx| {
-                                                window.minimize_window();
-                                            });
+                                            let handle = *main_window
+                                                .lock()
+                                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                            let Some(handle) = handle else { return };
+                                            if let Err(error) = handle
+                                                .update(app, |_shell, window, _cx| {
+                                                    window.minimize_window()
+                                                })
+                                            {
+                                                tracing::debug!("tray: no window to hide: {error}");
+                                            }
                                         });
                                     }
                                     TrayCommand::PlayPause => {

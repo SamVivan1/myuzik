@@ -39,7 +39,8 @@ and GStreamer.
 - **Keyboard accessible**: tab order across sidebar → content → player bar → window chrome,
   OS-accent focus rings, accesskit roles/labels on every icon-only control, reduced motion.
 - Bundled Fraunces + Inter fonts (OFL).
-- No telemetry. Credentials in the Secret Service, with a 0600 file fallback.
+- No telemetry. Credentials in a `0600` file by default, or in the Secret Service with
+  `MYUZIK_KEYRING=1`.
 
 ## Prerequisites
 

@@ -488,7 +488,10 @@ fn begin_refuses_a_stalled_seed_and_accepts_a_fresh_one() {
             .commit(&plan, BatchOutcome::empty(offset))
             .expect("commit");
     }
-    assert!(radio.is_stalled(), "three empty batches must stall the radio");
+    assert!(
+        radio.is_stalled(),
+        "three empty batches must stall the radio"
+    );
 
     assert!(
         radio.begin(&seed, &exclude).is_none(),

@@ -309,6 +309,11 @@ fn ctrl_v_pastes_into_the_setup_form(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert_eq!(shell.read_with(&vcx, |s, _| s.route()), Route::Setup);
 
+    // The server field is pre-filled with "https://"; clear it so the assertion
+    // is about the paste and nothing else.
+    shell.update(&mut vcx, |s, _| s.set_setup_fields("", "", ""));
+    vcx.run_until_parked();
+
     vcx.update(|_window, app| {
         app.write_to_clipboard(gpui::ClipboardItem::new_string(
             "https://music.example.com\n".to_string(),
