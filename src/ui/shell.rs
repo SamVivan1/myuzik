@@ -1207,7 +1207,7 @@ impl Render for Shell {
                                 div()
                             } else {
                                 let hs = self.home_state.read(cx);
-                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(12.0));
+                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
                                 if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
@@ -1362,12 +1362,12 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         .flex()
         .flex_col()
         .gap(gpui::px(7.0))
-        .w(gpui::px(150.0))
+        .w_full()
         .hover(|style| style.bg(gpui::rgba(0xFFFFFF08)).rounded(gpui::px(16.0)))
         .child(
             gpui::div()
-                .w(gpui::px(150.0))
-                .h(gpui::px(150.0))
+                .w_full()
+                .aspect_ratio(1.0)
                 .rounded(gpui::px(16.0))
                 .bg(gpui::linear_gradient(
                     135.0,
@@ -1389,8 +1389,8 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
                 .overflow_hidden()
                 .child(if let Some(image) = cover {
                     gpui::img(gpui::ImageSource::Image(image))
-                        .w(gpui::px(150.0))
-                        .h(gpui::px(150.0))
+                        .w_full()
+                        .h_full()
                         .object_fit(gpui::ObjectFit::Cover)
                         .into_any_element()
                 } else {
@@ -1426,7 +1426,7 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         )
         .child(
             gpui::div()
-                .w(gpui::px(150.0))
+                .w_full()
                 .text_size(gpui::px(11.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
@@ -1434,7 +1434,7 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         )
         .child(
             gpui::div()
-                .w(gpui::px(150.0))
+                .w_full()
                 .text_size(gpui::px(9.0))
                 .text_color(t.text_secondary)
                 .child(artist.to_string()),
