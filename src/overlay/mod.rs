@@ -559,6 +559,9 @@ impl Render for PinnedLyricsView {
                     .into_any_element(),
                 None => div()
                     .size_full()
+                    // The parent's rounded clip does not apply to a child's own
+                    // background, so the placeholder carries the radius itself.
+                    .rounded(gpui::px(ART_RADIUS))
                     .flex()
                     .items_center()
                     .justify_center()
