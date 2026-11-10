@@ -40,6 +40,8 @@ const LYRIC_LINE_HEIGHT: f32 = 21.0;
 const LYRIC_ROW_PADDING: f32 = 9.0;
 /// Room kept clear on the right for the close control.
 const CLOSE_GUTTER: f32 = 38.0;
+/// Corner radius of the artwork.
+const ART_RADIUS: f32 = 18.0;
 /// How long the band takes to glide to the next line (the reference uses 380 ms).
 const SCROLL_MS: u64 = 380;
 
@@ -531,7 +533,7 @@ impl Render for PinnedLyricsView {
             .w(gpui::px(art_side))
             .h(gpui::px(art_side))
             .flex_none()
-            .rounded(gpui::px(18.0))
+            .rounded(gpui::px(ART_RADIUS))
             .overflow_hidden()
             .border_1()
             .border_color(gpui::rgba(0xFFFFFF40))
@@ -545,10 +547,13 @@ impl Render for PinnedLyricsView {
             .child(match &cover {
                 Some(image) => div()
                     .size_full()
+                    .rounded(gpui::px(ART_RADIUS))
+                    .overflow_hidden()
                     .child(
                         gpui::img(gpui::ImageSource::Image(image.clone()))
                             .w(gpui::px(art_side))
                             .h(gpui::px(art_side))
+                            .rounded(gpui::px(ART_RADIUS))
                             .object_fit(gpui::ObjectFit::Cover),
                     )
                     .into_any_element(),
