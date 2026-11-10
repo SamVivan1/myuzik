@@ -21,8 +21,13 @@
   wallpaper), and the default window grew from 392x180 to 620x330 to hold the layout.
 - Overlay artwork reuses the cached cover, and the lyric state is read without cloning the whole
   lyric list on every frame.
-- The overlay repaints on every state change again (an observer on the lyric state), so the band
-  stays live while the window is unfocused instead of only updating when it was clicked.
+- The overlay was not live: it only caught up when the window was clicked. `Entity::update` does not
+  notify observers in GPUI, and every overlay update in the shell passed `_cx`, so nothing ever asked
+  the view to repaint; the window only redrew when an input event arrived. Each update now calls
+  `cx.notify()`, the view observes the lyric state, and a 120 ms safety ticker repaints when the
+  position, active line or line count moved (so a paused overlay stays idle). Covered by a test that
+  renders the window twice with a position jump in between and requires the pixels to change, with no
+  input event sent.
 - Long lines wrap inside the lyric column instead of running past the panel edge, and each row's
   height is estimated from the wrap so neighbouring lines no longer overlap; the scroll target adds
   those heights up, keeping the active line centred.

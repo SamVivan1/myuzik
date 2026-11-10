@@ -238,6 +238,10 @@ fn capture_overlay_states() {
                 ));
             });
             capture("overlay-min", &mut cx, any, false);
+            // Back to the default size for the remaining captures.
+            let _ = cx.update_window(any, |_view, window, _cx| {
+                window.resize(gpui::size(gpui::px(W as f32), gpui::px(H as f32)));
+            });
         }
     }
 
@@ -292,4 +296,73 @@ fn capture_overlay_states() {
             capture("overlay-empty", &mut cx, any, false);
         }
     }
+}
+
+/// The overlay must repaint when the song moves while the window has no focus and
+/// receives no input. Renders the same window twice with a position jump in
+/// between and requires the pixels to change.
+#[test]
+#[ignore = "needs GPUI's headless wgpu renderer; run with --ignored"]
+fn the_overlay_repaints_without_any_input() {
+    let text_system = Arc::new(CosmicTextSystem::new("sans-serif"));
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|app| {
+        let fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Fraunces.ttf")),
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Inter.ttf")),
+        ];
+        let _ = app.text_system().add_fonts(fonts);
+    });
+
+    let state = cx.update(|app| app.new(|_cx| OverlayState::default()));
+    let st = state.clone();
+    cx.update(move |app| {
+        st.update(app, |s, _cx| {
+            s.begin("Bad Guy".to_string(), "Billie Eilish".to_string());
+            s.set_status(&LyricsStatus::Synced(synced_lines()));
+            s.sync_position(Duration::from_secs(20), 0, Some(Duration::from_secs(214)));
+        });
+    });
+
+    let geometry = Arc::new(std::sync::Mutex::new(OverlayGeometry::default()));
+    let handle = cx.update(|app| {
+        let bounds = gpui::Bounds::new(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(W as f32), gpui::px(H as f32)),
+        );
+        myuzik::overlay::open_overlay(app, state.clone(), geometry, bounds)
+    });
+    let any: AnyWindowHandle = handle.into();
+
+    // Give the overlay's own ticker a chance to run: no input event is sent.
+    let shot = |cx: &mut HeadlessAppContext| -> image::RgbaImage {
+        cx.update(|app| app.refresh_windows());
+        cx.run_until_parked();
+        let _ = cx.update_window(any, |_view, window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.capture_screenshot(any).expect("capture")
+    };
+
+    let first = shot(&mut cx);
+
+    // Jump to a different part of the song, the way a position tick does.
+    let st = state.clone();
+    cx.update(move |app| {
+        st.update(app, |s, cx| {
+            s.sync_position(Duration::from_secs(160), 0, Some(Duration::from_secs(214)));
+            cx.notify();
+        });
+    });
+    std::thread::sleep(Duration::from_millis(250));
+    let second = shot(&mut cx);
+
+    assert_ne!(
+        first.as_raw(),
+        second.as_raw(),
+        "the overlay did not repaint after the position moved"
+    );
+    eprintln!("overlay repainted without input");
 }

@@ -433,6 +433,8 @@ pub struct PinnedLyricsView {
     scroll_to: f32,
     scroll_key: (usize, usize, usize),
     scroll_started: bool,
+    /// Last `(position_ms, active_row, line_count)` seen by the safety ticker.
+    tick_key: (u64, usize, usize),
 }
 
 impl PinnedLyricsView {
@@ -445,6 +447,36 @@ impl PinnedLyricsView {
         // this observer the window only redrew when it was activated, so the band
         // appeared frozen until it was clicked.
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
+
+        // Safety net: an unfocused window must still repaint. `Entity::update`
+        // does not notify observers, so if any caller forgets, the band would
+        // freeze until the window was clicked. This only asks for a frame when
+        // the position, the active line or the line count actually moved, so a
+        // paused overlay stays completely idle.
+        cx.spawn(
+            async move |this: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(120))
+                    .await;
+                let updated = this.update(cx, |view, cx| {
+                    let state = view.state.read(cx);
+                    let key = (
+                        state.position.as_millis() as u64,
+                        state.active_row().unwrap_or(usize::MAX),
+                        state.line_count(),
+                    );
+                    if key != view.tick_key {
+                        view.tick_key = key;
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            },
+        )
+        .detach();
+
         Self {
             state,
             geometry,
@@ -453,6 +485,7 @@ impl PinnedLyricsView {
             scroll_to: 0.0,
             scroll_key: (0, 0, 0),
             scroll_started: false,
+            tick_key: (u64::MAX, usize::MAX, usize::MAX),
         }
     }
 }

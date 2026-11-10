@@ -273,8 +273,12 @@ impl Shell {
                             // and follows plain transcripts by progress rather
                             // than faking a synced line.
                             let duration = state.read(app).duration;
-                            app.update_entity(&os, |st, _cx| {
+                            app.update_entity(&os, |st, cx| {
                                 st.sync_position(pos, offset_ms, duration);
+                                // `Entity::update` alone does not notify observers, so
+                                // the overlay window would not repaint until it was
+                                // clicked. Notify explicitly.
+                                cx.notify();
                             });
                         });
                     }
@@ -731,8 +735,9 @@ impl Shell {
                     app.update_entity(&np, |view, _cx| {
                         view.set_cover(Some(image.clone()));
                     });
-                    app.update_entity(&os_for_cover, |state, _cx| {
+                    app.update_entity(&os_for_cover, |state, cx| {
                         state.set_cover(Some(image.clone()));
+                        cx.notify();
                     });
                 });
                 if let Some(mh) = &mh {
@@ -765,9 +770,10 @@ impl Shell {
             .cover_art_id
             .as_ref()
             .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
-        self.overlay_state.update(cx, |st, _cx| {
+        self.overlay_state.update(cx, |st, cx| {
             st.begin(track.title.clone(), track.artist.clone());
             st.set_cover(cached_cover);
+            cx.notify();
         });
         if let Some(tray) = self.tray() {
             tray.set_track(&track.title, &track.artist);
@@ -812,9 +818,10 @@ impl Shell {
                         v.set_source_label(source_label.clone());
                         v.set_lyrics(cx, status.clone());
                     });
-                    app.update_entity(&os, |st, _cx| {
+                    app.update_entity(&os, |st, cx| {
                         st.begin(t.title.clone(), t.artist.clone());
                         st.set_status(&status);
+                        cx.notify();
                     });
                 });
             })
