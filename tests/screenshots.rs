@@ -25,7 +25,7 @@ fn dummy_player() -> (
 
 fn wait(
     cx: &mut HeadlessAppContext,
-    shell: &gpui::Entity<Shell>,
+    _shell: &gpui::Entity<Shell>,
     mut f: impl FnMut(&gpui::App) -> bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -43,7 +43,7 @@ fn save(cx: &mut HeadlessAppContext, window: AnyWindowHandle, name: &str) {
     cx.update(|app| app.refresh_windows());
     cx.run_until_parked();
     let _ = cx.update_window(window, |_view, window, cx| {
-        window.draw(cx);
+        let _ = window.draw(cx);
     });
     match cx.capture_screenshot(window) {
         Ok(image) => {
@@ -111,7 +111,7 @@ fn capture_ui() {
     // Album detail: click the first card if a selector exists.
     // (Album card ids derive from the server, so we only capture Home/Settings/Now Playing.)
 
-    cx.update(|app| shell.update(app, |s, cx| s.go(Route::Settings)));
+    cx.update(|app| shell.update(app, |s, _cx| s.go(Route::Settings)));
     save(&mut cx, any, "settings");
 
     cx.update(|app| shell.update(app, |s, _cx| s.go(Route::Search)));
@@ -131,9 +131,9 @@ fn capture_ui() {
     cx.run_until_parked();
     save(&mut cx, any, "now-playing");
 
-    cx.update(|app| shell.update(app, |s, cx| s.go(Route::Favorites)));
+    cx.update(|app| shell.update(app, |s, _cx| s.go(Route::Favorites)));
     save(&mut cx, any, "favorites");
 
-    cx.update(|app| shell.update(app, |s, cx| s.go(Route::Artists)));
+    cx.update(|app| shell.update(app, |s, _cx| s.go(Route::Artists)));
     save(&mut cx, any, "artists");
 }
