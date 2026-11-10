@@ -266,7 +266,7 @@ impl Shell {
             titlebar: None,
             ..Default::default()
         };
-        if let Some(handle) = self.overlay_handle.clone() {
+        if let Some(handle) = self.overlay_handle {
             if handle.update(cx, |_view, _window, _cx| {}).is_err() {
                 self.overlay_handle = None;
             } else {
