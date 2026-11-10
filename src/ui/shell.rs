@@ -771,13 +771,22 @@ impl Render for Shell {
                     .bg(t.glass_tint)
                     .border_1()
                     .border_color(t.glass_border)
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::hsla(0.0, 0.0, 0.0, 0.6),
-                        offset: gpui::point(gpui::px(0.0), gpui::px(40.0)),
-                        blur_radius: gpui::px(100.0),
-                        spread_radius: gpui::px(0.0),
-                        inset: false,
-                    }])
+                    .shadow(vec![
+                        gpui::BoxShadow {
+                            color: gpui::hsla(0.0, 0.0, 0.0, 0.6),
+                            offset: gpui::point(gpui::px(0.0), gpui::px(40.0)),
+                            blur_radius: gpui::px(100.0),
+                            spread_radius: gpui::px(0.0),
+                            inset: false,
+                        },
+                        gpui::BoxShadow {
+                            color: gpui::rgba(0xFFFFFF0D).into(),
+                            offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+                            blur_radius: gpui::px(0.0),
+                            spread_radius: gpui::px(0.0),
+                            inset: true,
+                        },
+                    ])
                     .flex()
                     .overflow_hidden()
                     .child(
@@ -867,10 +876,10 @@ impl Render for Shell {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap(gpui::px(18.0))
-                            .px(gpui::px(26.0))
-                            .py(gpui::px(20.0))
-                            .pb(gpui::px(118.0))
+                            .gap(gpui::px(16.0))
+                            .px(gpui::px(24.0))
+                            .py(gpui::px(18.0))
+                            .pb(gpui::px(112.0))
                             .id("main-scroll")
                             .overflow_y_scroll()
                             .child(
@@ -940,9 +949,12 @@ impl Render for Shell {
                                     )
                                     .child(
                                         div()
+                                            .id("see-all-albums")
+                                            .cursor_pointer()
                                             .text_size(gpui::px(10.0))
                                             .text_color(t.text_secondary)
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; }))
                                             .child("See all"),
                                     )
                             })
@@ -995,14 +1007,14 @@ impl Render for Shell {
                                         .px(gpui::px(16.0))
                                         .py(gpui::px(12.0))
                                         .rounded(gpui::px(999.0))
-                                        .bg(t.clay_surface)
+                                        .bg(t.glass_tint)
                                         .border_2()
                                         .border_color(t.os_accent)
                                         .cursor_text()
                                         .child(
                                             div()
                                                 .text_size(gpui::px(12.0))
-                                                .text_color(t.clay_ink)
+                                                .text_color(t.text_primary)
                                                 .child(if self.search_query.is_empty() {
                                                     "Type to search artists, albums, songs…".to_string()
                                                 } else {
@@ -1087,7 +1099,7 @@ impl Render for Shell {
                                 div()
                             } else {
                                 let hs = self.home_state.read(cx);
-                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(14.0));
+                                let mut grid = div().grid().grid_cols(4).gap(gpui::px(12.0));
                                 if hs.albums.is_empty() {
                                     grid = grid.child(album_card("No albums", "Connect a server", None, t));
                                 } else {
@@ -1229,6 +1241,7 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .rounded(gpui::px(12.0))
             .text_color(t.text_secondary)
             .text_size(gpui::px(12.0))
+            .hover(|style| style.bg(gpui::rgba(0xFFFFFF08)))
             .child(label.to_string())
     }
 }
@@ -1240,11 +1253,12 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         .flex()
         .flex_col()
         .gap(gpui::px(7.0))
-        .w(gpui::px(168.0))
+        .w(gpui::px(150.0))
+        .hover(|style| style.bg(gpui::rgba(0xFFFFFF08)).rounded(gpui::px(16.0)))
         .child(
             gpui::div()
-                .w(gpui::px(168.0))
-                .h(gpui::px(168.0))
+                .w(gpui::px(150.0))
+                .h(gpui::px(150.0))
                 .rounded(gpui::px(16.0))
                 .bg(gpui::linear_gradient(
                     135.0,
@@ -1266,8 +1280,8 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
                 .overflow_hidden()
                 .child(if let Some(image) = cover {
                     gpui::img(gpui::ImageSource::Image(image))
-                        .w(gpui::px(168.0))
-                        .h(gpui::px(168.0))
+                        .w(gpui::px(150.0))
+                        .h(gpui::px(150.0))
                         .object_fit(gpui::ObjectFit::Cover)
                         .into_any_element()
                 } else {
@@ -1283,7 +1297,7 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         )
         .child(
             gpui::div()
-                .w(gpui::px(168.0))
+                .w(gpui::px(150.0))
                 .text_size(gpui::px(11.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
@@ -1291,7 +1305,7 @@ fn album_card(title: &str, artist: &str, cover: Option<std::sync::Arc<gpui::Imag
         )
         .child(
             gpui::div()
-                .w(gpui::px(168.0))
+                .w(gpui::px(150.0))
                 .text_size(gpui::px(9.0))
                 .text_color(t.text_secondary)
                 .child(artist.to_string()),

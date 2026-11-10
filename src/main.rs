@@ -37,8 +37,14 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let opts = WindowOptions {
             window_background: WindowBackgroundAppearance::Blurred,
-            window_decorations: Some(WindowDecorations::Client),
+            window_decorations: Some(WindowDecorations::Server),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            app_id: Some("io.github.samvivan1.Myuzik".to_string()),
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Myuzik".into()),
+                appears_transparent: false,
+                traffic_light_position: None,
+            }),
             ..Default::default()
         };
         cx.open_window(opts, |_window, cx| {
