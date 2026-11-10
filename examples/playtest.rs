@@ -1,4 +1,4 @@
-use myuzik::player::engine::{PlayerCommand, PlayerEvent, spawn_player};
+use myuzik::player::engine::{PlayerCommand, spawn_player};
 use std::time::Duration;
 
 fn main() {
@@ -16,9 +16,8 @@ fn main() {
     handle.tx.send(PlayerCommand::Play).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     while std::time::Instant::now() < deadline {
-        match handle.rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(ev) => println!("event: {ev:?}"),
-            Err(_) => {}
+        if let Ok(ev) = handle.rx.recv_timeout(Duration::from_millis(500)) {
+            println!("event: {ev:?}");
         }
     }
 }
