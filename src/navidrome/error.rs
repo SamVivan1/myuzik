@@ -17,6 +17,9 @@ pub enum NavidromeError {
     Tls(String),
     #[error("server: {0}")]
     Server(String),
+    /// The server asked us to slow down (`429`, or a proxy's equivalent).
+    #[error("rate limited")]
+    RateLimited,
 }
 
 impl NavidromeError {
@@ -37,6 +40,7 @@ impl NavidromeError {
             NavidromeError::Network(_) => "Myuzik cannot reach the server.",
             NavidromeError::Protocol(_) => "The server answered with something Myuzik cannot read.",
             NavidromeError::Tls(_) => "The server's certificate could not be verified.",
+            NavidromeError::RateLimited => "The server is busy and asked Myuzik to slow down.",
             NavidromeError::Server(message) if is_rate_limited(message) => {
                 "The server is busy and asked Myuzik to slow down."
             }
@@ -47,12 +51,45 @@ impl NavidromeError {
         }
     }
 
+    /// Whether trying the same request again could plausibly succeed.
+    ///
+    /// A wrong password or a missing album never will; a rate limit, a timeout
+    /// or a server fault usually will.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            NavidromeError::RateLimited => true,
+            NavidromeError::Network(message) => is_timeout(message) || !message.is_empty(),
+            NavidromeError::Server(message) => is_server_fault(message),
+            NavidromeError::Unauthorized
+            | NavidromeError::NotFound
+            | NavidromeError::Unsupported
+            | NavidromeError::Protocol(_)
+            | NavidromeError::Tls(_) => false,
+        }
+    }
+
+    /// How long to wait before attempt `attempt` (1-based), with exponential
+    /// backoff capped at 30 s. Rate limits wait longer than a plain timeout.
+    pub fn retry_delay(&self, attempt: u8) -> std::time::Duration {
+        let base_ms: u64 = if matches!(self, NavidromeError::RateLimited) {
+            1000
+        } else {
+            250
+        };
+        let shift = attempt.saturating_sub(1).min(5) as u32;
+        let ms = base_ms.saturating_mul(1u64 << shift);
+        std::time::Duration::from_millis(ms.min(30_000))
+    }
+
     /// One sentence of advice that goes with [`Self::user_message`], when there
     /// is something the user can actually do.
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             NavidromeError::Unauthorized => {
                 Some("Check the username and password, or set them again in Setup.")
+            }
+            NavidromeError::RateLimited => {
+                Some("Wait a moment and try again; Myuzik backs off on its own.")
             }
             NavidromeError::NotFound => Some("It may have been removed or renamed on the server."),
             NavidromeError::Unsupported => {
@@ -117,6 +154,8 @@ impl From<ureq::Error> for NavidromeError {
             ureq::Error::StatusCode(code) => match code {
                 401 | 403 => NavidromeError::Unauthorized,
                 404 => NavidromeError::NotFound,
+                // INT-12: 429 used to look exactly like a 500.
+                429 => NavidromeError::RateLimited,
                 _ => NavidromeError::Server(format!("HTTP {code}")),
             },
             ureq::Error::Io(io) => {
@@ -150,6 +189,36 @@ mod tests {
             NavidromeError::Server("HTTP 500".into()),
             NavidromeError::Server("upstream said no".into()),
         ]
+    }
+
+    /// INT-12: a 429 must be its own kind, and only the failures that can
+    /// plausibly succeed on a second try may be retried.
+    #[test]
+    fn a_rate_limit_is_its_own_kind_and_only_transient_failures_retry() {
+        let limited = NavidromeError::from(ureq::Error::StatusCode(429));
+        assert!(
+            matches!(limited, NavidromeError::RateLimited),
+            "429 mapped to {limited:?}"
+        );
+        assert!(limited.is_retryable());
+        assert!(NavidromeError::Network("timeout".into()).is_retryable());
+        assert!(NavidromeError::Server("HTTP 503".into()).is_retryable());
+        assert!(!NavidromeError::NotFound.is_retryable());
+        assert!(!NavidromeError::Unauthorized.is_retryable());
+        assert!(!NavidromeError::Protocol("bad json".into()).is_retryable());
+    }
+
+    #[test]
+    fn retry_delay_backs_off_and_stays_bounded() {
+        let limited = NavidromeError::RateLimited;
+        assert!(limited.retry_delay(1) < limited.retry_delay(2));
+        assert!(limited.retry_delay(2) < limited.retry_delay(3));
+        assert!(limited.retry_delay(20) <= std::time::Duration::from_secs(30));
+        // A rate limit waits longer than a plain timeout.
+        assert!(
+            NavidromeError::RateLimited.retry_delay(1)
+                > NavidromeError::Network("timeout".into()).retry_delay(1)
+        );
     }
 
     #[test]

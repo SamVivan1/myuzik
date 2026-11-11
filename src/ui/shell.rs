@@ -1234,8 +1234,15 @@ impl Shell {
                 let status = cx
                     .background_executor()
                     .spawn(async move {
-                        p_bg.fetch(&t_bg)
-                            .unwrap_or(crate::lyrics::model::LyricsStatus::NotFound)
+                        // INT-11: every failure (401 after a password change,
+                        // a timeout, an unreachable LRCLIB) used to be reported
+                        // as "No lyrics", which sent the user looking in the
+                        // wrong place. The real reason reaches the panel now.
+                        p_bg.fetch(&t_bg).unwrap_or_else(|error| {
+                            crate::lyrics::model::LyricsStatus::Error(
+                                error.user_message().to_string(),
+                            )
+                        })
                     })
                     .await;
                 if generation_counter.load(std::sync::atomic::Ordering::SeqCst) != generation {

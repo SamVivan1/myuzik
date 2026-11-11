@@ -348,15 +348,32 @@ impl NavidromeClient {
 
     pub fn cover_bytes(&self, cover_id: &str, size: u32) -> Result<Vec<u8>, NavidromeError> {
         let url = self.cover_url(cover_id, size)?;
-        let resp = self.agent.get(&url).call().map_err(NavidromeError::from)?;
-        let mut bytes = Vec::new();
-        use std::io::Read;
-        resp.into_body()
-            .into_reader()
-            .take(8 * 1024 * 1024)
-            .read_to_end(&mut bytes)
-            .map_err(NavidromeError::from)?;
-        Ok(bytes)
+        // INT-12: a rate limit or a transient server fault used to surface as a
+        // permanent failure and the artwork was simply missing. This path is not
+        // interactive (the grid asks for up to 24 covers), so it retries with
+        // backoff instead of hammering and giving up.
+        let mut attempt = 0u8;
+        loop {
+            attempt = attempt.saturating_add(1);
+            let result: Result<Vec<u8>, NavidromeError> = (|| {
+                let resp = self.agent.get(&url).call().map_err(NavidromeError::from)?;
+                let mut bytes = Vec::new();
+                use std::io::Read;
+                resp.into_body()
+                    .into_reader()
+                    .take(8 * 1024 * 1024)
+                    .read_to_end(&mut bytes)
+                    .map_err(NavidromeError::from)?;
+                Ok(bytes)
+            })();
+            match result {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) if error.is_retryable() && attempt < 3 => {
+                    std::thread::sleep(error.retry_delay(attempt));
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub fn set_starred(&self, id: &str, starred: bool) -> Result<(), NavidromeError> {
