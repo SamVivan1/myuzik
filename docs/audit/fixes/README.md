@@ -8,12 +8,12 @@ Commit perbaikan: `63ffddf`, `36de9a2`, `2b7a344`, `e1426ac`, `0abf5b9`, `3dfe83
 ```
 cargo fmt --check                          → bersih
 cargo clippy --all-targets -D warnings     → bersih
-cargo test -- --test-threads=1             → 309 passed, 0 failed, 18 ignored
+cargo test -- --test-threads=1             → 314 passed, 0 failed, 18 ignored
 cargo test --test config_credentials -- --ignored
                                            → keyring nyata: round trip OK, tanpa file plaintext
 ```
 
-Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+158 test**, semuanya hijau.
+Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+163 test**, semuanya hijau.
 18 test ignored adalah live-Navidrome (9), live-player (1), screenshot (4), live MPRIS/DBus (2),
 dan live keyring (1) — butuh server/DBus/display nyata.
 
@@ -98,6 +98,8 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 | **PF-08** `ureq::Agent` baru per lagu (LRCLIB) | satu Agent dipakai ulang; diuji lewat stub loopback (2 lagu → 1 koneksi TCP) |
 | **PF-10** tanpa dedupe in-flight cover | satu `CoverCache` bersama di Shell dengan klaim in-flight; skip cepat tidak lagi mengunduh cover yang sama berkali-kali |
 | **cache** (cacat fitur baru) | progres sync terlihat (ticker 500 ms), aksi **Settings → Cached library → Clear**, prune cover saat startup (2 000 file / 200 MB) |
+| **UI-13** `follow_os_accent` tak pernah dibaca | accent GNOME dibaca via gsettings (di background, sekali), diteruskan ke theme. Pengaman: accent yang kontrasnya <3:1 pada glass (mis. `slate` 2.97:1) jatuh ke default agar focus ring tak hilang (WCAG 1.4.11) |
+| **FL-08** tak ada kontrol shuffle/repeat | tombol **⇄** dan **↻/↻1** di player bar, menampilkan state (emas saat aktif), tab-stop yang bisa diaktifkan Enter; shortcut Ctrl+S/Ctrl+R tetap ada |
 
 ---
 
@@ -108,10 +110,8 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 - INT-13 TTL cache lirik (prune sudah, TTL belum)
 - PF-07 N+1 fetch cover (24 cover masih berurutan) · PF-11…PF-20
 - UI-01 sisa: `on_a11y_action` untuk screen reader (Enter sudah, AT client belum)
-- UI-13 (OS accent) · UI-19 · UI-20 · UI-21 · UI-23 · UI-24 · UI-25 (model route) ·
-  UI-26 (panah global) · UI-27 (warna mentah) · UI-29 · UI-30
-- Kontrol shuffle/repeat yang terlihat (shortcut sudah ada; penghalangnya ternyata hanya
-  stack thread test, kini sudah dikonfigurasi, jadi ini tinggal pekerjaan UI)
+- UI-21 · UI-23 · UI-24 · UI-25 (model route) · UI-26 (panah global) · UI-27 (warna
+  mentah) · UI-29 · UI-30
 
 ## Tidak diverifikasi
 
