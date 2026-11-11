@@ -857,6 +857,55 @@ impl Shell {
         }
     }
 
+    /// Run a search for the current query.
+    ///
+    /// Typing used to do nothing until Enter was pressed, while the field
+    /// promised "Type to search". A short debounce coalesces keystrokes, and the
+    /// generation counter still discards out-of-order responses.
+    fn schedule_search(&mut self, immediate: bool, cx: &mut gpui::Context<Self>) {
+        let query = self.search_query.trim().to_string();
+        let generation = self
+            .search_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if query.is_empty() {
+            self.search_results = None;
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let counter = self.search_generation.clone();
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            if !immediate {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    return;
+                }
+            }
+            let request = client.clone();
+            let res = cx
+                .background_executor()
+                .spawn(async move { request.search(&query) })
+                .await;
+            if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            cx.update(|app| {
+                app.update_entity(&entity, |shell, cx| {
+                    if let Ok(results) = res {
+                        shell.search_results = Some(results);
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn play_track(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(vec![track.clone()], 0);
@@ -3046,38 +3095,31 @@ impl Render for Shell {
                                                 let k = ev.keystroke.key.as_str();
                                                 if k == "backspace" {
                                                     this.search_query.pop();
+                                                    this.schedule_search(false, cx);
                                                 } else if k == "escape" {
+                                                    // Esc clears the query; on an
+                                                    // already-empty field it also
+                                                    // leaves the search page, as
+                                                    // docs/design.md promises.
+                                                    let was_empty = this.search_query.is_empty();
                                                     this.search_query.clear();
                                                     this.search_results = None;
                                                     this.search_generation
                                                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                                } else if k == "enter" {
-                                                    let q = this.search_query.trim().to_string();
-                                                    if !q.is_empty()
-                                                        && let Some(client) = this.client.clone() {
-                                                        let entity2 = cx.entity();
-                                                        let generation = this
-                                                            .search_generation
-                                                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                                                            + 1;
-                                                        let counter = this.search_generation.clone();
-                                                        cx.spawn(async move |_, cx| {
-                                                            let res = cx.background_executor().spawn(async move { client.search(&q) }).await;
-                                                            if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
-                                                                return;
-                                                            }
-                                                            cx.update(|app| {
-                                                                app.update_entity(&entity2, |shell, _| {
-                                                                    if let Ok(r) = res { shell.search_results = Some(r); }
-                                                                });
-                                                            });
-                                                        }).detach();
+                                                    if was_empty {
+                                                        this.go(Route::Home);
                                                     }
+                                                } else if k == "enter" {
+                                                    this.schedule_search(true, cx);
                                                 } else if !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                                                    let before = this.search_query.len();
                                                     if let Some(ch) = &ev.keystroke.key_char {
                                                         this.search_query.push_str(ch);
                                                     } else if k.len() == 1 && k.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
                                                         this.search_query.push_str(k);
+                                                    }
+                                                    if this.search_query.len() != before {
+                                                        this.schedule_search(false, cx);
                                                     }
                                                 }
                                                 cx.notify();
@@ -3114,14 +3156,14 @@ impl Render for Shell {
                                         div()
                                             .text_size(gpui::px(11.0))
                                             .text_color(t.text_secondary)
-                                            .child("Press Enter to search. Esc clears."),
+                                            .child("Results update as you type. Esc clears."),
                                     );
                                 }
                                 if let Some(results) = &self.search_results {
                                     // One row style for every result group. The page
                                     // used to render only SONGS, so a query that
                                     // matched an album or an artist showed nothing.
-                                    let mut result_row =
+                                    let result_row =
                                         |kind: &'static str,
                                          idx: usize,
                                          id: String,

@@ -1209,3 +1209,82 @@ fn search_renders_album_and_artist_groups(cx: &mut TestAppContext) {
         "an artist match rendered no artist row"
     );
 }
+
+/// The field is labelled "Type to search artists, albums, songs…", so typing has
+/// to search. It used to require Enter, which made the placeholder a lie.
+#[gpui::test]
+fn typing_searches_without_pressing_enter(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    let search = server.mock(|when, then| {
+        when.method(GET).path("/rest/search3.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""searchResult3":{"song":[{"id":"s1","title":"Alpha","artist":"A","album":"Alpha","duration":100}],"album":[],"artist":[]}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("typing-search");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, cmd_rx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(cmd_rx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+
+    let nav = cx.debug_bounds("nav-search").expect("nav-search");
+    cx.simulate_click(nav.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alpha");
+    cx.run_until_parked();
+
+    // Deliberately no Enter: the debounce alone must fire the request. The
+    // debounce is a gpui timer, so the test clock has to move past it.
+    cx.executor()
+        .advance_clock(Duration::from_millis(400));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.search_result_count()) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        shell.read_with(&cx, |s, _| s.search_result_count()) > 0,
+        "typing did not search; the placeholder promises it would"
+    );
+    assert_eq!(search.calls(), 1, "the debounce must coalesce keystrokes");
+}
