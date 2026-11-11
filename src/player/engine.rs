@@ -134,6 +134,29 @@ pub fn spawn_player() -> PlayerHandle {
     }
 }
 
+/// Report a failed engine command as [`PlayerEvent::Error`] instead of
+/// swallowing it (audit FL-07/FL-18). Returns `true` when the command failed.
+///
+/// The shell reacts to the event by retrying with a
+/// [`crate::player::state::RetryPolicy`] and eventually advancing, so a failure
+/// here must never be silent: a swallowed `seek_simple`/`set_state` error is
+/// exactly the "button does nothing, UI says Playing" state the audit found.
+fn report_if_failed<T, E: std::fmt::Display>(
+    evt_tx: &flume::Sender<PlayerEvent>,
+    action: &str,
+    result: Result<T, E>,
+) -> bool {
+    match result {
+        Ok(_) => false,
+        Err(err) => {
+            let _ = evt_tx.send(PlayerEvent::Error(PlayerError::Message(format!(
+                "{action} failed: {err}"
+            ))));
+            true
+        }
+    }
+}
+
 fn handle_command(
     pipeline: &gst::Element,
     cmd: PlayerCommand,
@@ -141,9 +164,16 @@ fn handle_command(
 ) {
     match cmd {
         PlayerCommand::Load { uri, track_id } => {
-            let _ = pipeline.set_state(gst::State::Ready);
+            // A failed state change means the track cannot play: report it and
+            // stop here, so the shell does not get `TrackStarted` (scrobble,
+            // metadata, lyrics) for a track that never started.
+            if report_if_failed(evt_tx, "load", pipeline.set_state(gst::State::Ready)) {
+                return;
+            }
             pipeline.set_property("uri", uri);
-            let _ = pipeline.set_state(gst::State::Playing);
+            if report_if_failed(evt_tx, "load", pipeline.set_state(gst::State::Playing)) {
+                return;
+            }
             let _ = evt_tx.send(PlayerEvent::TrackStarted(track_id));
         }
         PlayerCommand::Play => {
@@ -161,9 +191,15 @@ fn handle_command(
             }
         }
         PlayerCommand::Seek(pos) => {
-            let _ = pipeline.seek_simple(
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::ClockTime::from_nseconds(pos.as_nanos() as u64),
+            // Seeking before preroll (or past the end) fails; reporting it lets
+            // the shell tell the user instead of the button doing nothing.
+            report_if_failed(
+                evt_tx,
+                "seek",
+                pipeline.seek_simple(
+                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                    gst::ClockTime::from_nseconds(pos.as_nanos() as u64),
+                ),
             );
         }
         PlayerCommand::SetVolume(v) => {
@@ -179,5 +215,39 @@ fn handle_command(
         PlayerCommand::Previous => {
             let _ = evt_tx.send(PlayerEvent::PreviousRequested);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flume::unbounded;
+
+    #[test]
+    fn a_failed_engine_command_is_reported_as_a_player_error() {
+        let (tx, rx) = unbounded::<PlayerEvent>();
+
+        let failed = report_if_failed(&tx, "seek", Err::<(), _>("pipeline not ready"));
+
+        assert!(failed, "a failed command must be reported as failed");
+        match rx.try_recv() {
+            Ok(PlayerEvent::Error(PlayerError::Message(msg))) => {
+                assert_eq!(msg, "seek failed: pipeline not ready");
+            }
+            other => panic!("expected PlayerEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_successful_engine_command_reports_nothing() {
+        let (tx, rx) = unbounded::<PlayerEvent>();
+
+        let failed = report_if_failed(&tx, "load", Ok::<u8, &str>(1));
+
+        assert!(!failed);
+        assert!(
+            rx.try_recv().is_err(),
+            "a command that worked must not post an error event"
+        );
     }
 }

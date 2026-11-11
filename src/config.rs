@@ -15,9 +15,29 @@ pub enum StreamQuality {
     Kbps192,
 }
 
+/// Current schema version of `config.toml`.
+///
+/// INT-08: the file had no version at all, so a renamed or removed key simply
+/// disappeared. Version 1 is the first versioned schema; a file written before
+/// it has no `version` key and deserializes as 0 (see [`unversioned`]), which
+/// [`migrate_config`] brings up to date.
+pub const CONFIG_VERSION: u32 = 1;
+
+/// The version of a file written before the schema carried one.
+fn unversioned() -> u32 {
+    0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    /// Schema version of the file this came from; see [`CONFIG_VERSION`].
+    ///
+    /// A missing key means "written before versioning" (0), not "current": the
+    /// container-level `#[serde(default)]` would otherwise fill it with
+    /// [`AppConfig::default`]'s version and the migration could not tell.
+    #[serde(default = "unversioned")]
+    pub version: u32,
     pub server_url: String,
     pub username: String,
     pub quality: StreamQuality,
@@ -36,11 +56,19 @@ pub struct AppConfig {
     pub overlay_opacity: f32,
     pub reduce_motion: bool,
     pub follow_os_accent: bool,
+    /// Keys this build does not know: a typo, or a key a newer build wrote.
+    ///
+    /// INT-08b: `#[serde(default)]` made an unknown key vanish without a trace.
+    /// Collecting them means the loader can name them, and a later save writes
+    /// them back instead of destroying what it did not understand.
+    #[serde(flatten)]
+    pub unknown: std::collections::BTreeMap<String, toml::Value>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            version: CONFIG_VERSION,
             server_url: String::new(),
             username: String::new(),
             quality: StreamQuality::Original,
@@ -57,6 +85,7 @@ impl Default for AppConfig {
             overlay_opacity: 0.74,
             reduce_motion: false,
             follow_os_accent: true,
+            unknown: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -423,12 +452,210 @@ pub fn delete_password(paths: &Paths) -> anyhow::Result<()> {
     }
 }
 
-pub fn load_config(paths: &Paths) -> Result<AppConfig> {
-    if !paths.config.exists() {
-        return Ok(AppConfig::default());
+/// A `config.toml` that could not be used, and where it went.
+///
+/// INT-08: the old loader returned defaults and the first settings toggle wrote
+/// them over the user's file, so a single bad byte destroyed every setting.
+/// The original is moved aside instead, and this is the record of that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigRecovery {
+    /// Where the unreadable file was moved (`None` when it could not be moved,
+    /// e.g. a read-only config directory; the app still starts on defaults).
+    pub backup: Option<PathBuf>,
+    /// Why the file could not be used, for the log and the user.
+    pub reason: String,
+}
+
+impl ConfigRecovery {
+    /// One sentence for the user, naming the file that was kept.
+    pub fn describe(&self) -> String {
+        match &self.backup {
+            Some(path) => format!(
+                "Your settings could not be read ({}), so Myuzik started with defaults. \
+                 The old file was kept as {}.",
+                self.reason,
+                path.display()
+            ),
+            None => format!(
+                "Your settings could not be read ({}) and could not be moved aside, \
+                 so Myuzik started with defaults.",
+                self.reason
+            ),
+        }
     }
-    let text = fs::read_to_string(&paths.config)?;
-    Ok(toml::from_str(&text)?)
+}
+
+/// What [`load_config_recovering`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadOutcome {
+    /// The config to run with: the file's, or [`AppConfig::default`].
+    pub config: AppConfig,
+    /// Set when the file could not be used and had to be recovered from.
+    pub recovery: Option<ConfigRecovery>,
+    /// Top-level keys this build does not know, sorted by name (INT-08b).
+    pub unknown_keys: Vec<String>,
+}
+
+impl LoadOutcome {
+    fn healthy(config: AppConfig) -> Self {
+        Self {
+            config,
+            recovery: None,
+            unknown_keys: Vec::new(),
+        }
+    }
+
+    /// Whether the file had to be recovered from (the user must be told).
+    pub fn is_recovered(&self) -> bool {
+        self.recovery.is_some()
+    }
+
+    /// A sentence for the user when the file had to be recovered from.
+    pub fn notice(&self) -> Option<String> {
+        self.recovery.as_ref().map(|recovery| recovery.describe())
+    }
+}
+
+/// Load `config.toml`, recovering from a file that cannot be read.
+///
+/// Never fails: a missing, truncated, non-UTF-8 or unparseable file yields
+/// [`AppConfig::default`] so the app starts, and the reason plus where the
+/// original went is returned in the [`LoadOutcome`] so the caller can tell the
+/// user. See audit INT-08.
+pub fn load_config_recovering(paths: &Paths) -> LoadOutcome {
+    let text = match fs::read_to_string(&paths.config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return LoadOutcome::healthy(AppConfig::default());
+        }
+        Err(error) => return recover_config(paths, format!("could not be read: {error}")),
+    };
+    match toml::from_str::<AppConfig>(&text) {
+        Ok(mut config) => {
+            let from = config.version;
+            migrate_config(&mut config, from);
+            let unknown_keys = config.unknown.keys().cloned().collect::<Vec<_>>();
+            if !unknown_keys.is_empty() {
+                // INT-08b: an invisible typo used to change nothing and say
+                // nothing. Named here, and carried in the outcome for the UI.
+                tracing::warn!(
+                    path = %paths.config.display(),
+                    keys = %unknown_keys.join(", "),
+                    "config has keys this version does not know, so they have no effect"
+                );
+            }
+            LoadOutcome {
+                config,
+                recovery: None,
+                unknown_keys,
+            }
+        }
+        Err(error) => recover_config(paths, format!("could not be parsed: {error}")),
+    }
+}
+
+/// Bring a config written by an older schema up to [`CONFIG_VERSION`].
+///
+/// Version 1 is the first versioned schema, so there is nothing to rewrite yet.
+/// The function exists — and is called on every load — so that the next renamed
+/// or removed key has an obvious home here instead of disappearing silently.
+fn migrate_config(config: &mut AppConfig, from: u32) {
+    match from.cmp(&CONFIG_VERSION) {
+        std::cmp::Ordering::Less => config.version = CONFIG_VERSION,
+        // A file from a newer build: keep its version. Rewriting it as an older
+        // version would make the newer build migrate a file it already migrated.
+        std::cmp::Ordering::Greater => {
+            tracing::warn!(
+                from,
+                current = CONFIG_VERSION,
+                "config was written by a newer version of Myuzik"
+            );
+        }
+        std::cmp::Ordering::Equal => {}
+    }
+}
+
+/// Keep an unusable `config.toml` and run on defaults.
+///
+/// The file is moved, never deleted: the user's settings are often the only
+/// copy. If it cannot be moved (read-only directory, or already gone) the app
+/// still starts and the outcome says the file could not be kept.
+fn recover_config(paths: &Paths, reason: String) -> LoadOutcome {
+    tracing::error!(
+        path = %paths.config.display(),
+        reason = %reason,
+        "config unusable, starting on defaults"
+    );
+    let backup = match move_config_aside(&paths.config) {
+        Ok(backup) => backup,
+        Err(error) => {
+            tracing::error!(
+                path = %paths.config.display(),
+                %error,
+                "could not move the unusable config aside"
+            );
+            None
+        }
+    };
+    if let Some(backup) = &backup {
+        tracing::error!(kept_as = %backup.display(), "the unusable config was kept");
+    }
+    LoadOutcome {
+        config: AppConfig::default(),
+        recovery: Some(ConfigRecovery { backup, reason }),
+        unknown_keys: Vec::new(),
+    }
+}
+
+/// Move `path` to `path.corrupt-<unix seconds>`, never overwriting an earlier
+/// backup (a second broken file in the same second gets a `-1` suffix).
+///
+/// `Ok(None)` means there was nothing to keep any more.
+fn move_config_aside(path: &Path) -> io::Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let backup = available_backup_path(path, unix_now());
+    fs::rename(path, &backup)?;
+    Ok(Some(backup))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+fn available_backup_path(path: &Path, timestamp: u64) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.toml".to_string());
+    let first = path.with_file_name(format!("{name}.corrupt-{timestamp}"));
+    if !first.exists() {
+        return first;
+    }
+    for suffix in 1u32.. {
+        let candidate = path.with_file_name(format!("{name}.corrupt-{timestamp}-{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the suffix loop always returns")
+}
+
+/// Load `config.toml`, treating a file that cannot be used as an error.
+///
+/// Kept for callers that want the `Result` (and for tests that skip when there
+/// is no config); the recovery still happens, so the user's bytes are never
+/// lost, and the error says where they are.
+pub fn load_config(paths: &Paths) -> Result<AppConfig> {
+    let outcome = load_config_recovering(paths);
+    match outcome.recovery {
+        Some(recovery) => Err(anyhow::anyhow!("{}", recovery.describe())),
+        None => Ok(outcome.config),
+    }
 }
 
 pub fn save_config(paths: &Paths, cfg: &AppConfig) -> Result<()> {

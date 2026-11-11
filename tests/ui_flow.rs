@@ -1272,8 +1272,7 @@ fn typing_searches_without_pressing_enter(cx: &mut TestAppContext) {
 
     // Deliberately no Enter: the debounce alone must fire the request. The
     // debounce is a gpui timer, so the test clock has to move past it.
-    cx.executor()
-        .advance_clock(Duration::from_millis(400));
+    cx.executor().advance_clock(Duration::from_millis(400));
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         cx.run_until_parked();

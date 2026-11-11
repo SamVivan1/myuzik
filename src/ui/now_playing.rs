@@ -112,7 +112,7 @@ impl NowPlayingView {
 }
 
 impl Render for NowPlayingView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
 

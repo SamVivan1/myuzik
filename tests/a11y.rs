@@ -608,7 +608,10 @@ fn long_text_is_clamped_where_it_would_wrap() {
     // The chain that renders each text, and what it is for.
     let cases: [(&str, &str); 4] = [
         (".child(title.to_string())", "album card / track row title"),
-        (".child(artist.to_string())", "album card / track row artist"),
+        (
+            ".child(artist.to_string())",
+            "album card / track row artist",
+        ),
         ("current_title.clone()", "player bar title"),
         (".child(current_artist.clone())", "player bar artist"),
     ];

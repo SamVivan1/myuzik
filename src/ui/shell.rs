@@ -236,25 +236,41 @@ impl Shell {
             let mut last_pos = std::time::Duration::ZERO;
             let mut track_duration = std::time::Duration::ZERO;
             let mut scrobble_track: Option<String> = None;
+            // FL-07: a failed stream used to leave the UI claiming it was playing.
+            let retry_policy = crate::player::state::RetryPolicy::default();
+            let mut retry_attempts: u8 = 0;
+            let mut failure_guard = crate::player::state::StreamFailureGuard::default();
             loop {
                 match rx.recv_async().await {
                     Ok(PlayerEvent::StateChanged(s)) => {
-                        cx.update(|app| {
-                            state.update(app, |ps, _cx| {
-                                ps.set_status(s);
+                        // FL-13: the engine posts a transient Stopped while a load
+                        // is pending; filtering it here stops the icon flickering.
+                        let effective = cx.update(|app| {
+                            let effective = state.update(app, |ps, _cx| {
+                                ps.set_status_from_engine(s);
+                                ps.status
                             });
+                            let playing = effective == PlaybackStatus::Playing;
                             let np = now_playing_for_loop.clone();
                             app.update_entity(&np, |view, _cx| {
-                                view.set_playing(s == PlaybackStatus::Playing);
+                                view.set_playing(playing);
                             });
                             if let Some(tray) =
                                 tray_slot_for_loop.lock().ok().and_then(|slot| slot.clone())
                             {
-                                tray.set_playing(s == PlaybackStatus::Playing);
+                                tray.set_playing(playing);
                             }
+                            effective
                         });
-                        if let Some(mh) = &mpris_for_loop {
-                            mh.update_status(s);
+                        if effective == PlaybackStatus::Playing {
+                            retry_attempts = 0;
+                            failure_guard.record_success();
+                        }
+                        // MPRIS has no Buffering state, so do not publish it.
+                        if let Some(mh) = &mpris_for_loop
+                            && effective != PlaybackStatus::Buffering
+                        {
+                            mh.update_status(effective);
                         }
                     }
                     Ok(PlayerEvent::Position(pos)) => {
@@ -339,15 +355,73 @@ impl Shell {
                     Ok(PlayerEvent::Error(e)) => {
                         tracing::error!("player error: {:?}", e);
                         let entity = self_entity.clone();
-                        let msg = format!("Playback error: {e:?}");
+                        cx.update(|app| {
+                            state.update(app, |ps, _cx| ps.set_error());
+                            let np = now_playing_for_loop.clone();
+                            app.update_entity(&np, |view, _cx| view.set_playing(false));
+                            if let Some(tray) =
+                                tray_slot_for_loop.lock().ok().and_then(|slot| slot.clone())
+                            {
+                                tray.set_playing(false);
+                            }
+                        });
+                        if let Some(mh) = &mpris_for_loop {
+                            mh.update_status(PlaybackStatus::Error);
+                        }
+                        // The track that failed is not being listened to.
+                        scrobble.reset();
+                        last_pos = std::time::Duration::ZERO;
+                        scrobble_track = None;
+
+                        // Report it straight away: a silent retry leaves the
+                        // user staring at a frozen player with no explanation.
+                        let decision = retry_policy.decide(retry_attempts + 1);
+                        let message = match decision {
+                            crate::player::state::RetryDecision::Retry { delay } => {
+                                retry_attempts = retry_attempts.saturating_add(1);
+                                tracing::warn!(
+                                    "retrying playback in {:?} (attempt {})",
+                                    delay,
+                                    retry_attempts
+                                );
+                                let entity = self_entity.clone();
+                                cx.spawn(async move |cx| {
+                                    cx.background_executor().timer(delay).await;
+                                    cx.update(|app| {
+                                        entity.update(app, |shell, cx| {
+                                            shell.retry_current_track(cx);
+                                        });
+                                    });
+                                })
+                                .detach();
+                                format!("Playback error: {e:?}. Retrying…")
+                            }
+                            crate::player::state::RetryDecision::GiveUp => {
+                                retry_attempts = 0;
+                                if failure_guard.record_failure() {
+                                    // The whole queue is failing; stop here rather
+                                    // than walking through it track by track.
+                                    format!("Playback error: {e:?}. Playback stopped.")
+                                } else {
+                                    let entity = self_entity.clone();
+                                    cx.update(|app| {
+                                        entity.update(app, |shell, cx| {
+                                            shell.play_next(cx);
+                                        });
+                                    });
+                                    format!("Playback error: {e:?}. Skipping this track.")
+                                }
+                            }
+                        };
                         cx.update(|app| {
                             entity.update(app, |shell, cx| {
-                                shell.show_toast(msg, cx);
+                                shell.show_toast(message, cx);
                             });
                         });
                     }
                     Ok(PlayerEvent::TrackStarted(id)) => {
                         tracing::info!("track started: {}", id);
+                        retry_attempts = 0;
                         scrobble.reset();
                         last_pos = std::time::Duration::ZERO;
                         scrobble_track = Some(id.clone());
@@ -384,7 +458,17 @@ impl Shell {
                         }
                     }
                     Ok(PlayerEvent::Buffering(p)) => {
-                        tracing::debug!("buffering: {}%", p);
+                        let effective = cx.update(|app| {
+                            state.update(app, |ps, _cx| {
+                                ps.set_buffering(p);
+                                ps.status
+                            })
+                        });
+                        if let Some(tray) =
+                            tray_slot_for_loop.lock().ok().and_then(|slot| slot.clone())
+                        {
+                            tray.set_playing(effective == PlaybackStatus::Playing);
+                        }
                     }
                     Ok(PlayerEvent::NextRequested) => {
                         let entity = self_entity.clone();
@@ -610,19 +694,38 @@ impl Shell {
                 } else if let Some(index) = other
                     .strip_prefix("search-playlist-")
                     .and_then(|i| i.parse::<usize>().ok())
-                {
-                    if let Some(id) = self
+                    && let Some(id) = self
                         .search_results
                         .as_ref()
                         .and_then(|r| r.playlists.get(index))
                         .map(|p| p.id.clone())
-                    {
-                        self.play_playlist(id, cx);
-                    }
+                {
+                    self.play_playlist(id, cx);
                 }
             }
         }
         cx.notify();
+    }
+
+    /// Reload the current track after a failed stream.
+    ///
+    /// `adopt` keeps the queue position and marks the load pending, which is what
+    /// makes the next transient `Stopped` from the engine filtered out.
+    fn retry_current_track(&mut self, cx: &mut gpui::App) {
+        let Some(track) = self.player_state.read(cx).current.clone() else {
+            return;
+        };
+        self.player_state
+            .update(cx, |ps, _cx| ps.adopt(track.clone()));
+        self.load_and_play(&track, cx);
+    }
+
+    /// Tell the user something that happened before a window existed.
+    ///
+    /// A corrupt `config.toml` is moved aside and defaults are loaded; without
+    /// this the recovery is only a log line nobody reads.
+    pub fn notice(&mut self, message: impl Into<String>, cx: &mut gpui::Context<Self>) {
+        self.show_toast(message, cx);
     }
 
     /// Whether shuffle is on.
@@ -3347,8 +3450,6 @@ impl Render for Shell {
                                 let mut col = div().flex().flex_col().gap(gpui::px(8.0));
                                 let f_set_quality = self.focus_for("settings-quality", Self::TAB_CONTENT, cx);
                                 let f_set_scrobble = self.focus_for("settings-scrobble", Self::TAB_CONTENT, cx);
-                                let f_set_shuffle = self.focus_for("settings-shuffle", Self::TAB_CONTENT, cx);
-                                let f_set_repeat = self.focus_for("settings-repeat", Self::TAB_CONTENT, cx);
                                 let f_set_lyrics_source =
                                     self.focus_for("settings-lyrics-source", Self::TAB_CONTENT, cx);
                                 let f_set_reduce_motion =
