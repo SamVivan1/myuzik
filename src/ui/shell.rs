@@ -44,6 +44,15 @@ pub struct Shell {
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
     scrobble_enabled: Arc<std::sync::atomic::AtomicBool>,
     search_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// On-disk snapshot of the library, so startup and search do not wait on the
+    /// server. Audio is still streamed on demand; only metadata is cached.
+    library_cache: crate::library::cache::LibraryCache,
+    /// In-memory search over that snapshot: instant and works offline.
+    library_index: Option<Arc<crate::library::search_index::SearchIndex>>,
+    /// Set while a full sync runs, so a second click is a no-op.
+    syncing: Arc<std::sync::atomic::AtomicBool>,
+    /// Items fetched so far during a sync, for the progress label.
+    sync_progress: Arc<std::sync::atomic::AtomicUsize>,
     /// Autoplay radio state (genre paging, recent-history filter).
     radio: Arc<std::sync::Mutex<crate::library::radio::Radio>>,
     /// Mirrors `config.autoplay` so the async completion can re-check it.
@@ -93,7 +102,38 @@ impl Shell {
             .tx
             .send(PlayerCommand::SetVolume(config.volume))
             .ok();
-        let home_state = cx.new(|_cx| HomeState::default());
+        // Load the cached library before the first frame: the lists render from
+        // disk, then a background refresh replaces them. This is what makes
+        // startup and search instant instead of waiting on the server.
+        let library_cache = crate::library::cache::LibraryCache::new(paths.cache.clone());
+        let cached_snapshot = match library_cache.load() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                tracing::warn!("could not read the library cache: {error}");
+                None
+            }
+        };
+        let library_index = cached_snapshot.as_ref().map(|snapshot| {
+            Arc::new(crate::library::search_index::SearchIndex::build(
+                &snapshot.albums,
+                &snapshot.artists,
+                &snapshot.playlists,
+                &snapshot.songs,
+            ))
+        });
+        let home_state = {
+            let snapshot = cached_snapshot.clone();
+            cx.new(move |_cx| {
+                let mut state = HomeState::default();
+                if let Some(snapshot) = snapshot {
+                    state.albums = snapshot.albums;
+                    state.artists = snapshot.artists;
+                    state.playlists = snapshot.playlists;
+                    state.from_cache = true;
+                }
+                state
+            })
+        };
         let selected_album = None;
         let album_detail = None;
         let album_loading = false;
@@ -515,6 +555,10 @@ impl Shell {
             lyrics_generation,
             scrobble_enabled,
             search_generation,
+            library_cache,
+            library_index,
+            syncing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sync_progress: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             radio,
             autoplay_enabled,
             lyrics_offset_ms: lyrics_offset_field,
@@ -595,6 +639,7 @@ impl Shell {
             // Page content.
             "content-search-shortcut" => self.go(Route::Search),
             "content-see-all-albums" => self.go(Route::Albums),
+            "content-sync" => self.sync_library(cx),
             "album-back" => self.go(Route::Home),
             "artists-back" => self.go(Route::Artists),
             "album-play-all" => {
@@ -998,6 +1043,92 @@ impl Shell {
         }
     }
 
+    /// Pull the whole library from the server into the on-disk snapshot.
+    ///
+    /// This is the one explicit "sync" action: it walks every album page, then
+    /// every album's tracks, saves one JSON snapshot and rebuilds the local
+    /// search index. Audio is never downloaded — only metadata, so playback
+    /// still streams on demand when a track is chosen.
+    pub fn sync_library(&mut self, cx: &mut gpui::Context<Self>) {
+        use std::sync::atomic::Ordering;
+        if self.syncing.swap(true, Ordering::SeqCst) {
+            self.show_toast("A sync is already running.", cx);
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            self.syncing.store(false, Ordering::SeqCst);
+            self.show_toast("Connect a server first.", cx);
+            return;
+        };
+        self.sync_progress.store(0, Ordering::SeqCst);
+        self.show_toast("Syncing library…", cx);
+
+        let entity = cx.entity();
+        let cache_dir = self.paths.cache.clone();
+        let syncing = self.syncing.clone();
+        let progress = self.sync_progress.clone();
+        cx.spawn(async move |_, cx| {
+            let progress_bg = progress.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { fetch_full_library(&client, &progress_bg) })
+                .await;
+
+            match result {
+                Ok(snapshot) => {
+                    let save = crate::library::cache::LibraryCache::new(cache_dir).save(&snapshot);
+                    let index = Arc::new(crate::library::search_index::SearchIndex::build(
+                        &snapshot.albums,
+                        &snapshot.artists,
+                        &snapshot.playlists,
+                        &snapshot.songs,
+                    ));
+                    let summary = format!(
+                        "Synced {} albums · {} artists · {} songs.",
+                        snapshot.albums.len(),
+                        snapshot.artists.len(),
+                        snapshot.songs.len()
+                    );
+                    cx.update(|app| {
+                        entity.update(app, |shell, cx| {
+                            syncing.store(false, Ordering::SeqCst);
+                            shell.library_index = Some(index);
+                            let albums = snapshot.albums.clone();
+                            let artists = snapshot.artists.clone();
+                            let playlists = snapshot.playlists.clone();
+                            shell.home_state.update(cx, |state, cx| {
+                                state.albums = albums;
+                                state.artists = artists;
+                                state.playlists = playlists;
+                                state.from_cache = false;
+                                state.loading = false;
+                                state.error = None;
+                                cx.notify();
+                            });
+                            match save {
+                                Ok(()) => shell.show_toast(summary, cx),
+                                Err(error) => shell.show_toast(
+                                    format!("{summary} Could not write the cache: {error}"),
+                                    cx,
+                                ),
+                            }
+                        });
+                    });
+                }
+                Err(error) => {
+                    let message = format!("Sync failed. {}", error_text(&error));
+                    cx.update(|app| {
+                        entity.update(app, |shell, cx| {
+                            syncing.store(false, Ordering::SeqCst);
+                            shell.show_toast(message, cx);
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Run a search for the current query.
     ///
     /// Typing used to do nothing until Enter was pressed, while the field
@@ -1005,6 +1136,21 @@ impl Shell {
     /// generation counter still discards out-of-order responses.
     fn schedule_search(&mut self, immediate: bool, cx: &mut gpui::Context<Self>) {
         let query = self.search_query.trim().to_string();
+        // Search the cached library first: it is instant and works offline, so a
+        // keystroke never waits for the server. The server is only asked when no
+        // snapshot exists yet (first run, before the first sync).
+        if let Some(index) = &self.library_index
+            && !index.is_empty()
+        {
+            let results = if query.is_empty() {
+                None
+            } else {
+                Some(index.search(&query))
+            };
+            self.search_results = results;
+            cx.notify();
+            return;
+        }
         let generation = self
             .search_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -1135,16 +1281,31 @@ impl Shell {
             let prepared = cx
                 .background_executor()
                 .spawn(async move {
-                    let bytes = c.cover_bytes(&cid2, 512).ok()?;
-                    let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                    let ext = if is_png { "png" } else { "jpg" };
-                    let _ = std::fs::create_dir_all(&covers_dir);
-                    let path = covers_dir.join(format!("{cid2}.{ext}"));
-                    let _ = std::fs::write(&path, &bytes);
-                    let format = if is_png {
-                        gpui::ImageFormat::Png
-                    } else {
-                        gpui::ImageFormat::Jpeg
+                    // Disk first: the bytes are usually already there.
+                    let (bytes, format, path) = match read_cover_from_disk(&covers_dir, &cid2) {
+                        Some((bytes, format)) => {
+                            let ext = if matches!(format, gpui::ImageFormat::Png) {
+                                "png"
+                            } else {
+                                "jpg"
+                            };
+                            let path = covers_dir.join(format!("{cid2}.{ext}"));
+                            (bytes, format, path)
+                        }
+                        None => {
+                            let bytes = c.cover_bytes(&cid2, 512).ok()?;
+                            let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+                            let ext = if is_png { "png" } else { "jpg" };
+                            let _ = std::fs::create_dir_all(&covers_dir);
+                            let path = covers_dir.join(format!("{cid2}.{ext}"));
+                            let _ = std::fs::write(&path, &bytes);
+                            let format = if is_png {
+                                gpui::ImageFormat::Png
+                            } else {
+                                gpui::ImageFormat::Jpeg
+                            };
+                            (bytes, format, path)
+                        }
                     };
                     let image = std::sync::Arc::new(gpui::Image {
                         format,
@@ -1580,6 +1741,7 @@ impl Shell {
         };
         let entity = cx.entity();
         let client_for_cover = client.clone();
+        let covers_for_album = self.paths.covers.clone();
         cx.spawn(async move |_, cx| {
             let client_for_album = client.clone();
             let album_id = id.clone();
@@ -1592,10 +1754,16 @@ impl Shell {
                     Some(cid) => {
                         let client = client_for_cover.clone();
                         let cid_for_fetch = cid.clone();
+                        let dir = covers_for_album.clone();
                         cx.background_executor()
-                            .spawn(async move { client.cover_bytes(&cid_for_fetch, 512) })
+                            .spawn(async move {
+                                if let Some((bytes, _)) = read_cover_from_disk(&dir, &cid_for_fetch)
+                                {
+                                    return Some(bytes);
+                                }
+                                client.cover_bytes(&cid_for_fetch, 512).ok()
+                            })
                             .await
-                            .ok()
                             .map(|bytes| (cid, bytes))
                     }
                     None => None,
@@ -2137,6 +2305,7 @@ impl Render for Shell {
         let f_win_max = self.focus_for("window-maximize", Self::TAB_CHROME, cx);
         let f_search_shortcut = self.focus_for("content-search-shortcut", Self::TAB_CONTENT, cx);
         let f_see_all = self.focus_for("content-see-all-albums", Self::TAB_CONTENT, cx);
+        let f_sync = self.focus_for("content-sync", Self::TAB_CONTENT, cx);
 
         let decorations = window.window_decorations();
         let (shadow_size, rounded_window) = match decorations {
@@ -3228,6 +3397,28 @@ impl Render for Shell {
                                             .on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; }))
                                             .child("See all"),
                                     )
+                                    .child(
+                                        // One button for the whole cache: pull the
+                                        // library from the server into the snapshot
+                                        // that makes lists and search instant.
+                                        div()
+                                            .id("sync-library")
+                                            .debug_selector(|| "sync-library".to_string())
+                                            .track_focus(&f_sync)
+                                            .tab_index(Self::TAB_CONTENT)
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Sync library")
+                                            .border_2()
+                                            .border_color(self.focus_border(&f_sync, window, gpui::rgba(0x00000000), t))
+                                            .cursor_pointer()
+                                            .text_size(gpui::px(10.0))
+                                            .text_color(t.text_secondary)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.sync_library(cx);
+                                            }))
+                                            .child("Sync"),
+                                    )
                             })
                             .child(if self.route == Route::NowPlaying {
                                 div().child(self.now_playing.clone())
@@ -4271,6 +4462,85 @@ fn eq_bar(
         )
 }
 
+/// Read a cached cover from disk, if one was written on an earlier run.
+///
+/// The covers directory was write-only: every launch re-downloaded all of it,
+/// which is why the grid took a server round trip to fill even though the bytes
+/// were already on disk.
+fn read_cover_from_disk(
+    dir: &std::path::Path,
+    cover_id: &str,
+) -> Option<(Vec<u8>, gpui::ImageFormat)> {
+    for (ext, format) in [
+        ("png", gpui::ImageFormat::Png),
+        ("jpg", gpui::ImageFormat::Jpeg),
+    ] {
+        let path = dir.join(format!("{cover_id}.{ext}"));
+        if let Ok(bytes) = std::fs::read(&path)
+            && !bytes.is_empty()
+        {
+            return Some((bytes, format));
+        }
+    }
+    None
+}
+
+/// Page size when walking the album list during a sync.
+const SYNC_ALBUM_PAGE: u32 = 500;
+/// A hard stop so a misbehaving server cannot make a sync run forever.
+const SYNC_MAX_ALBUMS: usize = 50_000;
+
+/// Fetch the whole library: every album page, every album's tracks, the artist
+/// list and the playlists.
+///
+/// One request per album is the only way the Subsonic API exposes a complete
+/// song list, so this is deliberately an explicit, progress-reported action
+/// rather than something that happens on startup.
+fn fetch_full_library(
+    client: &NavidromeClient,
+    progress: &std::sync::atomic::AtomicUsize,
+) -> Result<crate::library::cache::LibrarySnapshot, crate::navidrome::error::NavidromeError> {
+    use crate::navidrome::client::AlbumListKind;
+    use std::sync::atomic::Ordering;
+
+    let mut albums = Vec::new();
+    let mut offset = 0u32;
+    loop {
+        let page = client.album_list(AlbumListKind::Newest, SYNC_ALBUM_PAGE, offset)?;
+        let fetched = page.len();
+        albums.extend(page);
+        if fetched < SYNC_ALBUM_PAGE as usize || albums.len() >= SYNC_MAX_ALBUMS {
+            break;
+        }
+        offset = offset.saturating_add(fetched as u32);
+    }
+
+    let artists = client.artists()?;
+    let playlists = client.playlists()?;
+
+    let mut songs = Vec::new();
+    for album in &albums {
+        progress.fetch_add(1, Ordering::Relaxed);
+        // A single unreadable album must not lose the whole sync.
+        match client.album(&album.id) {
+            Ok(detail) => songs.extend(detail.songs),
+            Err(error) => tracing::warn!("sync: skipping album {}: {error}", album.id),
+        }
+    }
+
+    Ok(crate::library::cache::LibrarySnapshot {
+        version: crate::library::cache::SNAPSHOT_VERSION,
+        fetched_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        albums,
+        artists,
+        playlists,
+        songs,
+    })
+}
+
 /// A section heading inside a results page (SONGS, ALBUMS, …).
 fn section_label(label: &'static str, t: &crate::theme::Colors) -> impl IntoElement {
     div()
@@ -4361,13 +4631,20 @@ fn spawn_home_fetch(
                 h.favorites = favorites;
             });
         });
+        let covers_dir_for_grid = covers_dir.clone();
         for album in albums.iter().take(24) {
             if let Some(cover_id) = &album.cover_art_id {
                 let cid_bg = cover_id.clone();
                 let client_bg = client.clone();
+                let dir_bg = covers_dir_for_grid.clone();
                 let fetched = cx
                     .background_executor()
-                    .spawn(async move { client_bg.cover_bytes(&cid_bg, 512) })
+                    .spawn(async move {
+                        if let Some((bytes, _)) = read_cover_from_disk(&dir_bg, &cid_bg) {
+                            return Ok::<Vec<u8>, crate::navidrome::error::NavidromeError>(bytes);
+                        }
+                        client_bg.cover_bytes(&cid_bg, 512)
+                    })
                     .await;
                 if let Ok(bytes) = fetched {
                     let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
@@ -4722,6 +4999,8 @@ pub const COVER_CACHE_CAP: usize = 200;
 
 #[derive(Clone, Default)]
 pub struct HomeState {
+    /// True while the lists came from the disk snapshot rather than the server.
+    pub from_cache: bool,
     pub albums: Vec<crate::library::Album>,
     pub loading: bool,
     pub error: Option<String>,

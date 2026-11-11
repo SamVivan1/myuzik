@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub id: String,
     pub title: String,
@@ -16,7 +16,7 @@ pub struct Track {
     pub genre: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Album {
     pub id: String,
     pub name: String,
@@ -29,13 +29,13 @@ pub struct Album {
     pub starred: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AlbumDetail {
     pub album: Album,
     pub songs: Vec<Track>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Artist {
     pub id: String,
     pub name: String,
@@ -43,13 +43,13 @@ pub struct Artist {
     pub cover_art_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArtistDetail {
     pub artist: Artist,
     pub albums: Vec<Album>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Playlist {
     pub id: String,
     pub name: String,
@@ -58,13 +58,13 @@ pub struct Playlist {
     pub owner: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlaylistDetail {
     pub playlist: Playlist,
     pub songs: Vec<Track>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchResults {
     pub artists: Vec<Artist>,
     pub albums: Vec<Album>,
@@ -72,7 +72,7 @@ pub struct SearchResults {
     pub playlists: Vec<Playlist>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct HomeData {
     pub recently_added: Vec<Album>,
     pub recently_played: Vec<Album>,
@@ -80,6 +80,8 @@ pub struct HomeData {
     pub random: Vec<Album>,
 }
 
+pub mod cache;
 pub mod radio;
+pub mod search_index;
 
 pub use radio::Radio;

@@ -246,19 +246,20 @@ fn tab_order_is_nav_then_content_then_player_bar_then_chrome(cx: &mut TestAppCon
 
     // Sidebar order is the visual order of the navigation list.
     assert_eq!(&order[..8], &NAV_ORDER, "sidebar tab order: {order:?}");
-    // The two content controls on Home, then the album cards.
+    // The three content controls on Home, then the album cards.
     assert_eq!(order[9], "content-search-shortcut");
     assert_eq!(order[10], "content-see-all-albums");
-    assert_eq!(order[11], "album:a1");
-    assert_eq!(order[12], "album:a2");
+    assert_eq!(order[11], "content-sync");
+    assert_eq!(order[12], "album:a1");
+    assert_eq!(order[13], "album:a2");
     // The player bar follows the content.
     assert_eq!(
-        &order[13..22],
+        &order[14..23],
         &PLAYER_ORDER,
         "player bar tab order: {order:?}"
     );
     // Window chrome comes last.
-    assert_eq!(&order[22..25], &CHROME_ORDER, "chrome tab order: {order:?}");
+    assert_eq!(&order[23..26], &CHROME_ORDER, "chrome tab order: {order:?}");
 
     // The sidebar "pin lyrics" button belongs to the navigation group.
     assert_eq!(order[8], "sidebar-pin-lyrics");
@@ -317,8 +318,8 @@ fn enter_activates_the_focused_nav_item(cx: &mut TestAppContext) {
 fn enter_opens_the_focused_album_card(cx: &mut TestAppContext) {
     let (_server, shell, mut vcx) = mock_shell(cx, "enter-album");
 
-    // 8 nav stops + pin-lyrics + 2 content controls, then the first album card.
-    for _ in 0..12 {
+    // 8 nav stops + pin-lyrics + 3 content controls, then the first album card.
+    for _ in 0..13 {
         press_tab(&mut vcx);
     }
     assert_eq!(
