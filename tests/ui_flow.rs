@@ -1114,3 +1114,98 @@ fn navigating_to_artists_clears_album_detail(cx: &mut TestAppContext) {
         "stale album detail must be cleared when navigating to Artists"
     );
 }
+
+/// A search that matches an album or an artist but no songs must still show
+/// those groups. It used to render only `SONGS`, so such a query produced a
+/// blank page with no "No results" either.
+#[gpui::test]
+fn search_renders_album_and_artist_groups(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    // An album and an artist match; no songs at all.
+    let _m4 = server.mock(|when, then| {
+        when.method(GET).path("/rest/search3.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""searchResult3":{"song":[],"album":[{"id":"al9","name":"Alpine","artist":"Artist A","songCount":3,"duration":300}],"artist":[{"id":"ar9","name":"Alpine Artist","albumCount":2}]}"#));
+    });
+
+    let base = server.base_url();
+    let window = cx.update(move |cx| {
+        let paths = temp_paths("searchgroups");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, cmd_rx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(evt_tx);
+            std::mem::forget(cmd_rx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    cx.run_until_parked();
+
+    let search = cx.debug_bounds("nav-search").expect("nav-search");
+    cx.simulate_click(search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alpine");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.search_result_count()) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The results arrive asynchronously; paint a few frames so the new rows
+    // have been laid out.
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    let controls = shell.read_with(&cx, |s, _| s.focus_controls());
+    assert!(
+        controls.iter().any(|c| c == "search-album-0"),
+        "no album row was registered for keyboard focus: {controls:?}"
+    );
+    assert!(
+        cx.debug_bounds("search-album-0").is_some(),
+        "an album match rendered no album row: the search page only shows songs"
+    );
+    assert!(
+        cx.debug_bounds("search-artist-0").is_some(),
+        "an artist match rendered no artist row"
+    );
+}

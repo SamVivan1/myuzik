@@ -595,3 +595,39 @@ fn keyboard_focus_wiring_is_present_for_every_group() {
         );
     }
 }
+
+/// Long titles must be clamped, not wrapped.
+///
+/// Nothing in the UI clamped text, so a long album title wrapped and made the
+/// artist baseline differ per card (ragged grid), and a long track title wrapped
+/// to three lines inside the 88 px player bar.
+#[test]
+fn long_text_is_clamped_where_it_would_wrap() {
+    let shell = include_str!("../src/ui/shell.rs");
+
+    // The chain that renders each text, and what it is for.
+    let cases: [(&str, &str); 4] = [
+        (".child(title.to_string())", "album card / track row title"),
+        (".child(artist.to_string())", "album card / track row artist"),
+        ("current_title.clone()", "player bar title"),
+        (".child(current_artist.clone())", "player bar artist"),
+    ];
+
+    for (anchor, what) in cases {
+        let mut from = 0;
+        let mut seen = 0;
+        while let Some(offset) = shell[from..].find(anchor) {
+            let at = from + offset;
+            // The style chain for one text element is well under this size.
+            let start = at.saturating_sub(600);
+            let chain = &shell[start..at];
+            assert!(
+                chain.contains("line_clamp(1)"),
+                "{what} is not clamped to one line (offset {at})"
+            );
+            seen += 1;
+            from = at + anchor.len();
+        }
+        assert!(seen > 0, "rendering code for {what} not found");
+    }
+}

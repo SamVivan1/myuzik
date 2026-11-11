@@ -581,6 +581,42 @@ impl Shell {
                     && index < songs.len()
                 {
                     self.play_tracks(songs, index, cx);
+                } else if let Some(index) = other
+                    .strip_prefix("search-album-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(id) = self
+                        .search_results
+                        .as_ref()
+                        .and_then(|r| r.albums.get(index))
+                        .map(|a| a.id.clone())
+                    {
+                        self.open_album(id, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("search-artist-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(id) = self
+                        .search_results
+                        .as_ref()
+                        .and_then(|r| r.artists.get(index))
+                        .map(|a| a.id.clone())
+                    {
+                        self.select_artist(id, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("search-playlist-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(id) = self
+                        .search_results
+                        .as_ref()
+                        .and_then(|r| r.playlists.get(index))
+                        .map(|p| p.id.clone())
+                    {
+                        self.play_playlist(id, cx);
+                    }
                 }
             }
         }
@@ -2048,6 +2084,11 @@ impl Render for Shell {
                                     .text_size(gpui::px(13.0))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .text_color(t.clay_ink)
+                                    // A long title used to wrap to three lines
+                                    // inside the 88 px player bar and push the
+                                    // artist out of it.
+                                    .line_clamp(1)
+                                    .text_ellipsis()
                                     .child(if current_title.is_empty() {
                                         "Nothing playing".to_string()
                                     } else {
@@ -2059,6 +2100,8 @@ impl Render for Shell {
                                     .text_size(gpui::px(10.0))
                                     .text_color(t.clay_ink)
                                     .opacity(0.7)
+                                    .line_clamp(1)
+                                    .text_ellipsis()
                                     .child(current_artist.clone()),
                             ),
                     )
@@ -3075,8 +3118,101 @@ impl Render for Shell {
                                     );
                                 }
                                 if let Some(results) = &self.search_results {
+                                    // One row style for every result group. The page
+                                    // used to render only SONGS, so a query that
+                                    // matched an album or an artist showed nothing.
+                                    let mut result_row =
+                                        |kind: &'static str,
+                                         idx: usize,
+                                         id: String,
+                                         label: String,
+                                         aria: String,
+                                         window: &gpui::Window,
+                                         cx: &mut gpui::Context<Self>| {
+                                            let key = format!("search-{kind}-{idx}");
+                                            let handle = self.focus_for(&key, Self::TAB_CONTENT, cx);
+                                            let selector = key.clone();
+                                            div()
+                                                .id(key.clone())
+                                                .debug_selector(move || selector.clone())
+                                                .track_focus(&handle)
+                                                .tab_index(Self::TAB_CONTENT)
+                                                .role(gpui::Role::Button)
+                                                .border_2()
+                                                .border_color(self.focus_border(
+                                                    &handle,
+                                                    window,
+                                                    t.glass_border,
+                                                    t,
+                                                ))
+                                                .aria_label(aria)
+                                                .cursor_pointer()
+                                                .px(gpui::px(12.0))
+                                                .py(gpui::px(8.0))
+                                                .rounded(gpui::px(10.0))
+                                                .bg(t.glass_tint)
+                                                .border_1()
+                                                .border_color(t.glass_border)
+                                                .text_size(gpui::px(12.0))
+                                                .line_clamp(1)
+                                                .text_ellipsis()
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    match kind {
+                                                        "album" => this.open_album(id.clone(), cx),
+                                                        "artist" => this.select_artist(id.clone(), cx),
+                                                        _ => this.play_playlist(id.clone(), cx),
+                                                    }
+                                                }))
+                                                .child(label)
+                                        };
+                                    if !results.artists.is_empty() {
+                                        col = col.child(section_label("ARTISTS", t));
+                                        for (i, artist) in results.artists.iter().take(10).enumerate() {
+                                            let album_count = artist
+                                                .album_count
+                                                .map(|count| format!(" · {count} albums"))
+                                                .unwrap_or_default();
+                                            col = col.child(result_row(
+                                                "artist",
+                                                i,
+                                                artist.id.clone(),
+                                                format!("{}{album_count}", artist.name),
+                                                format!("Open artist {}", artist.name),
+                                                window,
+                                                cx,
+                                            ));
+                                        }
+                                    }
+                                    if !results.albums.is_empty() {
+                                        col = col.child(section_label("ALBUMS", t));
+                                        for (i, album) in results.albums.iter().take(10).enumerate() {
+                                            col = col.child(result_row(
+                                                "album",
+                                                i,
+                                                album.id.clone(),
+                                                format!("{} — {}", album.name, album.artist),
+                                                format!("Open album {}", album.name),
+                                                window,
+                                                cx,
+                                            ));
+                                        }
+                                    }
+                                    if !results.playlists.is_empty() {
+                                        col = col.child(section_label("PLAYLISTS", t));
+                                        for (i, playlist) in results.playlists.iter().take(10).enumerate() {
+                                            col = col.child(result_row(
+                                                "playlist",
+                                                i,
+                                                playlist.id.clone(),
+                                                playlist.name.clone(),
+                                                format!("Play playlist {}", playlist.name),
+                                                window,
+                                                cx,
+                                            ));
+                                        }
+                                    }
                                     if !results.songs.is_empty() {
-                                        col = col.child(div().text_size(gpui::px(9.0)).font_weight(gpui::FontWeight::BOLD).text_color(t.gold).child("SONGS"));
+                                        col = col.child(section_label("SONGS", t));
                                         let songs = std::sync::Arc::new(results.songs.clone());
                                         for (i, tr) in results.songs.iter().take(20).enumerate() {
                                             let songs2 = songs.clone();
@@ -3111,7 +3247,11 @@ impl Render for Shell {
                                             );
                                         }
                                     }
-                                    if results.songs.is_empty() && results.albums.is_empty() && results.artists.is_empty() {
+                                    if results.songs.is_empty()
+                                        && results.albums.is_empty()
+                                        && results.artists.is_empty()
+                                        && results.playlists.is_empty()
+                                    {
                                         col = col.child(
                                             div().text_size(gpui::px(11.0)).text_color(t.text_secondary).child("No results"),
                                         );
@@ -3935,6 +4075,15 @@ fn eq_bar(
         )
 }
 
+/// A section heading inside a results page (SONGS, ALBUMS, …).
+fn section_label(label: &'static str, t: &crate::theme::Colors) -> impl IntoElement {
+    div()
+        .text_size(gpui::px(9.0))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(t.gold)
+        .child(label)
+}
+
 /// Turn a library/server failure into something a user can act on.
 ///
 /// The UI used to print `Debug` (`Server("HTTP 500")`), which tells the user
@@ -4269,12 +4418,16 @@ fn album_card(
                         .child("▶"),
                 ),
         )
+        // Long album titles wrap by default, which made the artist baseline
+        // differ per card and the grid rows ragged. One clamped line instead.
         .child(
             gpui::div()
                 .w_full()
                 .text_size(gpui::px(12.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
+                .line_clamp(1)
+                .text_ellipsis()
                 .child(title.to_string()),
         )
         .child(
@@ -4282,6 +4435,8 @@ fn album_card(
                 .w_full()
                 .text_size(gpui::px(10.0))
                 .text_color(t.text_secondary)
+                .line_clamp(1)
+                .text_ellipsis()
                 .child(artist.to_string()),
         )
 }
@@ -4337,12 +4492,16 @@ fn track_row(
                         .text_size(gpui::px(12.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(text_color)
+                        .line_clamp(1)
+                        .text_ellipsis()
                         .child(title.to_string()),
                 )
                 .child(
                     gpui::div()
                         .text_size(gpui::px(10.0))
                         .text_color(t.text_secondary)
+                        .line_clamp(1)
+                        .text_ellipsis()
                         .child(artist.to_string()),
                 ),
         )
