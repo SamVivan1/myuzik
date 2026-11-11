@@ -8,12 +8,12 @@ Commit perbaikan: `63ffddf`, `36de9a2`, `2b7a344`, `e1426ac`, `0abf5b9`, `3dfe83
 ```
 cargo fmt --check                          → bersih
 cargo clippy --all-targets -D warnings     → bersih
-cargo test -- --test-threads=1             → 208 passed, 0 failed, 18 ignored
+cargo test -- --test-threads=1             → 257 passed, 0 failed, 18 ignored
 cargo test --test config_credentials -- --ignored
                                            → keyring nyata: round trip OK, tanpa file plaintext
 ```
 
-Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+57 test**, semuanya hijau.
+Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+106 test**, semuanya hijau.
 18 test ignored adalah live-Navidrome (9), live-player (1), screenshot (4), live MPRIS/DBus (2),
 dan live keyring (1) — butuh server/DBus/display nyata.
 
@@ -70,24 +70,40 @@ keyring opt-in + alasannya), `docs/accessibility.md` (bagian **Activation**: Ent
 Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya jalur UI),
 `docs/performance.md` (batas cache lirik kini benar-benar ditegakkan; tambah cache rounded cover).
 
+## Gelombang 2 — temuan P1 tersisa yang berdampak tinggi
+
+| Temuan | Perbaikan |
+|---|---|
+| **FL-07** stream gagal, UI tetap bilang Playing | `PlaybackStatus::Error` kini benar-benar dibentuk, alasan ditampilkan segera, lalu retry berbackoff (3 percobaan) dan akhirnya lewati track; berhenti setelah 3 track mati berturut-turut. `Load`/`Seek` yang gagal dilaporkan, dan `Load` yang tak pernah mulai tidak lagi memicu `TrackStarted` (scrobble/metadata/lirik palsu) |
+| **FL-12** buffering tak terlihat | `PlayerEvent::Buffering` → `PlayerState::set_buffering`, bukan lagi `tracing::debug!` |
+| **FL-13** dua sumber status (ikon berkedip) | `set_status_from_engine` menyaring `Stopped` transien saat load; mirror UI/tray/MPRIS memakai status hasil saringan |
+| **FL-08** shuffle/repeat tak bisa dicapai | **Ctrl+S** shuffle, **Ctrl+R** siklus repeat off→all→one→off. (Tombol di player bar & baris Settings dicoba lebih dulu dan membuat harness headless *stack overflow* di layout gpui rev ini — dicatat sebagai batasan) |
+| **UI-03** search hanya merender Songs | grup ARTISTS/ALBUMS/PLAYLISTS ikut dirender, tiap baris tab-stop yang bisa diaktifkan Enter, empty-state menghitung keempat koleksi |
+| **UI-05** placeholder bohong, tanpa debounce | pencarian saat mengetik dengan debounce 250 ms (5 ketukan → 1 request), Enter langsung, Esc membersihkan dan keluar ke Home bila field sudah kosong |
+| **UI-09** Now Playing kosong & header salah | empty state saat belum ada track; header mengikuti status lirik (SYNCED/UNSYNCED/INSTRUMENTAL/NO LYRICS/LYRICS ERROR/LOADING); footer tak lagi mencetak " — " |
+| **UI-11** judul panjang membungkus | kartu album, baris track, dan player bar di-clamp 1 baris + ellipsis, dijaga test source-level |
+| **INT-06** tanpa single-instance | flock `$XDG_RUNTIME_DIR/myuzik.lock` sebelum apa pun berjalan; instance kedua meminta instance pertama menampilkan window lalu keluar |
+| **INT-08** config rusak hilang senyap | file dipindah ke `config.toml.corrupt-<ts>` (tidak pernah ditimpa/dihapus), default dipakai, pemulihan sampai ke user sebagai toast; ada `version` + titik migrasi; key tak dikenal dilaporkan dan ditulis balik |
+| **INT-11** error lirik jadi "No lyrics" | kegagalan nyata (401/timeout/jaringan) kini `LyricsStatus::Error` dengan kalimat yang bisa ditindaklanjuti |
+| **INT-12** 429 sama dengan 5xx, tanpa retry | varian `RateLimited` + `is_retryable()`/`retry_delay()` (eksponensial, batas 30 s); fetch cover (jalur non-interaktif) retry 3× dengan backoff |
+
 ---
 
 ## Sisa yang belum dikerjakan (jujur)
 
 **Belum disentuh sama sekali** (semua masih persis seperti di laporan audit):
 
-- FL-07 state `PlaybackStatus::Error` + retry/auto-advance setelah stream gagal
-- FL-08 kontrol UI shuffle/repeat (dan `LoopStatus` baru berguna setelah ada nilainya)
 - FL-11 scrobble: `track_duration` basi, delta ≥2 s dibuang, gagal submit tanpa retry
 - FL-19 shutdown thread pemutar
-- INT-06 single-instance guard · INT-08 migrasi config rusak · INT-11 error lirik ditelan
-- INT-12 retry/backoff + `429` · INT-13 TTL cache lirik (prune sudah, TTL belum)
+- INT-13 TTL cache lirik (prune sudah, TTL belum)
 - PF-05 cache cover disk write-only · PF-07 N+1 fetch cover · PF-08 `ureq::Agent` per track
 - PF-10 dedupe in-flight · PF-11…PF-20
 - UI-01 sisa: `on_a11y_action` untuk screen reader (Enter sudah, AT client belum)
-- UI-03 (search hanya merender Songs) · UI-05 (debounce/placeholder) · UI-09 (empty state
-  Now Playing) · UI-11 (truncation) · UI-13 (OS accent) · UI-19 · UI-20 · UI-21 · UI-23 ·
-  UI-24 · UI-25 (model route) · UI-26 (panah global) · UI-27 (warna mentah) · UI-29 · UI-30
+- UI-13 (OS accent) · UI-19 · UI-20 · UI-21 · UI-23 · UI-24 · UI-25 (model route) ·
+  UI-26 (panah global) · UI-27 (warna mentah) · UI-29 · UI-30
+- Kontrol shuffle/repeat yang terlihat (shortcut sudah ada) — terhalang bug layout gpui
+  yang membuat harness headless stack overflow saat elemen teks ditambahkan ke player bar
+  atau baris Settings
 
 ## Tidak diverifikasi
 

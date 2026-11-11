@@ -8,8 +8,9 @@ Audit dijalankan oleh **4 auditor paralel** dengan lingkup tulis yang terpisah, 
 disintesis oleh Lead. Setiap klaim di laporan asal punya bukti `file:line`.
 
 > **Status perbaikan:** lihat [fixes/README.md](fixes/README.md) — **keenam P0 selesai**,
-> 20 P1 dan 4 P2 ditutup, gerbang `fmt`/`clippy`/`test` hijau dengan 208 test lulus.
-> Daftar sisa yang belum dikerjakan ada di dokumen itu.
+> ditambah 12 temuan P1/P2 gelombang kedua (FL-07/08/12/13, UI-03/05/09/11,
+> INT-06/08/11/12). Gerbang `fmt`/`clippy`/`test` hijau dengan 257 test lulus.
+> Daftar sisa ada di dokumen itu.
 
 | Laporan | Lingkup | P0 | P1 | P2 | Total |
 |---|---|---:|---:|---:|---:|
