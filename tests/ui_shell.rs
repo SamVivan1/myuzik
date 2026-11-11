@@ -353,3 +353,74 @@ fn now_playing_without_a_track_shows_an_empty_state(cx: &mut TestAppContext) {
         "Now Playing with no track rendered no empty state"
     );
 }
+
+/// Shuffle and repeat existed in `Queue` but nothing in the UI could reach them,
+/// so the feature was unreachable despite being listed as done.
+#[gpui::test]
+fn shuffle_and_repeat_are_reachable_and_toggle(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("shuffle");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        // A configured server puts the shell on Home, where the player bar lives.
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    // The player bar registers its focus handles while it is painted.
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        !shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "shuffle starts off"
+    );
+    // Ctrl+S toggles shuffle from the keyboard.
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "Ctrl+S did not turn shuffle on"
+    );
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    assert!(
+        !shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "Ctrl+S did not turn shuffle off"
+    );
+
+    // Repeat cycles off -> all -> one -> off.
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: off"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: all",
+        "Ctrl+R did not advance repeat"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: one"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: off"
+    );
+}

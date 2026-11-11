@@ -548,6 +548,8 @@ impl Shell {
             // Settings rows.
             "settings-quality" => self.cycle_quality(),
             "settings-scrobble" => self.toggle_scrobble(),
+            "settings-shuffle" => self.toggle_shuffle(cx),
+            "settings-repeat" => self.toggle_repeat(cx),
             "settings-reduce-motion" => self.toggle_reduce_motion(cx),
             "settings-close-to-tray" => self.toggle_close_to_tray(),
             "settings-autoplay" => self.toggle_autoplay(),
@@ -620,6 +622,42 @@ impl Shell {
                 }
             }
         }
+        cx.notify();
+    }
+
+    /// Whether shuffle is on.
+    pub fn shuffle_on(&self, cx: &gpui::App) -> bool {
+        self.player_state.read(cx).queue.shuffle()
+    }
+
+    /// The repeat button's label, which is also its state readout.
+    pub fn repeat_label(&self, cx: &gpui::App) -> &'static str {
+        match self.player_state.read(cx).queue.repeat() {
+            crate::player::queue::RepeatMode::Off => "Repeat: off",
+            crate::player::queue::RepeatMode::All => "Repeat: all",
+            crate::player::queue::RepeatMode::One => "Repeat: one",
+        }
+    }
+
+    /// Toggle shuffle. The queue already supported it; nothing in the UI reached
+    /// it, so the feature was unreachable.
+    pub fn toggle_shuffle(&mut self, cx: &mut gpui::Context<Self>) {
+        let on = !self.player_state.read(cx).queue.shuffle();
+        self.player_state.update(cx, |ps, _cx| ps.set_shuffle(on));
+        self.sync_mpris_queue(cx);
+        cx.notify();
+    }
+
+    /// Cycle repeat off -> all -> one -> off.
+    pub fn toggle_repeat(&mut self, cx: &mut gpui::Context<Self>) {
+        use crate::player::queue::RepeatMode;
+        let next = match self.player_state.read(cx).queue.repeat() {
+            RepeatMode::Off => RepeatMode::All,
+            RepeatMode::All => RepeatMode::One,
+            RepeatMode::One => RepeatMode::Off,
+        };
+        self.player_state.update(cx, |ps, _cx| ps.set_repeat(next));
+        self.sync_mpris_queue(cx);
         cx.notify();
     }
 
@@ -2570,6 +2608,11 @@ impl Render for Shell {
                         return;
                     }
                     match key {
+                        // Shuffle and repeat had no reachable control at all.
+                        // Global shortcuts keep them usable without touching the
+                        // player bar layout.
+                        "s" if mods.control => this.toggle_shuffle(cx),
+                        "r" if mods.control => this.toggle_repeat(cx),
                         "space" if !mods.control && !mods.alt => {
                             this.player_state.update(cx, |ps, _cx| ps.toggle());
                             this.player_handle.tx.send(PlayerCommand::Toggle).ok();
@@ -3304,6 +3347,8 @@ impl Render for Shell {
                                 let mut col = div().flex().flex_col().gap(gpui::px(8.0));
                                 let f_set_quality = self.focus_for("settings-quality", Self::TAB_CONTENT, cx);
                                 let f_set_scrobble = self.focus_for("settings-scrobble", Self::TAB_CONTENT, cx);
+                                let f_set_shuffle = self.focus_for("settings-shuffle", Self::TAB_CONTENT, cx);
+                                let f_set_repeat = self.focus_for("settings-repeat", Self::TAB_CONTENT, cx);
                                 let f_set_lyrics_source =
                                     self.focus_for("settings-lyrics-source", Self::TAB_CONTENT, cx);
                                 let f_set_reduce_motion =
@@ -3341,6 +3386,7 @@ impl Render for Shell {
                                             this.toggle_scrobble();
                                         })),
                                     )
+
                                     .child(
                                         setting_row(
                                             "Autoplay similar",
