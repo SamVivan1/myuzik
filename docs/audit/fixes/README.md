@@ -8,12 +8,12 @@ Commit perbaikan: `63ffddf`, `36de9a2`, `2b7a344`, `e1426ac`, `0abf5b9`, `3dfe83
 ```
 cargo fmt --check                          → bersih
 cargo clippy --all-targets -D warnings     → bersih
-cargo test -- --test-threads=1             → 257 passed, 0 failed, 18 ignored
+cargo test -- --test-threads=1             → 309 passed, 0 failed, 18 ignored
 cargo test --test config_credentials -- --ignored
                                            → keyring nyata: round trip OK, tanpa file plaintext
 ```
 
-Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+106 test**, semuanya hijau.
+Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+158 test**, semuanya hijau.
 18 test ignored adalah live-Navidrome (9), live-player (1), screenshot (4), live MPRIS/DBus (2),
 dan live keyring (1) — butuh server/DBus/display nyata.
 
@@ -87,17 +87,26 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 | **INT-11** error lirik jadi "No lyrics" | kegagalan nyata (401/timeout/jaringan) kini `LyricsStatus::Error` dengan kalimat yang bisa ditindaklanjuti |
 | **INT-12** 429 sama dengan 5xx, tanpa retry | varian `RateLimited` + `is_retryable()`/`retry_delay()` (eksponensial, batas 30 s); fetch cover (jalur non-interaktif) retry 3× dengan backoff |
 
+## Gelombang 3 — cacat fungsional & cache
+
+| Temuan | Perbaikan |
+|---|---|
+| **UI-19** error jaringan tampil sebagai "No albums — Connect a server" | grid kini punya panel error (`Role::Alert`, border `danger`, span penuh) dengan **satu aksi Retry**, dan pustaka yang benar-benar kosong punya state sendiri. Sesuai `docs/design.md:463` |
+| **UI-20** subjudul teknis "100 albums loaded" | diganti status jujur: "Offline copy · synced 3 days ago" saat dari snapshot, dan progres sync saat berjalan |
+| **FL-11** scrobble | durasi tidak lagi mewarisi lagu sebelumnya; UI yang tersendat tidak lagi kehilangan waktu dengar (tick di-*cap* oleh jam dengan lantai 2 s, bukan dibuang saat posisi melompat); submit gagal di-retry berbackoff |
+| **FL-19** thread pemutar tak pernah di-shutdown | `PlayerCommand::Shutdown`, pipeline di-`Null`, join berbatas 2 s saat app quit; channel perintah jadi bounded(256); event loop berhenti saat consumer mati |
+| **PF-08** `ureq::Agent` baru per lagu (LRCLIB) | satu Agent dipakai ulang; diuji lewat stub loopback (2 lagu → 1 koneksi TCP) |
+| **PF-10** tanpa dedupe in-flight cover | satu `CoverCache` bersama di Shell dengan klaim in-flight; skip cepat tidak lagi mengunduh cover yang sama berkali-kali |
+| **cache** (cacat fitur baru) | progres sync terlihat (ticker 500 ms), aksi **Settings → Cached library → Clear**, prune cover saat startup (2 000 file / 200 MB) |
+
 ---
 
 ## Sisa yang belum dikerjakan (jujur)
 
 **Belum disentuh sama sekali** (semua masih persis seperti di laporan audit):
 
-- FL-11 scrobble: `track_duration` basi, delta ≥2 s dibuang, gagal submit tanpa retry
-- FL-19 shutdown thread pemutar
 - INT-13 TTL cache lirik (prune sudah, TTL belum)
-- PF-05 cache cover disk write-only · PF-07 N+1 fetch cover · PF-08 `ureq::Agent` per track
-- PF-10 dedupe in-flight · PF-11…PF-20
+- PF-07 N+1 fetch cover (24 cover masih berurutan) · PF-11…PF-20
 - UI-01 sisa: `on_a11y_action` untuk screen reader (Enter sudah, AT client belum)
 - UI-13 (OS accent) · UI-19 · UI-20 · UI-21 · UI-23 · UI-24 · UI-25 (model route) ·
   UI-26 (panah global) · UI-27 (warna mentah) · UI-29 · UI-30

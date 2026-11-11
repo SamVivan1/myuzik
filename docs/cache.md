@@ -81,15 +81,28 @@ GStreamer. Cache hanya menyentuh metadata dan gambar.
 | `tests/search_index.rs` | 11 test index |
 | `tests/library_cache_flow.rs` | 3 test alur end-to-end |
 
+### Status, progres, dan pembersihan
+
+- Saat daftar berasal dari snapshot, subjudul Home berbunyi
+  **"Offline copy · synced 3 hari lalu"** (`Shell::library_status`).
+- Selama sync, subjudul itu berganti jadi **"Syncing… N albums"**; ticker 500 ms
+  memaksa repaint karena fetch berjalan di background executor.
+- **Settings → Cached library → Clear** membuang snapshot, index, cover di memori,
+  dan memangkas direktori cover. Aman: semuanya bisa diunduh ulang lewat Sync.
+- Direktori cover dipangkas sekali per start ke batas **2 000 file / 200 MB**
+  (tertua dibuang lebih dulu, file yang sedang diunduh tidak disentuh).
+- Satu `CoverCache` bersama memegang klaim *in-flight*: skip cepat antar lagu di
+  album yang sama tidak lagi mengunduh cover yang sama berkali-kali.
+
 ## Batas & hal yang belum dikerjakan
 
 - **Belum ada sync otomatis/berkala.** Sync hanya lewat tombol (sesuai
-  permintaan). `LibrarySnapshot::is_stale` sudah tersedia kalau nanti mau
-  menampilkan "cache berumur N hari".
-- **Cover tidak pernah di-prune** — direktori cover tumbuh seiring jumlah cover
-  unik yang pernah dilihat. Belum ada batas ukuran seperti pada cache lirik.
+  permintaan). `LibrarySnapshot::is_stale` sudah tersedia, dan status line sudah
+  memakai umur snapshot, tapi belum ada ambang yang memicu sync sendiri.
 - **Sync satu request per album** (sekuensial). Library 1000 album berarti 1000
   request; bisa dipercepat dengan konkurensi terbatas bila perlu.
+- **Prune cover hanya saat startup** — bukan setelah setiap unduhan, jadi satu
+  sesi yang sangat panjang bisa melewati batas sampai restart berikutnya.
 - **Tidak ada migrasi snapshot lama**: beda versi = Err, lalu sync ulang.
 - `cargo test` butuh stack thread lebih besar (`.cargo/config.toml` mengatur
   `RUST_MIN_STACK=32 MiB`): pohon elemen GPUI cukup dalam sehingga stack default
