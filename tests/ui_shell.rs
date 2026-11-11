@@ -424,3 +424,54 @@ fn shuffle_and_repeat_are_reachable_and_toggle(cx: &mut TestAppContext) {
         "Repeat: off"
     );
 }
+
+/// A network failure must not be presented as "you have no albums" with advice to
+/// connect a server that is already connected. docs/design.md:463 asks for a
+/// plain-language error with one action, so the grid shows the real reason and a
+/// Retry control instead.
+#[gpui::test]
+fn a_library_error_shows_the_reason_and_a_retry(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("lib-error");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        // Port 9 refuses connections: the library load will fail.
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.home_error(cx).is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        shell.read_with(&cx, |s, cx| s.home_error(cx).is_some()),
+        "the library error was not recorded"
+    );
+    assert!(
+        cx.debug_bounds("library-error").is_some(),
+        "a failed library load rendered no error panel"
+    );
+    assert!(
+        cx.debug_bounds("library-retry").is_some(),
+        "the error panel has no Retry control"
+    );
+}

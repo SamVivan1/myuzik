@@ -53,6 +53,11 @@ pub struct Shell {
     syncing: Arc<std::sync::atomic::AtomicBool>,
     /// Items fetched so far during a sync, for the progress label.
     sync_progress: Arc<std::sync::atomic::AtomicUsize>,
+    /// Unix seconds of the snapshot currently in memory (None when live).
+    library_snapshot_at: Option<u64>,
+    /// Owns `<cache>/covers`: disk reads/writes, pruning, and the shared
+    /// in-flight set that dedupes concurrent downloads of the same cover.
+    cover_cache: Arc<crate::library::cover_cache::CoverCache>,
     /// Autoplay radio state (genre paging, recent-history filter).
     radio: Arc<std::sync::Mutex<crate::library::radio::Radio>>,
     /// Mirrors `config.autoplay` so the async completion can re-check it.
@@ -121,6 +126,7 @@ impl Shell {
                 &snapshot.songs,
             ))
         });
+        let cached_snapshot_at = cached_snapshot.as_ref().map(|snapshot| snapshot.fetched_at);
         let home_state = {
             let snapshot = cached_snapshot.clone();
             cx.new(move |_cx| {
@@ -186,6 +192,47 @@ impl Shell {
             });
         })
         .detach();
+        let cover_cache = Arc::new(crate::library::cover_cache::CoverCache::new(
+            paths.covers.clone(),
+        ));
+        // Bound the artwork directory once per start. It used to grow forever:
+        // nothing ever pruned it, so it kept every cover the app had ever seen.
+        {
+            let covers = cover_cache.clone();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .spawn(async move {
+                        let report = covers.prune(
+                            crate::library::cover_cache::MAX_COVER_FILES,
+                            crate::library::cover_cache::MAX_COVER_BYTES,
+                        );
+                        if report.removed_files > 0 {
+                            tracing::info!(
+                                "pruned {} cached covers ({} bytes)",
+                                report.removed_files,
+                                report.removed_bytes
+                            );
+                        }
+                    })
+                    .await;
+            })
+            .detach();
+        }
+        // FL-19: stop the player thread on a normal quit. A dropped handle already
+        // ends it, but an explicit shutdown releases the GStreamer pipeline and
+        // the GLib loop instead of leaving them to process teardown.
+        {
+            let player = player_handle.clone();
+            cx.on_app_quit(move |_this, _cx| {
+                let player = player.clone();
+                async move {
+                    if !player.shutdown_and_join(std::time::Duration::from_secs(2)) {
+                        tracing::warn!("the player thread did not stop within 2 s");
+                    }
+                }
+            })
+            .detach();
+        }
         // Honour the stored accessibility preference from the first frame. The
         // Settings toggle used to be the only caller, so a user who had turned
         // reduced motion on got the animations back after every restart.
@@ -267,13 +314,14 @@ impl Shell {
                 client,
                 home_state.clone(),
                 self_entity.clone(),
-                paths.covers.clone(),
+                cover_cache.clone(),
                 cx,
             );
         }
         cx.spawn(async move |_, cx| {
             let mut scrobble = crate::player::scrobble::ScrobbleTracker::new();
             let mut last_pos = std::time::Duration::ZERO;
+            let mut last_pos_at = std::time::Instant::now();
             let mut track_duration = std::time::Duration::ZERO;
             let mut scrobble_track: Option<String> = None;
             // FL-07: a failed stream used to leave the UI claiming it was playing.
@@ -322,11 +370,17 @@ impl Shell {
                         if let Some(mh) = &mpris_for_loop {
                             mh.update_position(pos);
                         }
-                        let delta = pos.saturating_sub(last_pos);
+                        // A position jump larger than the elapsed wall time is a
+                        // seek; count what was actually heard instead of dropping
+                        // the tick (which silently under-counted on slow machines).
+                        let position_delta = pos.saturating_sub(last_pos);
+                        let wall_delta = last_pos_at.elapsed();
+                        let delta =
+                            crate::player::scrobble::listened_delta(position_delta, wall_delta);
                         last_pos = pos;
+                        last_pos_at = std::time::Instant::now();
                         if scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
-                            && delta < std::time::Duration::from_secs(2)
-                            && delta > std::time::Duration::ZERO
+                            && !delta.is_zero()
                             && scrobble.tick(delta, track_duration)
                             && let Some(id) = &scrobble_track
                             && let Some(client) = &scrobble_client
@@ -339,7 +393,7 @@ impl Shell {
                                 .unwrap_or(0);
                             cx.background_executor()
                                 .spawn(async move {
-                                    let _ = client.scrobble(&id, true, now_ms);
+                                    submit_scrobble(&client, &id, true, now_ms);
                                 })
                                 .detach();
                         }
@@ -463,7 +517,12 @@ impl Shell {
                         tracing::info!("track started: {}", id);
                         retry_attempts = 0;
                         scrobble.reset();
+                        // The threshold is a fraction of the track duration, so a
+                        // stale duration made the first seconds of a new track use
+                        // the previous track's length.
+                        track_duration = std::time::Duration::ZERO;
                         last_pos = std::time::Duration::ZERO;
+                        last_pos_at = std::time::Instant::now();
                         scrobble_track = Some(id.clone());
                         if let Some(mh) = &mpris_for_loop {
                             let current = cx.update(|app| state.read(app).current.clone());
@@ -492,7 +551,7 @@ impl Shell {
                                 .unwrap_or(0);
                             cx.background_executor()
                                 .spawn(async move {
-                                    let _ = client.scrobble(&id, false, now_ms);
+                                    submit_scrobble(&client, &id, false, now_ms);
                                 })
                                 .detach();
                         }
@@ -559,6 +618,8 @@ impl Shell {
             library_index,
             syncing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sync_progress: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            library_snapshot_at: cached_snapshot_at,
+            cover_cache,
             radio,
             autoplay_enabled,
             lyrics_offset_ms: lyrics_offset_field,
@@ -640,6 +701,7 @@ impl Shell {
             "content-search-shortcut" => self.go(Route::Search),
             "content-see-all-albums" => self.go(Route::Albums),
             "content-sync" => self.sync_library(cx),
+            "content-library-retry" => self.retry_home_fetch(cx),
             "album-back" => self.go(Route::Home),
             "artists-back" => self.go(Route::Artists),
             "album-play-all" => {
@@ -677,6 +739,7 @@ impl Shell {
             // Settings rows.
             "settings-quality" => self.cycle_quality(),
             "settings-scrobble" => self.toggle_scrobble(),
+            "settings-clear-cache" => self.clear_library_cache(cx),
             "settings-shuffle" => self.toggle_shuffle(cx),
             "settings-repeat" => self.toggle_repeat(cx),
             "settings-reduce-motion" => self.toggle_reduce_motion(cx),
@@ -771,6 +834,104 @@ impl Shell {
     /// this the recovery is only a log line nobody reads.
     pub fn notice(&mut self, message: impl Into<String>, cx: &mut gpui::Context<Self>) {
         self.show_toast(message, cx);
+    }
+
+    /// Throw away the cached library and its artwork.
+    ///
+    /// The snapshot and the search index are dropped immediately; covers are
+    /// pruned to nothing so a corrupted or stale set cannot survive. Both are
+    /// re-downloadable, so this is safe — it only costs one Sync.
+    pub fn clear_library_cache(&mut self, cx: &mut gpui::Context<Self>) {
+        let cache = crate::library::cache::LibraryCache::new(self.paths.cache.clone());
+        let covers = self.cover_cache.clone();
+        match cache.clear() {
+            Ok(()) => {
+                self.library_index = None;
+                self.library_snapshot_at = None;
+                self.home_state.update(cx, |state, cx| {
+                    state.albums.clear();
+                    state.artists.clear();
+                    state.playlists.clear();
+                    state.favorites.clear();
+                    state.covers.clear();
+                    state.cover_order.clear();
+                    state.from_cache = false;
+                    state.error = None;
+                    cx.notify();
+                });
+                let report = covers.prune(0, 0);
+                self.show_toast(
+                    format!(
+                        "Cache cleared ({} covers removed). Press Sync to fill it again.",
+                        report.removed_files
+                    ),
+                    cx,
+                );
+            }
+            Err(error) => {
+                let message = format!("Could not clear the cache: {error}");
+                self.show_toast(message, cx);
+            }
+        }
+    }
+
+    /// A short, honest line about where the library came from.
+    ///
+    /// Replaces the old "100 albums loaded" subtitle, which read like a debug
+    /// build and said nothing the grid did not already show.
+    pub fn library_status(&self, cx: &gpui::App) -> Option<String> {
+        if self.syncing.load(std::sync::atomic::Ordering::Relaxed) {
+            let done = self
+                .sync_progress
+                .load(std::sync::atomic::Ordering::Relaxed);
+            return Some(if done == 0 {
+                "Syncing…".to_string()
+            } else {
+                format!("Syncing… {done} albums")
+            });
+        }
+        if self.home_state.read(cx).error.is_some() {
+            return None;
+        }
+        let snapshot_at = self.library_snapshot_at?;
+        if !self.home_state.read(cx).from_cache {
+            return None;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Some(format!(
+            "Offline copy · synced {}",
+            humanise_age(now.saturating_sub(snapshot_at))
+        ))
+    }
+
+    /// The library load error, for the UI and for tests.
+    pub fn home_error(&self, cx: &gpui::App) -> Option<String> {
+        self.home_state.read(cx).error.clone()
+    }
+
+    /// Try the library load again after a failure.
+    ///
+    /// docs/design.md:463 asks for an error with exactly one action; this is it.
+    pub fn retry_home_fetch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            self.show_toast("Connect a server first.", cx);
+            return;
+        };
+        self.home_state.update(cx, |state, cx| {
+            state.error = None;
+            state.loading = true;
+            cx.notify();
+        });
+        spawn_home_fetch(
+            client,
+            self.home_state.clone(),
+            cx.entity(),
+            self.cover_cache.clone(),
+            cx,
+        );
     }
 
     /// Whether shuffle is on.
@@ -1067,6 +1228,29 @@ impl Shell {
         let cache_dir = self.paths.cache.clone();
         let syncing = self.syncing.clone();
         let progress = self.sync_progress.clone();
+
+        // Keep the status line moving while a long sync runs: the fetch cannot
+        // notify the UI itself (it runs on the background executor).
+        {
+            let syncing_tick = self.syncing.clone();
+            let weak_tick = cx.entity().downgrade();
+            cx.spawn(async move |_, cx| {
+                while syncing_tick.load(std::sync::atomic::Ordering::Relaxed) {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(500))
+                        .await;
+                    if weak_tick.upgrade().is_none() {
+                        return;
+                    }
+                    let alive =
+                        cx.update(|app| weak_tick.update(app, |_shell, cx| cx.notify()).is_ok());
+                    if !alive {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
         cx.spawn(async move |_, cx| {
             let progress_bg = progress.clone();
             let result = cx
@@ -1093,6 +1277,7 @@ impl Shell {
                         entity.update(app, |shell, cx| {
                             syncing.store(false, Ordering::SeqCst);
                             shell.library_index = Some(index);
+                            shell.library_snapshot_at = Some(snapshot.fetched_at);
                             let albums = snapshot.albums.clone();
                             let artists = snapshot.artists.clone();
                             let playlists = snapshot.playlists.clone();
@@ -1264,7 +1449,12 @@ impl Shell {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let covers_dir = self.paths.covers.clone();
+        let covers = self.cover_cache.clone();
+        // Claim the download before spawning: skipping quickly through an album
+        // used to fire several downloads of the same cover at once.
+        let Some(claim) = covers.begin_fetch(&cid) else {
+            return;
+        };
         let os_for_cover = self.overlay_state.clone();
         let hs = self.home_state.clone();
         let mh = self.mpris_handle.clone();
@@ -1281,24 +1471,23 @@ impl Shell {
             let prepared = cx
                 .background_executor()
                 .spawn(async move {
+                    // Hold the in-flight claim until the bytes are on disk.
+                    let _claim = claim;
                     // Disk first: the bytes are usually already there.
-                    let (bytes, format, path) = match read_cover_from_disk(&covers_dir, &cid2) {
-                        Some((bytes, format)) => {
-                            let ext = if matches!(format, gpui::ImageFormat::Png) {
-                                "png"
+                    let (bytes, format, path) = match covers.read(&cid2) {
+                        Some(bytes) => {
+                            let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                                gpui::ImageFormat::Png
                             } else {
-                                "jpg"
+                                gpui::ImageFormat::Jpeg
                             };
-                            let path = covers_dir.join(format!("{cid2}.{ext}"));
+                            let path = covers.existing_path(&cid2).unwrap_or_default();
                             (bytes, format, path)
                         }
                         None => {
                             let bytes = c.cover_bytes(&cid2, 512).ok()?;
                             let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                            let ext = if is_png { "png" } else { "jpg" };
-                            let _ = std::fs::create_dir_all(&covers_dir);
-                            let path = covers_dir.join(format!("{cid2}.{ext}"));
-                            let _ = std::fs::write(&path, &bytes);
+                            let path = covers.write(&cid2, &bytes).ok()?;
                             let format = if is_png {
                                 gpui::ImageFormat::Png
                             } else {
@@ -1628,7 +1817,7 @@ impl Shell {
                                     client,
                                     shell.home_state.clone(),
                                     cx.entity(),
-                                    shell.paths.covers.clone(),
+                                    shell.cover_cache.clone(),
                                     cx,
                                 );
                             }
@@ -1741,7 +1930,7 @@ impl Shell {
         };
         let entity = cx.entity();
         let client_for_cover = client.clone();
-        let covers_for_album = self.paths.covers.clone();
+        let covers_for_album = self.cover_cache.clone();
         cx.spawn(async move |_, cx| {
             let client_for_album = client.clone();
             let album_id = id.clone();
@@ -1754,14 +1943,16 @@ impl Shell {
                     Some(cid) => {
                         let client = client_for_cover.clone();
                         let cid_for_fetch = cid.clone();
-                        let dir = covers_for_album.clone();
+                        let covers = covers_for_album.clone();
                         cx.background_executor()
                             .spawn(async move {
-                                if let Some((bytes, _)) = read_cover_from_disk(&dir, &cid_for_fetch)
-                                {
+                                if let Some(bytes) = covers.read(&cid_for_fetch) {
                                     return Some(bytes);
                                 }
-                                client.cover_bytes(&cid_for_fetch, 512).ok()
+                                let _claim = covers.begin_fetch(&cid_for_fetch)?;
+                                let bytes = client.cover_bytes(&cid_for_fetch, 512).ok()?;
+                                let _ = covers.write(&cid_for_fetch, &bytes);
+                                Some(bytes)
                             })
                             .await
                             .map(|bytes| (cid, bytes))
@@ -3295,20 +3486,12 @@ impl Render for Shell {
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(gpui::px(9.0))
+                                                    .text_size(gpui::px(10.0))
                                                     .text_color(t.text_tertiary)
-                                                    .child({
-                                                        let hs = self.home_state.read(cx);
-                                                        if hs.loading {
-                                                            "Loading library…".to_string()
-                                                        } else if let Some(e) = &hs.error {
-                                                            format!("Library error: {}", e)
-                                                        } else if hs.albums.is_empty() {
-                                                            "No albums loaded".to_string()
-                                                        } else {
-                                                            format!("{} albums loaded", hs.albums.len())
-                                                        }
-                                                    }),
+                                                    .debug_selector(|| "library-status".to_string())
+                                                    .child(
+                                                        self.library_status(cx).unwrap_or_default(),
+                                                    ),
                                             ),
                                     )
                                     .child(
@@ -3648,6 +3831,7 @@ impl Render for Shell {
                                 let mut col = div().flex().flex_col().gap(gpui::px(8.0));
                                 let f_set_quality = self.focus_for("settings-quality", Self::TAB_CONTENT, cx);
                                 let f_set_scrobble = self.focus_for("settings-scrobble", Self::TAB_CONTENT, cx);
+                                let f_clear_cache = self.focus_for("settings-clear-cache", Self::TAB_CONTENT, cx);
                                 let f_set_lyrics_source =
                                     self.focus_for("settings-lyrics-source", Self::TAB_CONTENT, cx);
                                 let f_set_reduce_motion =
@@ -3684,6 +3868,16 @@ impl Render for Shell {
                                         .on_click(cx.listener(|this, _event, _window, _cx| {
                                             this.toggle_scrobble();
                                         })),
+                                    )
+                                    .child(
+                                        setting_row("Cached library", "Clear", t)
+                                            .id("set-clear-cache")
+                                            .debug_selector(|| "set-clear-cache".to_string())
+                                            .track_focus(&f_clear_cache).tab_index(Self::TAB_CONTENT).role(gpui::Role::Button).aria_label("Clear the cached library and artwork").border_2().border_color(self.focus_border(&f_clear_cache, window, t.glass_border, t))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.clear_library_cache(cx);
+                                            })),
                                     )
 
                                     .child(
@@ -4005,8 +4199,87 @@ impl Render for Shell {
                                     for i in 0..8 {
                                         grid = grid.child(album_skeleton(i, t));
                                     }
+                                } else if let Some(error) = hs.error.clone() {
+                                    // A network failure used to be rendered as
+                                    // "No albums — Connect a server", which sends
+                                    // the user to fix the wrong thing.
+                                    let retry = self.focus_for("content-library-retry", Self::TAB_CONTENT, cx);
+                                    grid = grid.child(
+                                        div()
+                                            .id("library-error")
+                                            .debug_selector(|| "library-error".to_string())
+                                            // The panel lives inside a 4-column grid;
+                                            // without a span it would be a quarter wide.
+                                            .col_span_full()
+                                            .role(gpui::Role::Alert)
+                                            .aria_label(error.clone())
+                                            .flex()
+                                            .flex_col()
+                                            .gap(gpui::px(10.0))
+                                            .p(gpui::px(20.0))
+                                            .rounded(gpui::px(16.0))
+                                            .bg(t.glass_tint)
+                                            .border_1()
+                                            .border_color(t.danger)
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(12.0))
+                                                    .text_color(t.text_primary)
+                                                    .child(error),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("library-retry")
+                                                    .debug_selector(|| "library-retry".to_string())
+                                                    .track_focus(&retry)
+                                                    .tab_index(Self::TAB_CONTENT)
+                                                    .role(gpui::Role::Button)
+                                                    .aria_label("Try loading the library again")
+                                                    .border_2()
+                                                    .border_color(self.focus_border(&retry, window, t.glass_border, t))
+                                                    .cursor_pointer()
+                                                    .px(gpui::px(12.0))
+                                                    .py(gpui::px(6.0))
+                                                    .rounded(gpui::px(10.0))
+                                                    .text_size(gpui::px(11.0))
+                                                    .text_color(t.gold_light)
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                                        this.retry_home_fetch(cx);
+                                                    }))
+                                                    .child("Retry"),
+                                            ),
+                                    );
                                 } else if hs.albums.is_empty() {
-                                    grid = grid.child(album_card("No albums", "Connect a server", None, t));
+                                    // Genuinely empty: no server problem, just no music yet.
+                                    grid = grid.child(
+                                        div()
+                                            .id("library-empty")
+                                            .debug_selector(|| "library-empty".to_string())
+                                            .col_span_full()
+                                            .role(gpui::Role::Label)
+                                            .aria_label("No albums yet")
+                                            .flex()
+                                            .flex_col()
+                                            .gap(gpui::px(6.0))
+                                            .p(gpui::px(20.0))
+                                            .rounded(gpui::px(16.0))
+                                            .bg(t.glass_tint)
+                                            .border_1()
+                                            .border_color(t.glass_border)
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(12.0))
+                                                    .text_color(t.text_primary)
+                                                    .child("No albums yet"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(gpui::px(11.0))
+                                                    .text_color(t.text_secondary)
+                                                    .child("Press Sync to pull your library."),
+                                            ),
+                                    );
                                 } else {
                                     let source = if self.route == Route::Favorites { &hs.favorites } else { &hs.albums };
                                 let limit = if matches!(self.route, Route::Albums | Route::Favorites) { source.len() } else { 8 };
@@ -4462,27 +4735,48 @@ fn eq_bar(
         )
 }
 
-/// Read a cached cover from disk, if one was written on an earlier run.
-///
-/// The covers directory was write-only: every launch re-downloaded all of it,
-/// which is why the grid took a server round trip to fill even though the bytes
-/// were already on disk.
-fn read_cover_from_disk(
-    dir: &std::path::Path,
-    cover_id: &str,
-) -> Option<(Vec<u8>, gpui::ImageFormat)> {
-    for (ext, format) in [
-        ("png", gpui::ImageFormat::Png),
-        ("jpg", gpui::ImageFormat::Jpeg),
-    ] {
-        let path = dir.join(format!("{cover_id}.{ext}"));
-        if let Ok(bytes) = std::fs::read(&path)
-            && !bytes.is_empty()
-        {
-            return Some((bytes, format));
+/// "3 days ago" style age, for the offline-copy hint.
+fn humanise_age(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    match minutes {
+        0 => "just now".to_string(),
+        1..=59 => format!("{minutes} min ago"),
+        _ => {
+            let hours = minutes / 60;
+            match hours {
+                1..=23 => format!("{hours} h ago"),
+                _ => {
+                    let days = hours / 24;
+                    if days == 1 {
+                        "1 day ago".to_string()
+                    } else {
+                        format!("{days} days ago")
+                    }
+                }
+            }
         }
     }
-    None
+}
+
+/// Submit a scrobble, retrying the failures that could plausibly succeed.
+///
+/// The result used to be discarded with `let _ =`, so a rate limit or a blip lost
+/// the scrobble silently and permanently.
+fn submit_scrobble(client: &NavidromeClient, track_id: &str, submission: bool, timestamp_ms: i64) {
+    let mut attempt = 0u8;
+    loop {
+        attempt = attempt.saturating_add(1);
+        match client.scrobble(track_id, submission, timestamp_ms) {
+            Ok(()) => return,
+            Err(error) if error.is_retryable() && attempt < 3 => {
+                std::thread::sleep(error.retry_delay(attempt));
+            }
+            Err(error) => {
+                tracing::warn!("scrobble for {track_id} was dropped: {error}");
+                return;
+            }
+        }
+    }
 }
 
 /// Page size when walking the album list during a sync.
@@ -4565,7 +4859,7 @@ fn spawn_home_fetch(
     client: Arc<NavidromeClient>,
     hs: gpui::Entity<HomeState>,
     entity: gpui::Entity<Shell>,
-    covers_dir: std::path::PathBuf,
+    covers: Arc<crate::library::cover_cache::CoverCache>,
     cx: &mut gpui::Context<Shell>,
 ) {
     cx.spawn(async move |_, cx| {
@@ -4631,19 +4925,26 @@ fn spawn_home_fetch(
                 h.favorites = favorites;
             });
         });
-        let covers_dir_for_grid = covers_dir.clone();
+        let covers_dir_for_grid = covers.clone();
         for album in albums.iter().take(24) {
             if let Some(cover_id) = &album.cover_art_id {
                 let cid_bg = cover_id.clone();
                 let client_bg = client.clone();
-                let dir_bg = covers_dir_for_grid.clone();
+                let covers_bg = covers_dir_for_grid.clone();
                 let fetched = cx
                     .background_executor()
                     .spawn(async move {
-                        if let Some((bytes, _)) = read_cover_from_disk(&dir_bg, &cid_bg) {
+                        if let Some(bytes) = covers_bg.read(&cid_bg) {
                             return Ok::<Vec<u8>, crate::navidrome::error::NavidromeError>(bytes);
                         }
-                        client_bg.cover_bytes(&cid_bg, 512)
+                        let Some(_claim) = covers_bg.begin_fetch(&cid_bg) else {
+                            return Err(crate::navidrome::error::NavidromeError::Protocol(
+                                "cover already downloading".to_string(),
+                            ));
+                        };
+                        let bytes = client_bg.cover_bytes(&cid_bg, 512)?;
+                        let _ = covers_bg.write(&cid_bg, &bytes);
+                        Ok(bytes)
                     })
                     .await;
                 if let Ok(bytes) = fetched {
@@ -4657,14 +4958,7 @@ fn spawn_home_fetch(
                         bytes,
                         id: fxhash_id(cover_id),
                     });
-                    let ext = if matches!(format, gpui::ImageFormat::Png) {
-                        "png"
-                    } else {
-                        "jpg"
-                    };
-                    let _ = std::fs::create_dir_all(&covers_dir);
-                    let _ =
-                        std::fs::write(covers_dir.join(format!("{cover_id}.{ext}")), &image.bytes);
+                    let _ = covers_dir_for_grid.write(cover_id, &image.bytes);
                     let cid = cover_id.clone();
                     cx.update(|app| {
                         app.update_entity(&hs, |h, _| {

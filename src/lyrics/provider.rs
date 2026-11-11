@@ -33,6 +33,10 @@ use crate::navidrome::client::NavidromeClient;
 use crate::navidrome::error::NavidromeError;
 use std::time::Duration;
 
+/// LRCLIB's origin. Kept apart from the request builders so a test can point the
+/// lookups at a local stub instead of the real service.
+const LRCLIB_BASE: &str = "https://lrclib.net";
+
 /// A synced candidate is accepted only when its duration is within this many
 /// seconds of the track's. Different edits of the same song differ by seconds.
 const MAX_SYNCED_DELTA_SECS: f64 = 3.0;
@@ -44,6 +48,25 @@ pub struct LyricsProvider {
     cache: LyricsCache,
     prefer_navidrome: bool,
     user_agent: String,
+    /// One agent for every lookup.
+    ///
+    /// It used to be built inside `fetch_lrclib`, i.e. per track, which threw
+    /// away the connection pool and the TLS session: each track then paid for a
+    /// fresh TCP+TLS handshake on top of the ~5 sequential requests a lookup
+    /// makes (audit PF-08).
+    agent: ureq::Agent,
+    /// Origin the LRCLIB lookups go to (`LRCLIB_BASE` unless a test overrides it).
+    lrclib_base: String,
+}
+
+/// Number of HTTP agents built, so a test can prove one agent serves every
+/// track instead of a fresh one per lookup (audit PF-08).
+#[cfg(test)]
+static AGENT_BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn agent_builds() -> usize {
+    AGENT_BUILDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// One LRCLIB record, normalised out of the JSON.
@@ -101,6 +124,22 @@ impl Candidate {
     }
 }
 
+/// The one agent every LRCLIB request goes through.
+///
+/// LRCLIB can be slow or unreachable; without a bound the status stayed at
+/// "Loading lyrics…" for the whole track. ureq has no default timeouts.
+fn build_agent() -> ureq::Agent {
+    #[cfg(test)]
+    AGENT_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ureq::Agent::config_builder()
+        .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
+        .timeout_connect(Some(Duration::from_secs(8)))
+        .timeout_recv_response(Some(Duration::from_secs(12)))
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .into()
+}
+
 impl LyricsProvider {
     pub fn new(client: NavidromeClient, cache: LyricsCache, prefer_navidrome: bool) -> Self {
         Self {
@@ -108,7 +147,17 @@ impl LyricsProvider {
             cache,
             prefer_navidrome,
             user_agent: "Myuzik/0.1 (https://github.com/SamVivan1/myuzik)".to_string(),
+            agent: build_agent(),
+            lrclib_base: LRCLIB_BASE.to_string(),
         }
+    }
+
+    /// Point the LRCLIB lookups at a local stub. Tests only: the production
+    /// origin is [`LRCLIB_BASE`].
+    #[cfg(test)]
+    fn with_lrclib_base(mut self, base: String) -> Self {
+        self.lrclib_base = base;
+        self
     }
 
     pub fn fetch_cached(&self, track: &Track) -> Option<LyricsStatus> {
@@ -193,21 +242,13 @@ impl LyricsProvider {
     }
 
     fn fetch_lrclib(&self, track: &Track) -> Option<LyricsStatus> {
-        // LRCLIB can be slow or unreachable; without a bound the status stayed at
-        // "Loading lyrics…" for the whole track. ureq has no default timeouts.
-        let agent = ureq::Agent::config_builder()
-            .user_agent("myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
-            .timeout_connect(Some(std::time::Duration::from_secs(8)))
-            .timeout_recv_response(Some(std::time::Duration::from_secs(12)))
-            .timeout_global(Some(std::time::Duration::from_secs(20)))
-            .build()
-            .into();
+        let agent = &self.agent;
         let mut candidates: Vec<Candidate> = Vec::new();
 
         // Direct lookups first. The album name is deliberately empty: supplying
         // it makes LRCLIB demand an exact album match and 404 on correct songs.
         for with_duration in [true, false] {
-            if let Some(found) = self.lrclib_get(&agent, track, with_duration) {
+            if let Some(found) = self.lrclib_get(agent, track, with_duration) {
                 let direct = found;
                 if let Some(status) = decide(&[direct], track) {
                     return Some(status);
@@ -215,12 +256,12 @@ impl LyricsProvider {
                 if let Some(extra) = candidates.pop() {
                     candidates.push(extra);
                 }
-                candidates.extend(self.lrclib_get(&agent, track, with_duration));
+                candidates.extend(self.lrclib_get(agent, track, with_duration));
             }
         }
 
         // Search, ranked by duration proximity.
-        candidates.extend(self.lrclib_search(&agent, track));
+        candidates.extend(self.lrclib_search(agent, track));
         decide(&candidates, track)
     }
 
@@ -232,7 +273,8 @@ impl LyricsProvider {
         with_duration: bool,
     ) -> Option<Candidate> {
         let mut url = format!(
-            "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name=",
+            "{}/api/get?artist_name={}&track_name={}&album_name=",
+            self.lrclib_base,
             urlencoding::encode(&track.artist),
             urlencoding::encode(&track.title),
         );
@@ -251,7 +293,8 @@ impl LyricsProvider {
     /// `GET /api/search` — several records, ranked rather than first-wins.
     fn lrclib_search(&self, agent: &ureq::Agent, track: &Track) -> Vec<Candidate> {
         let url = format!(
-            "https://lrclib.net/api/search?artist_name={}&track_name={}",
+            "{}/api/search?artist_name={}&track_name={}",
+            self.lrclib_base,
             urlencoding::encode(&track.artist),
             urlencoding::encode(&track.title),
         );
@@ -433,6 +476,185 @@ mod tests {
             .map(|i| format!("[00:{:02}.00] line {}", i, i))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// A local stand-in for LRCLIB that counts TCP connections and requests, so
+    /// a test can tell a reused, pooled connection (one agent) from a new
+    /// connection per track (a new agent per lookup).
+    struct LrclibStub {
+        base_url: String,
+        connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        accept: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl LrclibStub {
+        fn start() -> std::io::Result<Self> {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            listener.set_nonblocking(true)?;
+            let address = listener.local_addr()?;
+            let connections = Arc::new(AtomicUsize::new(0));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let accept = {
+                let connections = connections.clone();
+                let requests = requests.clone();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        match listener.accept() {
+                            Ok((stream, _)) => {
+                                connections.fetch_add(1, Ordering::Relaxed);
+                                let requests = requests.clone();
+                                std::thread::spawn(move || serve(stream, requests));
+                            }
+                            Err(_) => std::thread::sleep(Duration::from_millis(2)),
+                        }
+                    }
+                })
+            };
+            Ok(Self {
+                base_url: format!("http://{address}"),
+                connections,
+                requests,
+                stop,
+                accept: Some(accept),
+            })
+        }
+    }
+
+    impl Drop for LrclibStub {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(accept) = self.accept.take() {
+                let _ = accept.join();
+            }
+        }
+    }
+
+    /// Answer every request that arrives on this connection. A client that
+    /// reuses its pooled connection keeps sending on it; a client with a fresh
+    /// agent opens a second connection instead.
+    fn serve(
+        mut stream: std::net::TcpStream,
+        requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut pending: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 2048];
+        loop {
+            if let Some(end) = pending
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            {
+                let head = String::from_utf8_lossy(&pending[..end]).to_string();
+                pending.drain(..end);
+                requests.fetch_add(1, Ordering::Relaxed);
+                let body = if head.contains("/api/search") {
+                    format!("[{}]", candidate_json())
+                } else {
+                    candidate_json()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                if stream.write_all(response.as_bytes()).is_err() {
+                    return;
+                }
+                continue;
+            }
+            match stream.read(&mut chunk) {
+                Ok(0) => return,
+                Ok(read) => pending.extend_from_slice(&chunk[..read]),
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// What the stub returns: a synced record matching `track(...)`.
+    fn candidate_json() -> String {
+        serde_json::json!({
+            "artistName": "Test Artist",
+            "trackName": "Test Song",
+            "duration": 100.0,
+            "instrumental": false,
+            "syncedLyrics": "[00:00.00] one\n[00:05.00] two\n[00:10.00] three\n[00:15.00] four\n[00:20.00] five",
+            "plainLyrics": "one two three",
+        })
+        .to_string()
+    }
+
+    fn lrclib_track(album: &str) -> Track {
+        let mut track = track("Test Song", "Test Artist", 100);
+        track.album = album.to_string();
+        track
+    }
+
+    /// Audit PF-08: the provider built a new `ureq::Agent` inside every LRCLIB
+    /// lookup, which threw away the connection pool and the TLS session, so each
+    /// track paid for a fresh handshake (and the lookup makes up to five
+    /// requests). One agent must serve every lookup.
+    #[test]
+    fn one_agent_serves_every_lrclib_lookup() {
+        use std::sync::atomic::Ordering;
+        let Ok(stub) = LrclibStub::start() else {
+            eprintln!("skipped: cannot open a local stub server");
+            return;
+        };
+        let cache_dir = std::env::temp_dir().join(format!(
+            "myuzik-provider-one-agent-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let Ok(client) = NavidromeClient::new("http://127.0.0.1:1/", "user", "pass") else {
+            eprintln!("skipped: cannot build a client");
+            return;
+        };
+        let provider = LyricsProvider::new(client, LyricsCache::new(cache_dir.clone()), false)
+            .with_lrclib_base(stub.base_url.clone());
+        let builds_before = agent_builds();
+
+        assert!(
+            matches!(
+                provider.fetch(&lrclib_track("Album A")),
+                Ok(LyricsStatus::Synced(_))
+            ),
+            "the first lookup must resolve through the stub"
+        );
+        assert!(
+            matches!(
+                provider.fetch(&lrclib_track("Album B")),
+                Ok(LyricsStatus::Synced(_))
+            ),
+            "the second lookup must resolve through the stub"
+        );
+
+        assert_eq!(
+            stub.requests.load(Ordering::Relaxed),
+            2,
+            "each track needs its own lookup; the stub only proves reuse if it was asked twice"
+        );
+        assert_eq!(
+            stub.connections.load(Ordering::Relaxed),
+            1,
+            "the second track opened a new TCP connection: the agent was rebuilt \
+             for the lookup instead of being reused"
+        );
+        assert_eq!(
+            agent_builds() - builds_before,
+            0,
+            "an agent was built again for the second lookup"
+        );
+
+        let _ = std::fs::remove_dir_all(&cache_dir);
     }
 
     #[test]

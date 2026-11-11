@@ -81,6 +81,7 @@ pub struct HomeData {
 }
 
 pub mod cache;
+pub mod cover_cache;
 pub mod radio;
 pub mod search_index;
 
