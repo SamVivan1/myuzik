@@ -143,6 +143,35 @@ pub trait SecretServiceBackend: Send + Sync {
     fn delete(&self) -> anyhow::Result<()>;
 }
 
+/// How long a Secret Service call may take before the caller gives up on it.
+const KEYRING_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Run a blocking Secret Service call with a deadline.
+///
+/// `keyring` talks D-Bus synchronously and offers no timeout, so a hung keyring
+/// daemon would block whoever called it — and the two callers here are both on
+/// the UI thread: reading the password during startup, and saving it when the
+/// setup form connects. The call runs on its own thread and we wait at most
+/// [`KEYRING_TIMEOUT`]; past that the caller falls back to the private file.
+fn bounded_secret_service_call<T, F>(timeout: std::time::Duration, work: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("myuzik-keyring".to_string())
+        .spawn(move || {
+            let _ = sender.send(work());
+        })
+        .ok()?;
+    receiver.recv_timeout(timeout).ok()
+}
+
+fn timed_out() -> anyhow::Error {
+    anyhow::anyhow!("the secret service did not answer within {KEYRING_TIMEOUT:?}")
+}
+
 /// The real backend: `keyring`'s Secret Service store.
 struct KeyringBackend;
 
@@ -151,16 +180,14 @@ impl KeyringBackend {
         keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
             .map_err(|error| anyhow::anyhow!("keyring entry unavailable: {error}"))
     }
-}
 
-impl SecretServiceBackend for KeyringBackend {
-    fn set(&self, password: &str) -> anyhow::Result<()> {
+    fn set_blocking(password: &str) -> anyhow::Result<()> {
         Self::entry()?
             .set_password(password)
             .map_err(|error| anyhow::anyhow!("keyring refused the password: {error}"))
     }
 
-    fn get(&self) -> anyhow::Result<Option<String>> {
+    fn get_blocking() -> anyhow::Result<Option<String>> {
         match Self::entry()?.get_password() {
             Ok(password) => Ok(Some(password)),
             // No entry is not a failure: there is simply no password yet.
@@ -169,7 +196,7 @@ impl SecretServiceBackend for KeyringBackend {
         }
     }
 
-    fn delete(&self) -> anyhow::Result<()> {
+    fn delete_blocking() -> anyhow::Result<()> {
         match Self::entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(anyhow::anyhow!(
@@ -179,23 +206,83 @@ impl SecretServiceBackend for KeyringBackend {
     }
 }
 
+impl SecretServiceBackend for KeyringBackend {
+    fn set(&self, password: &str) -> anyhow::Result<()> {
+        let password = password.to_string();
+        match bounded_secret_service_call(KEYRING_TIMEOUT, move || Self::set_blocking(&password)) {
+            Some(result) => result,
+            None => Err(timed_out()),
+        }
+    }
+
+    fn get(&self) -> anyhow::Result<Option<String>> {
+        match bounded_secret_service_call(KEYRING_TIMEOUT, Self::get_blocking) {
+            Some(result) => result,
+            None => Err(timed_out()),
+        }
+    }
+
+    fn delete(&self) -> anyhow::Result<()> {
+        match bounded_secret_service_call(KEYRING_TIMEOUT, Self::delete_blocking) {
+            Some(result) => result,
+            None => Err(timed_out()),
+        }
+    }
+}
+
 /// Whether the Secret Service may be used, from `MYUZIK_KEYRING`.
 ///
-/// It is an explicit opt-in: the probe costs a session-bus round trip, and on a
-/// desktop with no keyring it can only fail. Unset (and any value that is not an
-/// affirmative) means "files only". Turn it on with `MYUZIK_KEYRING=1`.
+/// On by default: a password belongs in the keyring, and docs promised it for a
+/// whole release while the code only ever wrote plaintext (audit INT-01). A
+/// desktop without a keyring simply fails the call and falls back to the `0600`
+/// file, which costs at most [`KEYRING_TIMEOUT`] once per read.
+///
+/// `MYUZIK_KEYRING=0` (`false`, `no`, `off`) forces the file-only path, for a
+/// desktop with no keyring daemon at all or for testing.
 pub fn secret_service_enabled(value: Option<&str>) -> bool {
-    matches!(
+    !matches!(
         value
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref(),
-        Some("1" | "true" | "yes" | "on")
+        Some("0" | "false" | "no" | "off")
     )
 }
 
+const STORE_UNSET: u8 = 0;
+const STORE_FILE: u8 = 1;
+const STORE_KEYRING: u8 = 2;
+
+/// The store decision for this process: unset, file-only, or the keyring.
+static STORE_DECISION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(STORE_UNSET);
+
+/// Pin this process to the `0600` file, ignoring the environment.
+///
+/// Tests that drive the real setup flow must not write to the developer's own
+/// keyring, and `std::env::set_var` is unsafe once other threads exist. The
+/// override wins over an earlier environment decision, so it does not matter
+/// which test ran first.
+#[doc(hidden)]
+pub fn use_file_store_only_for_tests() {
+    STORE_DECISION.store(STORE_FILE, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn default_backend() -> Option<KeyringBackend> {
-    let configured = std::env::var("MYUZIK_KEYRING").ok();
-    secret_service_enabled(configured.as_deref()).then_some(KeyringBackend)
+    use std::sync::atomic::Ordering;
+    if STORE_DECISION.load(Ordering::Relaxed) == STORE_UNSET {
+        let configured = std::env::var("MYUZIK_KEYRING").ok();
+        let decided = if secret_service_enabled(configured.as_deref()) {
+            STORE_KEYRING
+        } else {
+            STORE_FILE
+        };
+        let _ = STORE_DECISION.compare_exchange(
+            STORE_UNSET,
+            decided,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+    (STORE_DECISION.load(Ordering::Relaxed) == STORE_KEYRING).then_some(KeyringBackend)
 }
 
 /// Open `path` for writing with mode `0600` set *at creation*.
@@ -369,6 +456,32 @@ mod tests {
         assert_eq!(c.lyrics_offset_ms, 0);
         assert!(c.follow_os_accent);
         assert!(c.scrobble);
+    }
+
+    /// A hung Secret Service must not hold the caller: the call is abandoned
+    /// after the deadline and the caller falls back to the private file.
+    #[test]
+    fn a_slow_secret_service_call_is_abandoned() {
+        let started = std::time::Instant::now();
+        let result: Option<u8> =
+            bounded_secret_service_call(std::time::Duration::from_millis(30), || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                7
+            });
+        assert_eq!(result, None, "a call past the deadline must be given up on");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(300),
+            "the caller waited for the slow call instead of the deadline"
+        );
+    }
+
+    /// A fast call still returns its value.
+    #[test]
+    fn a_prompt_secret_service_call_returns_its_value() {
+        let result = bounded_secret_service_call(std::time::Duration::from_secs(2), || {
+            Some("from-the-keyring".to_string())
+        });
+        assert_eq!(result, Some(Some("from-the-keyring".to_string())));
     }
 
     #[test]

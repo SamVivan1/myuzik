@@ -740,6 +740,9 @@ fn stale_lyrics_response_is_discarded(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn setup_form_connects_and_saves(cx: &mut TestAppContext) {
+    // The default store is the keyring; a test run must never write to the
+    // developer's own keyring, so pin this process to the private file.
+    myuzik::config::use_file_store_only_for_tests();
     let server = MockServer::start();
     let ok = |body: &str| {
         format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)

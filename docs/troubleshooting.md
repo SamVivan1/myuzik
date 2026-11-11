@@ -81,11 +81,17 @@ Use the error toast/`RUST_LOG=debug` to see the pipeline message.
 
 ## Credentials
 
-- Default: `~/.config/myuzik/credentials`, created with mode `0600` from the first byte.
-- Opt-in Secret Service (`org.freedesktop.secrets`): run with `MYUZIK_KEYRING=1`. The setup
-  form says which store was used.
-- To reset: delete the file (and, with the keyring enabled, the `myuzik` entry in your
-  keyring) and run the app; the setup form appears again.
+- Default: the Secret Service (`org.freedesktop.secrets`), filed under
+  `io.github.samvivan1.Myuzik` / `navidrome`.
+- Fallback when no keyring answers: `~/.config/myuzik/credentials`, created with mode `0600`
+  from the first byte. `MYUZIK_KEYRING=0` forces this file-only path.
+- The setup form says which store was used, and a failed save is reported instead of being
+  ignored.
+- Keyring calls are bounded to 1.5 s, so a wedged keyring daemon costs a short delay rather
+  than a hang.
+- To reset: delete the file and the `myuzik` entry in your keyring (or run
+  `secret-tool clear service io.github.samvivan1.Myuzik`), then start the app; the setup form
+  appears again.
 
 ## MPRIS
 

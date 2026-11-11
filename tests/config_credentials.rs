@@ -264,62 +264,79 @@ fn delete_removes_the_password_from_both_stores() {
     cleanup(&paths);
 }
 
-/// INT-01: the Secret Service must be attempted only when it is explicitly
-/// switched on, because a desktop without one must not pay for the probe (and
-/// the test host has no session bus at all).
+/// INT-01: the Secret Service is the default store — docs promised it for a whole
+/// release while the code only wrote plaintext. `MYUZIK_KEYRING=0` switches it
+/// off for a desktop with no keyring daemon.
 #[test]
-fn secret_service_is_opted_into_by_environment() {
-    assert!(!secret_service_enabled(None), "off by default");
-    assert!(!secret_service_enabled(Some("")));
-    assert!(!secret_service_enabled(Some("0")));
-    assert!(!secret_service_enabled(Some("false")));
-    assert!(!secret_service_enabled(Some("no")));
-    assert!(!secret_service_enabled(Some("off")));
+fn secret_service_is_on_by_default_and_can_be_switched_off() {
+    assert!(
+        secret_service_enabled(None),
+        "the keyring is the default store"
+    );
+    assert!(secret_service_enabled(Some("")));
     assert!(secret_service_enabled(Some("1")));
     assert!(secret_service_enabled(Some("true")));
     assert!(secret_service_enabled(Some("yes")));
     assert!(secret_service_enabled(Some("on")));
     assert!(secret_service_enabled(Some("TRUE")));
+    assert!(!secret_service_enabled(Some("0")));
+    assert!(!secret_service_enabled(Some("false")));
+    assert!(!secret_service_enabled(Some("no")));
+    assert!(!secret_service_enabled(Some("off")));
+    assert!(!secret_service_enabled(Some(" OFF ")));
 }
 
-/// The public entry point (the one the UI calls) must keep working and report
-/// its store. With `MYUZIK_KEYRING` unset that is the private file; the test is
-/// written to stay correct if the suite happens to run with the keyring on, and
-/// it cleans up through the same store it used.
+/// Both stores are reported honestly through the same entry point the UI calls.
+///
+/// This uses explicit backends so a `cargo test` run never touches the user's own
+/// keyring; the real Secret Service is covered by the ignored test below.
 #[test]
 fn save_password_reports_the_store_it_used() {
     let paths = temp_paths("public");
-    let store = save_password(&paths, "hunter2").expect("save");
-    match store {
-        CredentialStore::File => assert!(
-            credentials_path(&paths).exists(),
-            "the file store must leave a password file behind"
-        ),
-        CredentialStore::SecretService => assert!(
-            !credentials_path(&paths).exists(),
-            "the keyring store must not leave plaintext behind"
-        ),
-    }
-    assert_eq!(load_password(&paths).as_deref(), Some("hunter2"));
-    myuzik::config::delete_password(&paths).expect("delete");
-    assert_eq!(load_password(&paths), None);
+
+    // No keyring: the private file, and the password is really there.
+    let store = save_password_with(&paths, "hunter2", None).expect("save to file");
+    assert_eq!(store, CredentialStore::File);
+    assert!(
+        credentials_path(&paths).exists(),
+        "the file store must leave a password file behind"
+    );
+    assert_eq!(load_password_with(&paths, None).as_deref(), Some("hunter2"));
+
+    // With a working keyring: reported as such, and no plaintext left behind.
+    let backend = StubBackend::default();
+    let store = save_password_with(&paths, "hunter2", Some(&backend)).expect("save to keyring");
+    assert_eq!(store, CredentialStore::SecretService);
+    assert!(
+        !credentials_path(&paths).exists(),
+        "the keyring store must not leave plaintext behind"
+    );
+    assert_eq!(
+        load_password_with(&paths, Some(&backend)).as_deref(),
+        Some("hunter2")
+    );
+
+    delete_password_with(&paths, Some(&backend)).expect("delete");
+    assert_eq!(load_password_with(&paths, Some(&backend)), None);
     cleanup(&paths);
 }
 
-/// The real `keyring` backend, end to end. Ignored by default because it needs a
-/// running Secret Service *and* writes to the user's own keyring:
+/// The real `keyring` backend, end to end — the default store, exercised against
+/// a live Secret Service. Ignored by default because it writes to the user's own
+/// keyring:
 ///
 /// ```text
-/// MYUZIK_KEYRING=1 cargo test --offline --test config_credentials -- --ignored
+/// cargo test --offline --test config_credentials -- --ignored
 /// ```
 ///
 /// It cleans up after itself (the entry is deleted, not just the temp dir).
 #[test]
-#[ignore = "writes to the real keyring; needs a session Secret Service (MYUZIK_KEYRING=1)"]
+#[ignore = "writes to the real keyring; needs a session Secret Service"]
 fn real_secret_service_round_trip_leaves_no_plaintext_file() {
     let paths = temp_paths("real-keyring");
-    // Start from a clean slate so the round trip is what gets read back.
-    delete_password_with(&paths, None).expect("pre-clean");
+    // Start from a clean slate — in both stores — so the round trip is what gets
+    // read back.
+    myuzik::config::delete_password(&paths).expect("pre-clean");
 
     let store = save_password(&paths, "real-secret").expect("save");
     assert_eq!(

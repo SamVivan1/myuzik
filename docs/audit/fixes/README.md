@@ -8,10 +8,12 @@ Commit perbaikan: `63ffddf`, `36de9a2`, `2b7a344`, `e1426ac`, `0abf5b9`, `3dfe83
 ```
 cargo fmt --check                          → bersih
 cargo clippy --all-targets -D warnings     → bersih
-cargo test -- --test-threads=1             → 206 passed, 0 failed, 18 ignored
+cargo test -- --test-threads=1             → 208 passed, 0 failed, 18 ignored
+cargo test --test config_credentials -- --ignored
+                                           → keyring nyata: round trip OK, tanpa file plaintext
 ```
 
-Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+55 test**, semuanya hijau.
+Baseline sebelum perbaikan: **151 passed, 0 failed, 13 ignored**. Jadi **+57 test**, semuanya hijau.
 18 test ignored adalah live-Navidrome (9), live-player (1), screenshot (4), live MPRIS/DBus (2),
 dan live keyring (1) — butuh server/DBus/display nyata.
 
@@ -27,7 +29,7 @@ perubahan murni kosmetik tanpa perilaku (ukuran font, warna) yang diverifikasi l
 | 1 | **UI freeze**: `Mutex<Radio>` dipegang lintas HTTP | **Fixed** | `radio.rs` dipecah `begin` (lock pendek) → `fetch` (tanpa lock) → `commit` (lock pendek); `next_batch` tetap ada sebagai komposisi. Test: `a_batch_can_be_fetched_while_the_radio_state_stays_mutable`, `begin_refuses_a_stalled_seed_and_accepts_a_fresh_one` |
 | 2 | **Keyboard tak bisa mengaktifkan kontrol** | **Fixed** | `Shell::activate_focused` + Enter di root handler. Test: `enter_activates_the_focused_nav_item`, `enter_opens_the_focused_album_card` |
 | 3 | **Toast tak pernah dirender** | **Fixed** | elemen `Role::Alert` + `show_toast()` yang `cx.notify()` (dulu tak ada notify sama sekali). Test: `unreachable_server_shows_error_toast` (kini juga menuntut `debug_bounds("toast")`) |
-| 4 | **Kredensial plaintext, docs janji Secret Service** | **Sebagian** | `keyring` 4.2 Secret Service nyata + fallback file `0600` + `CredentialStore` yang dilaporkan ke user; file dibuat `0600` sejak byte pertama. **Namun opt-in** (`MYUZIK_KEYRING=1`) — lihat "Sisa" di bawah |
+| 4 | **Kredensial plaintext, docs janji Secret Service** | **Fixed** | Secret Service jadi **default**, fallback file `0600` (dibuat `0600` sejak byte pertama), `CredentialStore` dilaporkan ke user, dan setiap panggilan keyring dibatasi 1,5 s sehingga keyring yang menggantung tidak membekukan startup. `MYUZIK_KEYRING=0` memaksa mode file. Diverifikasi end-to-end dengan Secret Service nyata: `real_secret_service_round_trip_leaves_no_plaintext_file` |
 | 5 | **Tray/overlay dead-end** | **Fixed** | liveness ikut `AnyWindowHandle` jendela utama, bukan jumlah window; `Show` membuka ulang window yang sudah mati; supervisor quit bila window utama hilang. Keputusan murni diuji: `tray_visibility_follows_the_main_window_not_the_window_count`, `show_focuses_an_open_window_and_reopens_a_closed_one` |
 | 6 | **Decode+encode PNG di main thread** | **Fixed** | `rounded_cover` memo per `image.id` (LRU 32) + decode/mask/tulis file dipindah ke `background_executor`. Test: `rounded_cover_does_the_work_once_per_source_image`, `rounded_cover_cache_stays_bounded` |
 
@@ -71,15 +73,6 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 ---
 
 ## Sisa yang belum dikerjakan (jujur)
-
-**P0 yang masih separuh:** kredensial. Secret Service sudah berfungsi (diverifikasi
-end-to-end dengan `MYUZIK_KEYRING=1` di mesin ini, termasuk test `#[ignore]` yang memakai
-keyring nyata), tetapi **belum default**. Alasannya konkret: `load_password` dipanggil di
-jalur startup pada main thread, jadi secret service yang menggantung bisa menahan frame
-pertama — kelas bug yang baru saja kita perbaiki di tray. Menutupnya butuh satu dari:
-(a) pindahkan `load_password` ke background lalu jadikan default, atau (b) baca file dulu
-(tanpa D-Bus) dan hanya menyentuh keyring bila file tidak ada. Belum dikerjakan karena
-tidak bisa diverifikasi aman di sesi ini.
 
 **Belum disentuh sama sekali** (semua masih persis seperti di laporan audit):
 

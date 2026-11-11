@@ -25,13 +25,13 @@ Tab moves between fields; Enter or **Connect** tests the server (`ping`) and sav
 Ctrl+V pastes into the focused field.
 
 The password is kept in the Secret Service (`org.freedesktop.secrets`: GNOME Keyring, KWallet)
-when that is enabled, and otherwise in a `0600` file at `~/.config/myuzik/credentials`. The
-setup form tells you which one was used.
+and, when no keyring answers, in a `0600` file at `~/.config/myuzik/credentials`. The setup
+form tells you which one was used.
 
-The Secret Service backend is **opt-in** for now, with `MYUZIK_KEYRING=1`. Reading the keyring
-is a D-Bus round trip, and the shell currently loads the credential on the main thread during
-startup, so enabling it by default could stall the first frame on a slow or hung secret
-service. Until those lookups move off the startup path, the default is the `0600` file.
+The keyring is the default store. Both the read during startup and the write when the form
+connects are bounded to 1.5 s, so a hung keyring daemon delays the app instead of freezing
+it — past that deadline the private file is used. `MYUZIK_KEYRING=0` forces the file-only
+path, for a desktop with no keyring daemon at all.
 
 ## 3. GNOME pin extension (optional)
 
