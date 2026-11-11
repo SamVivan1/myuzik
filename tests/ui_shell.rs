@@ -385,6 +385,26 @@ fn shuffle_and_repeat_are_reachable_and_toggle(cx: &mut TestAppContext) {
         !shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
         "shuffle starts off"
     );
+    // The controls are visible in the player bar, not just keyboard shortcuts.
+    assert!(
+        cx.debug_bounds("shuffle-btn").is_some(),
+        "no visible shuffle control in the player bar"
+    );
+    assert!(
+        cx.debug_bounds("repeat-btn").is_some(),
+        "no visible repeat control in the player bar"
+    );
+    let shuffle_btn = cx.debug_bounds("shuffle-btn").expect("shuffle");
+    cx.simulate_click(shuffle_btn.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "clicking the shuffle control did not turn shuffle on"
+    );
+    cx.simulate_click(shuffle_btn.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!shell.read_with(&cx, |s, cx| s.shuffle_on(cx)));
+
     // Ctrl+S toggles shuffle from the keyboard.
     cx.simulate_keystrokes("ctrl-s");
     cx.run_until_parked();

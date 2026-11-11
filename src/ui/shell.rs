@@ -218,6 +218,18 @@ impl Shell {
             })
             .detach();
         }
+        // UI-13: `follow_os_accent` was a setting nothing ever read. Resolve the
+        // desktop accent once, off the main thread (it shells out to gsettings).
+        if config.follow_os_accent {
+            cx.spawn(async move |_, cx| {
+                let accent = cx
+                    .background_executor()
+                    .spawn(async move { crate::platform::accent::read_os_accent() })
+                    .await;
+                crate::platform::accent::set_current_accent(accent);
+            })
+            .detach();
+        }
         // FL-19: stop the player thread on a normal quit. A dropped handle already
         // ends it, but an explicit shutdown releases the GStreamer pipeline and
         // the GLib loop instead of leaving them to process teardown.
@@ -716,6 +728,8 @@ impl Shell {
                 self.player_state.update(cx, |ps, _cx| ps.toggle());
                 self.player_handle.tx.send(PlayerCommand::Toggle).ok();
             }
+            "player-shuffle" => self.toggle_shuffle(cx),
+            "player-repeat" => self.toggle_repeat(cx),
             "player-prev" => self.play_previous(cx),
             "player-next" => self.play_next(cx),
             "player-seek-back" => {
@@ -2486,6 +2500,8 @@ impl Render for Shell {
         let f_prev = self.focus_for("player-prev", Self::TAB_PLAYER, cx);
         let f_play = self.focus_for("player-play", Self::TAB_PLAYER, cx);
         let f_next = self.focus_for("player-next", Self::TAB_PLAYER, cx);
+        let f_shuffle = self.focus_for("player-shuffle", Self::TAB_PLAYER, cx);
+        let f_repeat = self.focus_for("player-repeat", Self::TAB_PLAYER, cx);
         let f_seek_fwd = self.focus_for("player-seek-forward", Self::TAB_PLAYER, cx);
         let f_vol_down = self.focus_for("player-volume-down", Self::TAB_PLAYER, cx);
         let f_vol_up = self.focus_for("player-volume-up", Self::TAB_PLAYER, cx);
@@ -2823,6 +2839,73 @@ impl Render for Shell {
                                     }))
                                     .child("⏭"),
                             )
+                            // Shuffle and repeat had no reachable control at all
+                            // (only Ctrl+S / Ctrl+R), so the feature was invisible.
+                            .child({
+                                let on = self.shuffle_on(cx);
+                                div()
+                                    .w(gpui::px(24.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(12.0))
+                                    .text_color(if on { t.gold_deep } else { t.clay_ink })
+                                    .opacity(if on { 1.0 } else { 0.55 })
+                                    .cursor_pointer()
+                                    .id("shuffle-btn")
+                                    .debug_selector(|| "shuffle-btn".to_string())
+                                    .track_focus(&f_shuffle)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_shuffle,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
+                                    .aria_label(if on { "Shuffle on" } else { "Shuffle off" })
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.toggle_shuffle(cx);
+                                    }))
+                                    .child("⇄")
+                            })
+                            .child({
+                                let repeat = self.repeat_label(cx);
+                                let active = repeat != "Repeat: off";
+                                div()
+                                    .w(gpui::px(24.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(12.0))
+                                    .text_color(if active { t.gold_deep } else { t.clay_ink })
+                                    .opacity(if active { 1.0 } else { 0.55 })
+                                    .cursor_pointer()
+                                    .id("repeat-btn")
+                                    .debug_selector(|| "repeat-btn".to_string())
+                                    .track_focus(&f_repeat)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_repeat,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
+                                    .aria_label(repeat)
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.toggle_repeat(cx);
+                                    }))
+                                    .child(if repeat == "Repeat: one" {
+                                        "↻1"
+                                    } else {
+                                        "↻"
+                                    })
+                            })
                             .child(
                                 div()
                                     .w(gpui::px(30.0))

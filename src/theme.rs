@@ -84,7 +84,10 @@ pub fn midnight_brass() -> Theme {
             clay_surface: rgb(0xF4EBDD),
             clay_shade: rgb(0xE7D8C2),
             clay_ink: rgb(0x2A241C),
-            os_accent: rgb(0x3584E4),
+            // Follows the desktop's accent when `follow_os_accent` is on; the
+            // Midnight Brass blue otherwise. `platform::accent` caches the choice
+            // so a render never shells out to gsettings.
+            os_accent: crate::platform::accent::current_accent(),
             danger: rgb(0xD96C6C),
             shadow_warm: rgba(0x5A411E55),
             glass_highlight: rgba(0xFFFFFF0D),

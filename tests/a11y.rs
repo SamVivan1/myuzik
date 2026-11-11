@@ -161,12 +161,14 @@ const NAV_ORDER: [&str; 8] = [
     "nav-settings",
 ];
 
-const PLAYER_ORDER: [&str; 9] = [
+const PLAYER_ORDER: [&str; 11] = [
     "player-now-playing",
     "player-seek-back",
     "player-prev",
     "player-play",
     "player-next",
+    "player-shuffle",
+    "player-repeat",
     "player-seek-forward",
     "player-volume-down",
     "player-volume-up",
@@ -254,12 +256,12 @@ fn tab_order_is_nav_then_content_then_player_bar_then_chrome(cx: &mut TestAppCon
     assert_eq!(order[13], "album:a2");
     // The player bar follows the content.
     assert_eq!(
-        &order[14..23],
+        &order[14..25],
         &PLAYER_ORDER,
         "player bar tab order: {order:?}"
     );
     // Window chrome comes last.
-    assert_eq!(&order[23..26], &CHROME_ORDER, "chrome tab order: {order:?}");
+    assert_eq!(&order[25..28], &CHROME_ORDER, "chrome tab order: {order:?}");
 
     // The sidebar "pin lyrics" button belongs to the navigation group.
     assert_eq!(order[8], "sidebar-pin-lyrics");
