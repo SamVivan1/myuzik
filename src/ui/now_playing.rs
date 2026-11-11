@@ -112,9 +112,39 @@ impl NowPlayingView {
 }
 
 impl Render for NowPlayingView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+
+        // Nothing has played yet: an empty cover frame, blank metadata and a
+        // footer printing " — " read as a broken screen. Say so instead.
+        if self.title.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(gpui::px(10.0))
+                .id("np-empty")
+                .debug_selector(|| "np-empty".to_string())
+                .role(gpui::Role::Label)
+                .aria_label("Nothing playing yet")
+                .child(
+                    div()
+                        .text_size(gpui::px(16.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child("Nothing playing yet"),
+                )
+                .child(
+                    div()
+                        .text_size(gpui::px(12.0))
+                        .text_color(t.text_secondary)
+                        .child("Pick an album or a playlist to start."),
+                )
+                .into_any_element();
+        }
 
         let progress_pct = if self.duration > 0.0 {
             (self.position / self.duration * 100.0).clamp(0.0, 100.0)
@@ -386,7 +416,8 @@ impl Render for NowPlayingView {
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
                                             .text_color(t.gold)
-                                            .child("SYNCED LYRICS"),
+                                            .debug_selector(|| "np-lyrics-header".to_string())
+                                            .child(self.lyrics.read(cx).header_label()),
                                     )
                                     .child(
                                         div()
@@ -531,7 +562,11 @@ impl Render for NowPlayingView {
                             .border_color(t.glass_border)
                             .text_size(gpui::px(10.0))
                             .text_color(t.text_tertiary)
-                            .child(format!("{} — {}", self.title, self.artist))
+                            .child(if self.artist.is_empty() {
+                                self.title.clone()
+                            } else {
+                                format!("{} — {}", self.title, self.artist)
+                            })
                             .child(format!(
                                 "{} / {}",
                                 format_time(self.position),
@@ -539,6 +574,7 @@ impl Render for NowPlayingView {
                             )),
                     ),
             )
+            .into_any_element()
     }
 }
 

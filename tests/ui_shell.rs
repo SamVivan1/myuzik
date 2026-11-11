@@ -328,3 +328,28 @@ fn ctrl_v_pastes_into_the_setup_form(cx: &mut TestAppContext) {
         "Ctrl+V did not paste into the setup form (a trailing newline should be stripped)"
     );
 }
+
+/// Opening Now Playing before anything has played must say so, not show an
+/// empty cover frame, blank metadata and a footer that prints " — ".
+#[gpui::test]
+fn now_playing_without_a_track_shows_an_empty_state(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("np-empty");
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    shell.update(&mut cx, |shell, _cx| shell.go(Route::NowPlaying));
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        cx.debug_bounds("np-empty").is_some(),
+        "Now Playing with no track rendered no empty state"
+    );
+}

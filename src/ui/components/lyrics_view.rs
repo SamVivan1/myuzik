@@ -34,6 +34,8 @@ pub struct LyricsView {
     lines: Vec<LyricLine>,
     active: Option<usize>,
     mode: LyricsMode,
+    /// What the panel header should say for the current status.
+    header: &'static str,
     message: String,
     plain_text: String,
     offset_ms: i64,
@@ -56,6 +58,7 @@ impl LyricsView {
             lines: Vec::new(),
             active: None,
             mode: LyricsMode::Message,
+            header: "LYRICS",
             message: "No lyrics".to_string(),
             plain_text: String::new(),
             offset_ms: 0,
@@ -80,35 +83,41 @@ impl LyricsView {
         match status {
             LyricsStatus::Loading => {
                 self.mode = LyricsMode::Message;
+                self.header = "LOADING LYRICS";
                 self.message = "Loading lyrics…".to_string();
                 self.lines.clear();
                 self.active = None;
             }
             LyricsStatus::Synced(lines) => {
                 self.mode = LyricsMode::Synced;
+                self.header = "SYNCED LYRICS";
                 self.lines = lines;
                 self.active = None;
             }
             LyricsStatus::Plain(text) => {
                 self.mode = LyricsMode::Plain;
+                self.header = "UNSYNCED LYRICS";
                 self.plain_text = text;
                 self.lines.clear();
                 self.active = None;
             }
             LyricsStatus::Instrumental => {
                 self.mode = LyricsMode::Message;
+                self.header = "INSTRUMENTAL";
                 self.message = "♪ Instrumental".to_string();
                 self.lines.clear();
                 self.active = None;
             }
             LyricsStatus::NotFound => {
                 self.mode = LyricsMode::Message;
+                self.header = "NO LYRICS";
                 self.message = "No lyrics found".to_string();
                 self.lines.clear();
                 self.active = None;
             }
             LyricsStatus::Error(e) => {
                 self.mode = LyricsMode::Message;
+                self.header = "LYRICS ERROR";
                 self.message = format!("Lyrics error: {}", e);
                 self.lines.clear();
                 self.active = None;
@@ -212,6 +221,12 @@ impl LyricsView {
 
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// The header for the panel: it describes the lyrics that are actually
+    /// loaded instead of always claiming they are synced.
+    pub fn header_label(&self) -> &'static str {
+        self.header
     }
 
     pub fn mode(&self) -> LyricsMode {

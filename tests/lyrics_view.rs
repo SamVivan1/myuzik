@@ -91,3 +91,30 @@ fn padding_is_half_the_real_viewport() {
     view.set_viewport_height(320.0);
     assert_eq!(view.content_padding(), 140.0);
 }
+
+/// The panel header must describe the lyrics that are actually loaded. It was
+/// hardcoded to "SYNCED LYRICS", which is wrong for unsynced, instrumental,
+/// missing and failed lyrics — five of the six states.
+#[test]
+fn the_header_follows_the_lyrics_status() {
+    let mut view = LyricsView::new();
+    assert_eq!(view.header_label(), "LYRICS", "nothing loaded yet");
+
+    view.set_status(LyricsStatus::Synced(vec![]));
+    assert_eq!(view.header_label(), "SYNCED LYRICS");
+
+    view.set_status(LyricsStatus::Plain("some words".to_string()));
+    assert_eq!(view.header_label(), "UNSYNCED LYRICS");
+
+    view.set_status(LyricsStatus::Instrumental);
+    assert_eq!(view.header_label(), "INSTRUMENTAL");
+
+    view.set_status(LyricsStatus::NotFound);
+    assert_eq!(view.header_label(), "NO LYRICS");
+
+    view.set_status(LyricsStatus::Error("boom".to_string()));
+    assert_eq!(view.header_label(), "LYRICS ERROR");
+
+    view.set_status(LyricsStatus::Loading);
+    assert_eq!(view.header_label(), "LOADING LYRICS");
+}
