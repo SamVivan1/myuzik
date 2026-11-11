@@ -77,7 +77,7 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 | **FL-07** stream gagal, UI tetap bilang Playing | `PlaybackStatus::Error` kini benar-benar dibentuk, alasan ditampilkan segera, lalu retry berbackoff (3 percobaan) dan akhirnya lewati track; berhenti setelah 3 track mati berturut-turut. `Load`/`Seek` yang gagal dilaporkan, dan `Load` yang tak pernah mulai tidak lagi memicu `TrackStarted` (scrobble/metadata/lirik palsu) |
 | **FL-12** buffering tak terlihat | `PlayerEvent::Buffering` → `PlayerState::set_buffering`, bukan lagi `tracing::debug!` |
 | **FL-13** dua sumber status (ikon berkedip) | `set_status_from_engine` menyaring `Stopped` transien saat load; mirror UI/tray/MPRIS memakai status hasil saringan |
-| **FL-08** shuffle/repeat tak bisa dicapai | **Ctrl+S** shuffle, **Ctrl+R** siklus repeat off→all→one→off. (Tombol di player bar & baris Settings dicoba lebih dulu dan membuat harness headless *stack overflow* di layout gpui rev ini — dicatat sebagai batasan) |
+| **FL-08** shuffle/repeat tak bisa dicapai | **Ctrl+S** shuffle, **Ctrl+R** siklus repeat off→all→one→off. Tombol di player bar & baris Settings sempat dicoba dan gagal karena *stack overflow* di harness headless — ternyata itu keterbatasan stack thread test (2 MiB), bukan bug layout; sudah diperbaiki lewat `RUST_MIN_STACK` di `.cargo/config.toml`, jadi tombol yang terlihat kini memungkinkan |
 | **UI-03** search hanya merender Songs | grup ARTISTS/ALBUMS/PLAYLISTS ikut dirender, tiap baris tab-stop yang bisa diaktifkan Enter, empty-state menghitung keempat koleksi |
 | **UI-05** placeholder bohong, tanpa debounce | pencarian saat mengetik dengan debounce 250 ms (5 ketukan → 1 request), Enter langsung, Esc membersihkan dan keluar ke Home bila field sudah kosong |
 | **UI-09** Now Playing kosong & header salah | empty state saat belum ada track; header mengikuti status lirik (SYNCED/UNSYNCED/INSTRUMENTAL/NO LYRICS/LYRICS ERROR/LOADING); footer tak lagi mencetak " — " |
@@ -101,9 +101,8 @@ Space tetap play/pause), `docs/progress.md` (Task 12: shuffle/repeat belum punya
 - UI-01 sisa: `on_a11y_action` untuk screen reader (Enter sudah, AT client belum)
 - UI-13 (OS accent) · UI-19 · UI-20 · UI-21 · UI-23 · UI-24 · UI-25 (model route) ·
   UI-26 (panah global) · UI-27 (warna mentah) · UI-29 · UI-30
-- Kontrol shuffle/repeat yang terlihat (shortcut sudah ada) — terhalang bug layout gpui
-  yang membuat harness headless stack overflow saat elemen teks ditambahkan ke player bar
-  atau baris Settings
+- Kontrol shuffle/repeat yang terlihat (shortcut sudah ada; penghalangnya ternyata hanya
+  stack thread test, kini sudah dikonfigurasi, jadi ini tinggal pekerjaan UI)
 
 ## Tidak diverifikasi
 

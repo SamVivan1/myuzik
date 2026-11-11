@@ -11,6 +11,9 @@ disintesis oleh Lead. Setiap klaim di laporan asal punya bukti `file:line`.
 > ditambah 12 temuan P1/P2 gelombang kedua (FL-07/08/12/13, UI-03/05/09/11,
 > INT-06/08/11/12). Gerbang `fmt`/`clippy`/`test` hijau dengan 257 test lulus.
 > Daftar sisa ada di dokumen itu.
+>
+> **Fitur baru:** cache library + art cover, pencarian lokal, dan satu tombol Sync —
+> lihat [docs/cache.md](../cache.md).
 
 | Laporan | Lingkup | P0 | P1 | P2 | Total |
 |---|---|---:|---:|---:|---:|
