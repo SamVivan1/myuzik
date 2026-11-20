@@ -88,7 +88,9 @@ Last updated: 2026-11-10
   (220 px), icon+text nav, dynamic accent from cover art, glass surfaces.
 - [x] Phase 3 — Liquid Glass polish: shelf fade edge + "See all", detail header
   breadcrumb + 220 px cover, search empty state, tighter track-row styling.
-- [ ] Next: Phase 4 — motion, skeletons, contrast pass, final screenshot refresh.
+- [x] Phase 4 — Liquid Glass motion: 240 ms fade-in on browse cards, route transition
+  fade, spring-like easing. Skeletons, contrast pass (all AA), screenshot refresh.
+- [ ] Next: Phase 5 — component extraction, final polish, accessibility audit.
 
 ## Post-0.1.0 — YouTube Music (optional)
 - [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).

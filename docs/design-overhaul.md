@@ -24,6 +24,12 @@ Shelves now have a "See all" link and a right-edge fade. Detail headers have a
 breadcrumb (type › title) and a 220 px cover. Search has an empty state with icon
 and hint. Track rows keep their play-next / add-to-queue hover actions.
 
+## Phase 4 — Done
+
+Entrance animation (240 ms fade-in, ease-out-quint) on browse cards. Route
+transition fade (180 ms). Skeleton cards for loading states. Contrast pass: all
+text tokens meet WCAG AA on glass. Screenshots refreshed with the new theme.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

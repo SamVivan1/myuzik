@@ -1265,6 +1265,12 @@ impl Shell {
                     .text_ellipsis()
                     .child(subtitle),
             )
+            .with_animation(
+                format!("card-{}", key),
+                gpui::Animation::new(std::time::Duration::from_millis(240))
+                    .with_easing(gpui::ease_out_quint()),
+                |el, delta| el.opacity(delta),
+            )
             .into_any_element()
     }
 }
