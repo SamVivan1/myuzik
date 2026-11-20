@@ -18,6 +18,12 @@ Glass surfaces are applied to the player bar (64 px capsule) and sidebar (220 px
 Nav items now have icon+text. The accent is dynamic from cover art. Layout
 numbers updated: sidebar 220, player bar 64, cover 48, bottom padding 86/92.
 
+## Phase 3 — Done
+
+Shelves now have a "See all" link and a right-edge fade. Detail headers have a
+breadcrumb (type › title) and a 220 px cover. Search has an empty state with icon
+and hint. Track rows keep their play-next / add-to-queue hover actions.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

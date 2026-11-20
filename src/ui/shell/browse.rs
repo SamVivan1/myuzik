@@ -194,7 +194,7 @@ impl Shell {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".to_string());
-        let cover = self.cover_element(url, cover_id, &initial, 168.0, t, cx);
+        let cover = self.cover_element(url, cover_id, &initial, 220.0, t, cx);
         let artist = match artist_id {
             Some(id) => div()
                 .id("detail-artist")
@@ -224,6 +224,17 @@ impl Shell {
                     .flex_col()
                     .items_start()
                     .gap(gpui::px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(gpui::px(6.0))
+                            .text_size(gpui::px(10.0))
+                            .text_color(t.text_tertiary)
+                            .child(kind.to_uppercase())
+                            .child(div().text_color(t.text_tertiary).child("›"))
+                            .child(div().text_color(t.text_secondary).child(title.to_string())),
+                    )
                     .child(
                         div()
                             .id("detail-back")
@@ -1102,17 +1113,44 @@ impl Shell {
                     .gap(gpui::px(9.0))
                     .child(
                         div()
-                            .font_family(theme.display_font)
-                            .text_size(gpui::px(18.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(t.text_primary)
-                            .child(if section.title.is_empty() {
-                                "For you".to_string()
-                            } else {
-                                section.title.clone()
-                            }),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .font_family(theme.display_font)
+                                    .text_size(gpui::px(18.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(t.text_primary)
+                                    .child(if section.title.is_empty() {
+                                        "For you".to_string()
+                                    } else {
+                                        section.title.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(gpui::px(10.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(t.text_tertiary)
+                                    .child("See all ›"),
+                            ),
                     )
-                    .child(row),
+                    .child(
+                        div().relative().child(row).child(
+                            div()
+                                .absolute()
+                                .right(gpui::px(0.0))
+                                .top(gpui::px(0.0))
+                                .bottom(gpui::px(0.0))
+                                .w(gpui::px(40.0))
+                                .bg(gpui::linear_gradient(
+                                    90.0,
+                                    gpui::linear_color_stop(gpui::rgba(0x0A0B1000), 0.0),
+                                    gpui::linear_color_stop(gpui::rgba(0x0A0B10CC), 1.0),
+                                )),
+                        ),
+                    ),
             );
         }
         div()

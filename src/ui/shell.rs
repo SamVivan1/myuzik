@@ -5757,7 +5757,35 @@ impl Render for Shell {
                                         && self.youtube_error.is_none()
                                     {
                                         col = col.child(
-                                            div().text_size(gpui::px(11.0)).text_color(t.text_secondary).child("No results"),
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .items_center()
+                                                .gap(gpui::px(8.0))
+                                                .py(gpui::px(40.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(gpui::px(32.0))
+                                                        .text_color(t.text_tertiary)
+                                                        .child("⌕"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(gpui::px(13.0))
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .text_color(t.text_secondary)
+                                                        .child("No results"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(gpui::px(11.0))
+                                                        .text_color(t.text_tertiary)
+                                                        .child(if self.active_source == TrackSource::YouTube {
+                                                            "Try a different query or browse Moods & genres."
+                                                        } else {
+                                                            "Try a different query or sync your library."
+                                                        }),
+                                                ),
                                         );
                                     }
                                 }

@@ -86,7 +86,9 @@ Last updated: 2026-11-10
   cool indigo accent, Inter typography, rounded-20 radii, dynamic accent from cover art.
 - [x] Phase 2 — Liquid Glass layout: glass player bar (64 px capsule), glass sidebar
   (220 px), icon+text nav, dynamic accent from cover art, glass surfaces.
-- [ ] Next: Phase 3 — cards/shelves with fade/arrow, detail header breadcrumb.
+- [x] Phase 3 — Liquid Glass polish: shelf fade edge + "See all", detail header
+  breadcrumb + 220 px cover, search empty state, tighter track-row styling.
+- [ ] Next: Phase 4 — motion, skeletons, contrast pass, final screenshot refresh.
 
 ## Post-0.1.0 — YouTube Music (optional)
 - [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).
