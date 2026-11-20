@@ -29,6 +29,7 @@ impl AlbumListKind {
     }
 }
 
+#[derive(Clone)]
 pub struct NavidromeClient {
     base_url: Url,
     username: String,

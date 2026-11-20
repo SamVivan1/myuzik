@@ -1052,6 +1052,14 @@ pub fn open_overlay(
     geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
     bounds: gpui::Bounds<gpui::Pixels>,
 ) -> gpui::WindowHandle<PinnedLyricsView> {
+    let icon = {
+        let bytes = include_bytes!(
+            "../../packaging/icons/hicolor/128x128/apps/io.github.samvivan1.Myuzik.png"
+        );
+        image::load_from_memory(bytes)
+            .ok()
+            .map(|image| std::sync::Arc::new(image.to_rgba8()))
+    };
     let opts = WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
         // The layout needs this much room; without a floor the window could be
@@ -1065,6 +1073,7 @@ pub fn open_overlay(
         focus: false,
         show: true,
         app_id: Some(APP_ID.to_string()),
+        icon,
         titlebar: None,
         ..Default::default()
     };

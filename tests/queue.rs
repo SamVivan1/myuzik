@@ -17,6 +17,8 @@ fn track(id: &str) -> Track {
         year: None,
         starred: false,
         genre: None,
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -155,6 +157,8 @@ fn rapid_next_previous_stays_consistent() {
             year: None,
             starred: false,
             genre: None,
+            source: Default::default(),
+            cover_url: None,
         })
         .collect();
     let mut q = myuzik::player::queue::Queue::new();
@@ -280,6 +284,50 @@ fn trim_under_shuffle_keeps_the_order_valid() {
         assert!(q.next().is_some(), "shuffle walk broke after trimming");
     }
     assert!(q.next().is_none(), "the shuffle order should end cleanly");
+}
+
+#[test]
+fn queue_remove_moves_the_current_index_and_refuses_the_current_track() {
+    let mut q = Queue::new();
+    q.play_now(tracks(4), 2);
+    assert_eq!(q.current_index(), Some(2));
+
+    assert!(q.remove(0).is_some(), "a past item can be removed");
+    assert_eq!(q.current_index(), Some(1));
+    assert_eq!(q.len(), 3);
+
+    assert!(
+        q.remove(1).is_none(),
+        "removing the playing track is refused"
+    );
+    assert_eq!(q.len(), 3);
+    assert_eq!(q.current_index(), Some(1));
+}
+
+#[test]
+fn queue_move_keeps_the_current_track_selected() {
+    let mut q = Queue::new();
+    q.play_now(tracks(4), 1);
+    assert!(q.move_item(0, 3));
+    assert_eq!(q.current_index(), Some(0));
+    assert_eq!(q.tracks()[0].id, "t1");
+    assert_eq!(q.tracks()[3].id, "t0");
+
+    assert!(q.move_item(0, 2));
+    assert_eq!(q.current_index(), Some(2));
+    assert_eq!(q.tracks()[2].id, "t1");
+}
+
+#[test]
+fn queue_set_current_and_clear_upcoming() {
+    let mut q = Queue::new();
+    q.play_now(tracks(5), 0);
+    assert_eq!(q.set_current(3).map(|t| t.id), Some("t3".into()));
+    assert_eq!(q.current_index(), Some(3));
+    assert_eq!(q.clear_upcoming(), 1);
+    assert_eq!(q.len(), 4);
+    assert_eq!(q.current_index(), Some(3));
+    assert_eq!(q.set_current(9), None);
 }
 
 #[test]

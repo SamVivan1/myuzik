@@ -7,9 +7,9 @@ Run the full suite:
 ```
 
 This runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and all tests serially
-(GPUI tests share process-global state, so `--test-threads=1` is required). The default run is
-102 tests (34 unit + 68 integration); 10 more (`live_navidrome` ×8, `live_player` ×1,
-`screenshots` ×1) are `#[ignore]`d because they need a real server or a GPU renderer.
+(GPUI tests share process-global state, so `--test-threads=1` is required). The default run is the
+full offline suite; live/network tests are `#[ignore]`d and enabled with `MYUZIK_LIVE=1`. The
+YouTube provider has one additional ignored live search+buffer test.
 
 ## Live server tests
 
@@ -37,8 +37,17 @@ autoplay-radio selection helpers (3).
 
 ## Mocked UI/integration tests
 
+- `tests/services.rs`: `SourceRegistry` dispatch/disabled-source contract, independent of GPUI.
+- `tests/youtube_flow.rs`: a YouTube-only install against the standard-library fixture helper —
+  starts on Home, loads shelves, opens an album and a playlist, can play a mood playlist, and in
+  the search flow proves the player received a `file://` path inside the stream cache (never a
+  signed URL) and that the queue contains the selected song plus its radio tracks, not the search
+  page.
+- `tests/provider_youtube.rs`: the provider process boundary — search/radio/home/album/artist/
+  playlist/mood mapping, cancellation, timeout-safe helper paths, buffer success/failure,
+  outside-cache rejection, invalid ids, missing helper and version reporting.
 - `tests/ui_flow.rs`: a full mocked Navidrome drives the real `Shell` headlessly —
-  home load, album click/detail, track click/play command, star toggle, lyrics → overlay sync,
+  home load, album detail route, track click/play command, star toggle, lyrics → overlay sync,
   scrobble now-playing + submission, volume, seek, error toast, search keystrokes, playlist play,
   artist → album navigation, first-run setup form (connect + save 0600 credentials), and stale
   lyrics responses being discarded.
@@ -83,6 +92,10 @@ autoplay-radio selection helpers (3).
 `scripts/measure-ram.sh` launches the built binary and reports RSS, CPU, threads, fds,
 startup time and cache sizes; `--strict` exits non-zero when a budget is exceeded. See
 [performance.md](performance.md).
+
+YouTube playback keeps at most `stream_cache_mb` (default 1024 MiB) under
+`~/.cache/myuzik/streams`. The helper is a one-shot process: no Python process exists while
+Myuzik is idle, so the idle RSS budget is unchanged. A single buffered track is capped at 32 MiB.
 
 
 ## Screenshots

@@ -14,6 +14,17 @@ use gpui_platform::application;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+/// Window icon for X11/XWayland. Wayland surfaces have no icon property and
+/// rely on the desktop entry/app id; X11 docks read `_NET_WM_ICON`, so the
+/// bundled mark is attached explicitly.
+fn app_window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    let bytes =
+        include_bytes!("../packaging/icons/hicolor/128x128/apps/io.github.samvivan1.Myuzik.png");
+    image::load_from_memory(bytes)
+        .ok()
+        .map(|image| std::sync::Arc::new(image.to_rgba8()))
+}
+
 /// Options for the main window, shared by the first open and by the tray reopening it.
 fn main_window_options(bounds: Bounds<gpui::Pixels>) -> WindowOptions {
     WindowOptions {
@@ -23,6 +34,7 @@ fn main_window_options(bounds: Bounds<gpui::Pixels>) -> WindowOptions {
         window_min_size: Some(size(px(960.), px(640.))),
         is_resizable: true,
         app_id: Some("io.github.samvivan1.Myuzik".to_string()),
+        icon: app_window_icon(),
         titlebar: Some(gpui::TitlebarOptions {
             title: Some("Myuzik".into()),
             appears_transparent: false,
@@ -218,7 +230,7 @@ fn main() {
             cx.spawn(async move |cx| {
                 loop {
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(400))
+                        .timer(std::time::Duration::from_millis(1000))
                         .await;
                     if !take_show_request(&show_request) {
                         continue;
@@ -264,7 +276,7 @@ fn main() {
                             cx.spawn(async move |cx| {
                                 loop {
                                     cx.background_executor()
-                                        .timer(std::time::Duration::from_millis(400))
+                                        .timer(std::time::Duration::from_millis(1000))
                                         .await;
                                     let alive =
                                         cx.update(|app| main_window_alive(app, &main_window));

@@ -25,7 +25,7 @@
 //! agree after normalisation, a synced payload needs real timestamps, and if
 //! nothing qualifies the answer is `NotFound` rather than someone else's lyrics.
 
-use crate::library::Track;
+use crate::library::{Track, TrackSource};
 use crate::lyrics::cache::LyricsCache;
 use crate::lyrics::lrc::parse_lrc;
 use crate::lyrics::model::LyricsStatus;
@@ -44,7 +44,7 @@ const MAX_SYNCED_DELTA_SECS: f64 = 3.0;
 const MIN_SYNCED_LINES: usize = 3;
 
 pub struct LyricsProvider {
-    client: NavidromeClient,
+    client: Option<NavidromeClient>,
     cache: LyricsCache,
     prefer_navidrome: bool,
     user_agent: String,
@@ -140,8 +140,66 @@ fn build_agent() -> ureq::Agent {
         .into()
 }
 
+/// Strip video-specific suffixes from a YouTube title before an LRCLIB lookup.
+///
+/// Display keeps the original title; only the lyrics query is cleaned. The
+/// existing LRCLIB matcher still requires the artist to agree and validates the
+/// duration, so this cannot turn one song's lyrics into another's by itself.
+fn clean_youtube_title(title: &str) -> String {
+    const SUFFIXES: &[&str] = &[
+        "(Official Music Video)",
+        "[Official Music Video]",
+        "(Official Video)",
+        "[Official Video]",
+        "(Official Audio)",
+        "[Official Audio]",
+        "(Official Lyric Video)",
+        "[Official Lyric Video]",
+        "(Lyric Video)",
+        "[Lyric Video]",
+        "(Lyrics)",
+        "[Lyrics]",
+        "(Visualizer)",
+        "[Visualizer]",
+        "(Audio)",
+        "[Audio]",
+        "(HD)",
+        "[HD]",
+        "(4K)",
+        "[4K]",
+        "(Remastered)",
+        "[Remastered]",
+        "(Remastered 2011)",
+        "[Remastered 2011]",
+    ];
+    let mut text = title.to_string();
+    for suffix in SUFFIXES {
+        text = text.replace(suffix, "");
+    }
+    let lower = text.to_lowercase();
+    let mut cut = text.len();
+    for marker in [" feat. ", " ft. ", " featuring "] {
+        if let Some(position) = lower.find(marker) {
+            cut = cut.min(position);
+        }
+    }
+    text.truncate(cut);
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 impl LyricsProvider {
     pub fn new(client: NavidromeClient, cache: LyricsCache, prefer_navidrome: bool) -> Self {
+        Self::with_optional_client(Some(client), cache, prefer_navidrome)
+    }
+
+    /// Build a provider that can run without a Navidrome server. YouTube tracks
+    /// use LRCLIB directly; the Navidrome step is skipped when `client` is
+    /// `None` or the track came from another provider.
+    pub fn with_optional_client(
+        client: Option<NavidromeClient>,
+        cache: LyricsCache,
+        prefer_navidrome: bool,
+    ) -> Self {
         Self {
             client,
             cache,
@@ -175,9 +233,14 @@ impl LyricsProvider {
 
         // 1. Navidrome: authoritative, but only when it is actually synced. A
         //    plain transcript there must not shadow a synced version on LRCLIB.
+        //    YouTube and other providers have no Navidrome id, so they skip
+        //    this step entirely.
         let mut from_server: Option<LyricsStatus> = None;
-        if self.prefer_navidrome {
-            match self.client.lyrics(&track.id) {
+        if self.prefer_navidrome
+            && track.source == TrackSource::Navidrome
+            && let Some(client) = &self.client
+        {
+            match client.lyrics(&track.id) {
                 Ok(Some(status)) => {
                     if matches!(status, LyricsStatus::Synced(_)) {
                         Self::store(&self.cache, &key, &status);
@@ -191,8 +254,19 @@ impl LyricsProvider {
             }
         }
 
-        // 2. LRCLIB.
-        if let Some(status) = self.fetch_lrclib(track) {
+        // 2. LRCLIB. YouTube titles often carry "(Official Video)" and similar
+        //    suffixes; strip them for the lookup only, never for display.
+        let lookup_track;
+        let lrclib_track = if track.is_youtube() {
+            lookup_track = Track {
+                title: clean_youtube_title(&track.title),
+                ..track.clone()
+            };
+            &lookup_track
+        } else {
+            track
+        };
+        if let Some(status) = self.fetch_lrclib(lrclib_track) {
             match (&status, &from_server) {
                 // A synced match beats an unsynced transcript from the server.
                 (LyricsStatus::Synced(_), _) => {
@@ -468,6 +542,8 @@ mod tests {
             year: None,
             starred: false,
             genre: None,
+            source: Default::default(),
+            cover_url: None,
         }
     }
 

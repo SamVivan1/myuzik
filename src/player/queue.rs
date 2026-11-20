@@ -86,6 +86,9 @@ impl Queue {
             self.items.push_front(track);
             self.current = Some(0);
         }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -209,6 +212,83 @@ impl Queue {
 
     pub fn tracks(&self) -> Vec<Track> {
         self.items.iter().cloned().collect()
+    }
+
+    /// Index of the track currently playing, if any.
+    pub fn current_index(&self) -> Option<usize> {
+        self.current
+    }
+
+    /// Jump to an existing queue item. Keeps shuffle valid by rebuilding its
+    /// order around the new current track.
+    pub fn set_current(&mut self, index: usize) -> Option<Track> {
+        if index >= self.items.len() {
+            return None;
+        }
+        self.current = Some(index);
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        self.items.get(index).cloned()
+    }
+
+    /// Remove a future or past item. Removing the current track is refused so
+    /// the caller can decide whether to skip first; `None` also covers an
+    /// out-of-range index.
+    pub fn remove(&mut self, index: usize) -> Option<Track> {
+        if index >= self.items.len() || self.current == Some(index) {
+            return None;
+        }
+        let removed = self.items.remove(index)?;
+        if let Some(current) = self.current
+            && index < current
+        {
+            self.current = Some(current - 1);
+        }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        Some(removed)
+    }
+
+    /// Move an item within the queue. The current track follows its item if it
+    /// is the one being moved.
+    pub fn move_item(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.items.len() || to >= self.items.len() || from == to {
+            return false;
+        }
+        let Some(item) = self.items.remove(from) else {
+            return false;
+        };
+        self.items.insert(to, item);
+        if let Some(current) = self.current {
+            self.current = Some(if current == from {
+                to
+            } else if from < current && to >= current {
+                current - 1
+            } else if from > current && to <= current {
+                current + 1
+            } else {
+                current
+            });
+        }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        true
+    }
+
+    /// Drop everything after the current track. Playback and history stay.
+    pub fn clear_upcoming(&mut self) -> usize {
+        let Some(current) = self.current else {
+            return 0;
+        };
+        let removed = self.items.len().saturating_sub(current + 1);
+        self.items.truncate(current + 1);
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        removed
     }
 
     /// How many tracks would play before the queue runs out. Zero when the

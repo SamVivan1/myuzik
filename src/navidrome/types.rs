@@ -257,6 +257,8 @@ pub fn song_dto_to_track(s: SongDto) -> Track {
         year: s.year,
         starred: s.starred.is_some(),
         genre: s.genre.filter(|g| !g.trim().is_empty()),
+        source: crate::library::TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -271,6 +273,8 @@ pub fn album_dto_to_album(a: AlbumDto) -> Album {
         duration: a.duration.map(|d| Duration::from_secs(d.max(0) as u64)),
         year: a.year,
         starred: a.starred.is_some(),
+        source: crate::library::TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -280,6 +284,8 @@ pub fn artist_dto_to_artist(a: ArtistDto) -> Artist {
         name: a.name,
         album_count: a.album_count,
         cover_art_id: a.cover_art,
+        source: crate::library::TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -290,6 +296,8 @@ pub fn playlist_dto_to_playlist(p: PlaylistDto) -> Playlist {
         song_count: p.song_count.unwrap_or(0),
         duration: Duration::from_secs(p.duration.unwrap_or(0).max(0) as u64),
         owner: p.owner.unwrap_or_default(),
+        source: crate::library::TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -324,6 +332,7 @@ pub fn search_results_from_dto(s: SearchResult3) -> SearchResults {
             .into_iter()
             .map(playlist_dto_to_playlist)
             .collect(),
+        youtube: Vec::new(),
     }
 }
 

@@ -33,6 +33,19 @@ connects are bounded to 1.5 s, so a hung keyring daemon delays the app instead o
 it — past that deadline the private file is used. `MYUZIK_KEYRING=0` forces the file-only
 path, for a desktop with no keyring daemon at all.
 
+## 2a. YouTube Music (optional)
+
+```bash
+./scripts/setup-youtube.sh
+# or: ./install.sh --with-youtube
+```
+
+This creates a private Python environment at `~/.local/lib/myuzik/runtime` and installs the
+pinned `ytmusicapi` + `yt-dlp`. Node.js 20+ is required by `yt-dlp`; `ffmpeg` is recommended.
+Choose **Use YouTube Music instead** on the setup form (or enable Settings → Sources →
+YouTube Music). The source is off by default, unofficial, and may break when YouTube changes.
+See [youtube.md](youtube.md).
+
 ## 3. GNOME pin extension (optional)
 
 `./install.sh` already does this; to (re)install just the extension:

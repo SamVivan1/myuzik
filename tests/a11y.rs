@@ -161,7 +161,7 @@ const NAV_ORDER: [&str; 8] = [
     "nav-settings",
 ];
 
-const PLAYER_ORDER: [&str; 11] = [
+const PLAYER_ORDER: [&str; 12] = [
     "player-now-playing",
     "player-seek-back",
     "player-prev",
@@ -169,6 +169,7 @@ const PLAYER_ORDER: [&str; 11] = [
     "player-next",
     "player-shuffle",
     "player-repeat",
+    "player-queue",
     "player-seek-forward",
     "player-volume-down",
     "player-volume-up",
@@ -256,12 +257,12 @@ fn tab_order_is_nav_then_content_then_player_bar_then_chrome(cx: &mut TestAppCon
     assert_eq!(order[13], "album:a2");
     // The player bar follows the content.
     assert_eq!(
-        &order[14..25],
+        &order[14..26],
         &PLAYER_ORDER,
         "player bar tab order: {order:?}"
     );
     // Window chrome comes last.
-    assert_eq!(&order[25..28], &CHROME_ORDER, "chrome tab order: {order:?}");
+    assert_eq!(&order[26..29], &CHROME_ORDER, "chrome tab order: {order:?}");
 
     // The sidebar "pin lyrics" button belongs to the navigation group.
     assert_eq!(order[8], "sidebar-pin-lyrics");
@@ -499,7 +500,7 @@ fn icon_only_controls_expose_a_role_and_a_label() {
             shell,
             ".id(\"home-search\")",
             "shell",
-            Some("\"Search your library (Ctrl K)\""),
+            Some("\"Search music (Ctrl K)\""),
         ),
         (
             now_playing,
@@ -628,12 +629,33 @@ fn long_text_is_clamped_where_it_would_wrap() {
             let start = at.saturating_sub(600);
             let chain = &shell[start..at];
             assert!(
-                chain.contains("line_clamp(1)"),
-                "{what} is not clamped to one line (offset {at})"
+                chain.contains("line_clamp(1)") || chain.contains("line_clamp(2)"),
+                "{what} is not clamped (offset {at})"
             );
             seen += 1;
             from = at + anchor.len();
         }
         assert!(seen > 0, "rendering code for {what} not found");
+    }
+}
+
+#[test]
+fn no_raw_colors_in_ui_sources() {
+    // The specific literals called out by audit UI-27 (outside traffic-light
+    // semantics and transparent shadows) must not reappear.
+    let bad = [
+        "gpui::rgba(0x5A411E55)",
+        "gpui::rgba(0x2F6B6348)",
+        "gpui::rgba(0x7A4A5540)",
+        "gpui::hsla(0.05, 0.4, 0.05, 0.35)",
+    ];
+    let sources = [
+        include_str!("../src/ui/shell.rs"),
+        include_str!("../src/ui/now_playing.rs"),
+    ];
+    for src in sources {
+        for b in bad {
+            assert!(!src.contains(b), "raw color {b} reappeared");
+        }
     }
 }

@@ -128,6 +128,8 @@ instead of 1`. Both checks were run and then reverted.
 | Album list paging | `size` ≤ 500 per `getAlbumList2` request | `NavidromeClient::album_list` ([src/navidrome/client.rs:132](../src/navidrome/client.rs)) |
 | Search result size | `songCount=40`, `albumCount=20`, `artistCount=20` per query | `NavidromeClient::search` ([src/navidrome/client.rs:201](../src/navidrome/client.rs)) |
 | Cover download | at most 8 MB read per cover | `NavidromeClient::cover_bytes` ([src/navidrome/client.rs:257](../src/navidrome/client.rs)) |
+| YouTube stream cache (on disk) | oldest directories pruned above `stream_cache_mb` (default 1 GiB); one track capped at 32 MiB | `YouTubeProvider::prune` ([src/provider/youtube.rs](../src/provider/youtube.rs)) |
+| YouTube search results | 20 items, 20-minute duration cap, deduplicated by video id | `helper/ytmusic.py`, `YouTubeProvider::search` |
 
 ## Known limits
 

@@ -5,7 +5,7 @@
 //! cannot trust, and never be left half-written.
 
 use myuzik::library::cache::{LibraryCache, LibrarySnapshot, SNAPSHOT_VERSION};
-use myuzik::library::{Album, Artist, Playlist, Track};
+use myuzik::library::{Album, Artist, Playlist, Track, TrackSource};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,6 +59,8 @@ fn track(id: &str) -> Track {
         year: Some(1998),
         starred: true,
         genre: Some(format!("Genre {id}")),
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -73,6 +75,8 @@ fn album(id: &str) -> Album {
         duration: Some(Duration::from_secs(2_580)),
         year: Some(2001),
         starred: false,
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -82,6 +86,8 @@ fn artist(id: &str) -> Artist {
         name: format!("Artist {id}"),
         album_count: Some(4),
         cover_art_id: Some(format!("artist-cover-{id}")),
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -92,6 +98,8 @@ fn playlist(id: &str) -> Playlist {
         song_count: 42,
         duration: Duration::from_secs(9_000),
         owner: format!("owner-{id}"),
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 

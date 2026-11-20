@@ -493,6 +493,19 @@ fn playlist_click_plays_tracks(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let row = cx.debug_bounds("playlist-pl1").expect("playlist row");
     cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if cx.debug_bounds("playlist-play-all").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let play = cx.debug_bounds("playlist-play-all").expect("play playlist");
+    cx.simulate_click(play.center(), gpui::Modifiers::default());
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -618,10 +631,9 @@ fn artist_click_shows_albums(cx: &mut TestAppContext) {
         shell.read_with(&cx, |s, _| s.current_album_song_count()),
         Some(1)
     );
-    assert_eq!(
-        shell.read_with(&cx, |s, _| s.route()),
-        Route::Home,
-        "artist album click should navigate Home"
+    assert!(
+        matches!(shell.read_with(&cx, |s, _| s.route()), Route::Album(_)),
+        "artist album click should open the album route"
     );
 }
 
@@ -1286,4 +1298,221 @@ fn typing_searches_without_pressing_enter(cx: &mut TestAppContext) {
         "typing did not search; the placeholder promises it would"
     );
     assert_eq!(search.calls(), 1, "the debounce must coalesce keystrokes");
+}
+
+fn source_test_track(id: &str) -> myuzik::library::Track {
+    myuzik::library::Track {
+        id: id.to_string(),
+        title: format!("Track {id}"),
+        artist: "Artist".to_string(),
+        artist_id: None,
+        album: "Album".to_string(),
+        album_id: None,
+        cover_art_id: None,
+        cover_url: None,
+        duration: Duration::from_secs(120),
+        track_number: None,
+        disc_number: None,
+        year: None,
+        starred: false,
+        genre: None,
+        source: myuzik::library::TrackSource::Navidrome,
+    }
+}
+
+#[gpui::test]
+fn source_toggle_switches_home_and_nav_without_touching_the_queue(cx: &mut TestAppContext) {
+    use myuzik::library::TrackSource;
+
+    unsafe {
+        std::env::set_var(
+            "MYUZIK_YT_HELPER",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/ytmusic_fixture.py"),
+        );
+        std::env::set_var("MYUZIK_YT_PYTHON", "python3");
+    }
+
+    let server = MockServer::start();
+    let ok = |body: &str| {
+        format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1",{body}}}}}"#)
+    };
+    let _m1 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getAlbumList2.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""albumList2":{"album":[{"id":"a1","name":"Alpha","artist":"Artist A","songCount":2,"duration":300,"year":2026}]}"#));
+    });
+    let _m2 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getArtists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""artists":{"index":[{"artist":[{"id":"ar1","name":"Artist A","albumCount":1}]}]}"#));
+    });
+    let _m3 = server.mock(|when, then| {
+        when.method(GET).path("/rest/getPlaylists.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(ok(r#""playlists":{}"#));
+    });
+    let _m4 = server.mock(|when, then| {
+        when.method(GET).path("/rest/search3.view");
+        then.status(200).header("content-type", "application/json").body(ok(r#""searchResult3":{"song":[{"id":"lib-1","title":"Library Alpha","artist":"Artist A","album":"Alpha","duration":120}]}"#));
+    });
+
+    let base = server.base_url();
+    let paths = temp_paths("sources");
+    let config_path = paths.config.clone();
+    let window = cx.update(move |cx| {
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        let config = AppConfig {
+            server_url: base,
+            username: "tester".to_string(),
+            youtube_enabled: true,
+            active_source: TrackSource::YouTube,
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            let (tx, _cmd_rx) = flume::unbounded();
+            let (evt_tx, rx) = flume::unbounded();
+            std::mem::forget(_cmd_rx);
+            std::mem::forget(evt_tx);
+            cx.new(|cx| Shell::new(cx, PlayerHandle { tx, rx }, config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        if cx.debug_bounds("source-library").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.active_source()),
+        TrackSource::YouTube,
+        "the remembered YouTube source should win at startup"
+    );
+    assert!(cx.debug_bounds("source-library").is_some());
+    assert!(cx.debug_bounds("source-youtube").is_some());
+    assert!(cx.debug_bounds("nav-moods").is_some());
+    assert!(cx.debug_bounds("nav-albums").is_none());
+    let controls = shell.read_with(&cx, |s, _| s.focus_controls());
+    for key in [
+        "source-library",
+        "source-youtube",
+        "nav-moods",
+        "nav-settings",
+    ] {
+        assert!(
+            controls.iter().any(|control| control == key),
+            "{key} is missing from the keyboard ring: {controls:?}"
+        );
+    }
+
+    shell.update(&mut cx, |shell, cx| {
+        shell.enqueue_tracks(vec![source_test_track("lib-1")], cx);
+    });
+    cx.run_until_parked();
+    let queue_before = shell.read_with(&cx, |s, cx| s.queue_track_ids(cx));
+    assert_eq!(queue_before, vec!["lib-1".to_string()]);
+
+    let library = cx.debug_bounds("source-library").expect("library pill");
+    cx.simulate_click(library.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.active_source()),
+        TrackSource::Navidrome
+    );
+    assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Home);
+    assert!(cx.debug_bounds("nav-albums").is_some());
+    assert!(cx.debug_bounds("nav-moods").is_none());
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.queue_track_ids(cx)),
+        queue_before,
+        "switching source must not touch the queue"
+    );
+    let saved = std::fs::read_to_string(&config_path).unwrap_or_default();
+    assert!(
+        saved.contains("active_source = \"navidrome\""),
+        "the chosen source was not persisted: {saved}"
+    );
+
+    // Search is scoped: library mode must not get YouTube results.
+    let nav_search = cx.debug_bounds("nav-search").expect("nav-search");
+    cx.simulate_click(nav_search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alpha");
+    cx.simulate_keystrokes("enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.library_result_count()) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        shell.read_with(&cx, |s, _| s.library_result_count()) > 0,
+        "library search returned nothing"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.youtube_result_count()),
+        0,
+        "library search must not run the YouTube provider"
+    );
+
+    let youtube = cx.debug_bounds("source-youtube").expect("youtube pill");
+    cx.simulate_click(youtube.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.active_source()),
+        TrackSource::YouTube
+    );
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.search_result_count()),
+        0,
+        "switching source clears the other source's search results"
+    );
+
+    let nav_search = cx.debug_bounds("nav-search").expect("nav-search");
+    cx.simulate_click(nav_search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alpha");
+    cx.simulate_keystrokes("enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, _| s.youtube_result_count()) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.youtube_result_count()),
+        2,
+        "YouTube search did not return its fixture results"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |s, _| s.library_result_count()),
+        0,
+        "YouTube search must not mix library results"
+    );
+    assert!(cx.debug_bounds("nav-moods").is_some());
+    assert!(cx.debug_bounds("nav-albums").is_none());
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.queue_track_ids(cx)),
+        vec!["lib-1".to_string()],
+        "a cross-source queue keeps playing"
+    );
 }

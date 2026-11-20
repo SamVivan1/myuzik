@@ -97,6 +97,7 @@ impl SearchIndex {
             albums: ranked(&self.albums, &tokens),
             songs: ranked(&self.songs, &tokens),
             playlists: ranked(&self.playlists, &tokens),
+            youtube: Vec::new(),
         }
     }
 
@@ -118,6 +119,7 @@ fn empty_results() -> SearchResults {
         albums: Vec::new(),
         songs: Vec::new(),
         playlists: Vec::new(),
+        youtube: Vec::new(),
     }
 }
 

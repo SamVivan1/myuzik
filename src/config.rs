@@ -15,6 +15,33 @@ pub enum StreamQuality {
     Kbps192,
 }
 
+/// How much bandwidth YouTube playback may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum YouTubeQuality {
+    /// Best audio-only stream YouTube offers (usually Opus, ~130 kbps).
+    #[default]
+    Standard,
+    /// Cap the bitrate; YouTube's next Opus rung is ~67 kbps.
+    Saver,
+}
+
+impl YouTubeQuality {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Saver => "saver",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Standard => "Standard",
+            Self::Saver => "Data saver",
+        }
+    }
+}
+
 /// Current schema version of `config.toml`.
 ///
 /// INT-08: the file had no version at all, so a renamed or removed key simply
@@ -56,6 +83,19 @@ pub struct AppConfig {
     pub overlay_opacity: f32,
     pub reduce_motion: bool,
     pub follow_os_accent: bool,
+    /// Which source the sidebar was last browsing. Resolved against what is
+    /// actually configured at startup, so a saved YouTube choice cannot strand
+    /// a user who turned YouTube off.
+    #[serde(default)]
+    pub active_source: crate::library::TrackSource,
+    /// Optional second source: YouTube Music search and playback.
+    pub youtube_enabled: bool,
+    pub youtube_quality: YouTubeQuality,
+    /// Optional Netscape cookie file for tracks that need sign-in. Empty means
+    /// anonymous playback.
+    pub youtube_cookies: String,
+    /// Upper bound for buffered YouTube audio, in MiB.
+    pub stream_cache_mb: u64,
     /// Keys this build does not know: a typo, or a key a newer build wrote.
     ///
     /// INT-08b: `#[serde(default)]` made an unknown key vanish without a trace.
@@ -85,6 +125,11 @@ impl Default for AppConfig {
             overlay_opacity: 0.74,
             reduce_motion: false,
             follow_os_accent: true,
+            active_source: crate::library::TrackSource::Navidrome,
+            youtube_enabled: false,
+            youtube_quality: YouTubeQuality::Standard,
+            youtube_cookies: String::new(),
+            stream_cache_mb: 1024,
             unknown: std::collections::BTreeMap::new(),
         }
     }
@@ -683,6 +728,21 @@ mod tests {
         assert_eq!(c.lyrics_offset_ms, 0);
         assert!(c.follow_os_accent);
         assert!(c.scrobble);
+    }
+
+    #[test]
+    fn active_source_defaults_to_navidrome_and_round_trips() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.active_source, crate::library::TrackSource::Navidrome);
+
+        config.active_source = crate::library::TrackSource::YouTube;
+        let text = toml::to_string(&config).expect("serialize config");
+        let parsed: AppConfig = toml::from_str(&text).expect("parse config");
+        assert_eq!(parsed.active_source, crate::library::TrackSource::YouTube);
+
+        // A config written before the field existed must keep working.
+        let old: AppConfig = toml::from_str("version = 1\n").expect("old config");
+        assert_eq!(old.active_source, crate::library::TrackSource::Navidrome);
     }
 
     /// A hung Secret Service must not hold the caller: the call is abandoned

@@ -1,10 +1,15 @@
-use crate::app::Route;
-use crate::config::{AppConfig, Paths};
+use crate::app::{AppAction, QueueAction, Route, SourceId};
+use crate::config::{AppConfig, Paths, YouTubeQuality};
+use crate::library::TrackSource;
 use crate::lyrics::provider::LyricsProvider;
 use crate::navidrome::client::NavidromeClient;
 use crate::platform::mpris::MprisHandle;
 use crate::player::engine::{PlayerCommand, PlayerEvent, PlayerHandle};
 use crate::player::state::{PlaybackStatus, PlayerState};
+use crate::provider::YouTubeProvider;
+use crate::services::{
+    MusicService, NavidromeService, PlaybackSource, SourceRegistry, YouTubeService,
+};
 use crate::theme::midnight_brass;
 use crate::ui::now_playing::NowPlayingView;
 use gpui::{
@@ -13,6 +18,17 @@ use gpui::{
 };
 use std::sync::Arc;
 
+/// Short-lived YouTube query cache: the helper is a process spawn, so a burst
+/// of identical searches should not pay for it twice.
+mod browse;
+mod queue;
+
+type YouTubeSearchCache = Arc<
+    std::sync::Mutex<
+        std::collections::HashMap<String, (std::time::Instant, Vec<crate::library::Track>)>,
+    >,
+>;
+
 #[allow(dead_code)]
 pub struct Shell {
     player_state: gpui::Entity<PlayerState>,
@@ -20,6 +36,8 @@ pub struct Shell {
     config: AppConfig,
     paths: Paths,
     route: Route,
+    /// Which source the sidebar is browsing. Playback and the queue are global.
+    active_source: TrackSource,
     #[allow(dead_code)]
     client: Option<Arc<NavidromeClient>>,
     lyrics_provider: Option<Arc<LyricsProvider>>,
@@ -41,9 +59,43 @@ pub struct Shell {
     overlay_geometry: Arc<std::sync::Mutex<crate::overlay::OverlayGeometry>>,
     resize_start: Option<(gpui::Point<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
     toast: Option<String>,
+    /// Queue drawer visibility. The queue itself lives in `PlayerState`.
+    queue_panel_open: bool,
     lyrics_generation: Arc<std::sync::atomic::AtomicU64>,
     scrobble_enabled: Arc<std::sync::atomic::AtomicBool>,
     search_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Optional YouTube Music source. `None` when the user turned it off.
+    youtube: Option<Arc<YouTubeProvider>>,
+    /// The UI-facing backend contract. Screens use this instead of reaching
+    /// for Navidrome/YouTube clients directly.
+    services: SourceRegistry,
+    youtube_search_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    youtube_buffer_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    youtube_radio_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    youtube_generation: Arc<std::sync::atomic::AtomicU64>,
+    youtube_radio_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Short-lived cache for repeated queries; the helper is a process spawn,
+    /// so a burst of identical searches should not pay for it twice.
+    youtube_search_cache: YouTubeSearchCache,
+    youtube_loading: bool,
+    youtube_error: Option<String>,
+    /// YouTube Music home shelves. Loaded on startup when YouTube is the
+    /// active source; empty for a Navidrome-only install.
+    youtube_home: Option<Vec<crate::provider::youtube::BrowseSection>>,
+    youtube_home_loading: bool,
+    youtube_home_error: Option<String>,
+    /// Detail screens are shared by both sources; the route carries the source.
+    playlist_detail: Option<crate::library::PlaylistDetail>,
+    detail_loading: bool,
+    detail_error: Option<String>,
+    /// Mood/genre categories and the playlists for the selected one.
+    mood_categories: Option<Vec<crate::provider::youtube::MoodCategory>>,
+    mood_title: Option<String>,
+    mood_playlists: Vec<crate::library::Playlist>,
+    mood_loading: bool,
+    /// Cached size of the stream cache, refreshed after a buffer or a clear.
+    /// Rendering Settings must not walk the cache directory.
+    youtube_cache_bytes: u64,
     /// On-disk snapshot of the library, so startup and search do not wait on the
     /// server. Audio is still streamed on demand; only metadata is cached.
     library_cache: crate::library::cache::LibraryCache,
@@ -97,7 +149,7 @@ impl Shell {
     pub fn new(
         cx: &mut gpui::Context<Self>,
         player_handle: PlayerHandle,
-        config: AppConfig,
+        mut config: AppConfig,
         paths: Paths,
         mpris_handle: Option<MprisHandle>,
     ) -> Self {
@@ -284,16 +336,37 @@ impl Shell {
         } else {
             None
         };
-        let lyrics_provider = client.as_ref().map(|_| {
-            let pw = crate::config::load_password(&paths).unwrap_or_default();
-            let owned = NavidromeClient::new(&config.server_url, &config.username, &pw)
-                .expect("client already validated");
-            Arc::new(LyricsProvider::new(
-                owned,
-                crate::lyrics::cache::LyricsCache::new(paths.lyrics.clone()),
-                config.prefer_navidrome_lyrics,
-            ))
+        let lyrics_provider = Some(Arc::new(LyricsProvider::with_optional_client(
+            client.as_ref().map(|client| (**client).clone()),
+            crate::lyrics::cache::LyricsCache::new(paths.lyrics.clone()),
+            config.prefer_navidrome_lyrics,
+        )));
+        let youtube = if config.youtube_enabled {
+            let cookies = {
+                let path = config.youtube_cookies.trim();
+                (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+            };
+            Some(Arc::new(YouTubeProvider::new(
+                paths.cache.join("streams"),
+                config.youtube_quality,
+                cookies,
+                config.stream_cache_mb,
+            )))
+        } else {
+            None
+        };
+        let navidrome_service = client.as_ref().map(|client| {
+            Arc::new(NavidromeService::new((**client).clone(), config.quality))
+                as Arc<dyn MusicService>
         });
+        let youtube_service = youtube.as_ref().map(|provider| {
+            Arc::new(YouTubeService::new(provider.clone())) as Arc<dyn MusicService>
+        });
+        let services = SourceRegistry::new(navidrome_service, youtube_service);
+        let youtube_cache_bytes = youtube
+            .as_ref()
+            .map(|provider| provider.cache_bytes())
+            .unwrap_or(0);
         let tray_slot: Arc<std::sync::Mutex<Option<Arc<crate::platform::tray::Tray>>>> =
             Arc::new(std::sync::Mutex::new(None));
         let radio = Arc::new(std::sync::Mutex::new(crate::library::radio::Radio::new()));
@@ -301,10 +374,17 @@ impl Shell {
         let radio_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let radio_continue_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let self_weak = cx.entity().downgrade();
-        let route = if client.is_none() {
-            Route::Setup
-        } else {
+        let resolved_source = crate::app::resolve_active_source(
+            config.active_source,
+            client.is_some(),
+            youtube.is_some(),
+        );
+        let active_source = resolved_source.unwrap_or(TrackSource::Navidrome);
+        config.active_source = active_source;
+        let route = if resolved_source.is_some() {
             Route::Home
+        } else {
+            Route::Setup
         };
         // Poll player events in background
         let state = player_state.clone();
@@ -329,6 +409,18 @@ impl Shell {
                 cover_cache.clone(),
                 cx,
             );
+        }
+        if active_source == TrackSource::YouTube && youtube.is_some() {
+            // YouTube is the remembered source: the first frame shows the
+            // loading state, then this task swaps in the shelves. Library data
+            // still loads in the background for the sidebar and search.
+            let entity = self_entity.clone();
+            cx.spawn(async move |_, cx| {
+                cx.update(|app| {
+                    entity.update(app, |shell, cx| shell.refresh_youtube_home(cx));
+                });
+            })
+            .detach();
         }
         cx.spawn(async move |_, cx| {
             let mut scrobble = crate::player::scrobble::ScrobbleTracker::new();
@@ -535,25 +627,29 @@ impl Shell {
                         track_duration = std::time::Duration::ZERO;
                         last_pos = std::time::Duration::ZERO;
                         last_pos_at = std::time::Instant::now();
-                        scrobble_track = Some(id.clone());
-                        if let Some(mh) = &mpris_for_loop {
-                            let current = cx.update(|app| state.read(app).current.clone());
-                            if let Some(track) = current {
-                                let art = track.cover_art_id.as_ref().and_then(|cid| {
-                                    let jpg = covers_for_loop.join(format!("{cid}.jpg"));
-                                    let png = covers_for_loop.join(format!("{cid}.png"));
-                                    if jpg.exists() {
-                                        Some(format!("file://{}", jpg.display()))
-                                    } else if png.exists() {
-                                        Some(format!("file://{}", png.display()))
-                                    } else {
-                                        None
-                                    }
-                                });
-                                mh.update_metadata(&track, art);
-                            }
+                        let current_track = cx.update(|app| state.read(app).current.clone());
+                        scrobble_track = current_track
+                            .as_ref()
+                            .filter(|track| track.source == TrackSource::Navidrome)
+                            .map(|_| id.clone());
+                        if let Some(mh) = &mpris_for_loop
+                            && let Some(track) = current_track
+                        {
+                            let art = track.cover_key().and_then(|key| {
+                                let jpg = covers_for_loop.join(format!("{key}.jpg"));
+                                let png = covers_for_loop.join(format!("{key}.png"));
+                                if jpg.exists() {
+                                    Some(format!("file://{}", jpg.display()))
+                                } else if png.exists() {
+                                    Some(format!("file://{}", png.display()))
+                                } else {
+                                    None
+                                }
+                            });
+                            mh.update_metadata(&track, art);
                         }
-                        if scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
+                        if scrobble_track.is_some()
+                            && scrobble_enabled_for_loop.load(std::sync::atomic::Ordering::Relaxed)
                             && let Some(client) = &scrobble_client
                         {
                             let client = client.clone();
@@ -605,6 +701,7 @@ impl Shell {
             config,
             paths,
             route,
+            active_source,
             client,
             lyrics_provider,
             home_state,
@@ -623,9 +720,31 @@ impl Shell {
             overlay_geometry,
             resize_start,
             toast,
+            queue_panel_open: false,
             lyrics_generation,
             scrobble_enabled,
             search_generation,
+            youtube,
+            services,
+            youtube_search_cancel: None,
+            youtube_buffer_cancel: None,
+            youtube_radio_cancel: None,
+            youtube_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            youtube_radio_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            youtube_search_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            youtube_loading: false,
+            youtube_error: None,
+            youtube_home: None,
+            youtube_home_loading: false,
+            youtube_home_error: None,
+            playlist_detail: None,
+            detail_loading: false,
+            detail_error: None,
+            mood_categories: None,
+            mood_title: None,
+            mood_playlists: Vec::new(),
+            mood_loading: false,
+            youtube_cache_bytes,
             library_cache,
             library_index,
             syncing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -685,6 +804,226 @@ impl Shell {
         self.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
     }
 
+    fn navigate_nav(&mut self, route: Route, cx: &mut gpui::Context<Self>) {
+        // A focus handle can outlive the menu item that created it. Do not let
+        // Enter on a stale Library control open a page while YouTube is active.
+        if matches!(
+            route,
+            Route::Albums | Route::Artists | Route::Playlists | Route::Favorites
+        ) && self.active_source != TrackSource::Navidrome
+        {
+            return;
+        }
+        if route == Route::Moods && self.active_source != TrackSource::YouTube {
+            return;
+        }
+        self.route = route;
+        self.selected_album = None;
+        self.album_detail = None;
+        self.artist_detail = None;
+        self.playlist_detail = None;
+        self.detail_error = None;
+        cx.notify();
+    }
+
+    fn nav_link(
+        &mut self,
+        key: &'static str,
+        label: &'static str,
+        active: bool,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+        t: &crate::theme::Colors,
+    ) -> gpui::Stateful<gpui::Div> {
+        let handle = self.focus_for(key, Self::TAB_NAV, cx);
+        nav_item(label, active, t)
+            .id(key)
+            .debug_selector(move || key.to_string())
+            .track_focus(&handle)
+            .tab_index(Self::TAB_NAV)
+            .role(gpui::Role::Link)
+            .aria_label(label)
+            .aria_selected(active)
+            .border_2()
+            .border_color(self.focus_border(&handle, window, gpui::rgba(0x00000000), t))
+            .active(|style| style.bg(t.clay_surface).text_color(t.clay_ink))
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                this.activate_focused(key, window, cx);
+            }))
+    }
+
+    fn source_pill(
+        &mut self,
+        source: TrackSource,
+        label: &'static str,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+        t: &crate::theme::Colors,
+    ) -> gpui::Stateful<gpui::Div> {
+        let key = match source {
+            TrackSource::Navidrome => "source-library",
+            TrackSource::YouTube => "source-youtube",
+        };
+        let active = self.active_source == source;
+        let handle = self.focus_for(key, Self::TAB_NAV, cx);
+        div()
+            .id(key)
+            .debug_selector(move || key.to_string())
+            .track_focus(&handle)
+            .tab_index(Self::TAB_NAV)
+            .role(gpui::Role::Button)
+            .aria_label(format!("Browse {}", label))
+            .aria_selected(active)
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .py(gpui::px(5.0))
+            .rounded(gpui::px(999.0))
+            .bg(if active {
+                t.clay_surface
+            } else {
+                gpui::rgba(0x00000000)
+            })
+            .text_color(if active { t.clay_ink } else { t.text_secondary })
+            .text_size(gpui::px(10.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .border_2()
+            .border_color(self.focus_border(&handle, window, gpui::rgba(0x00000000), t))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.set_active_source(source, cx);
+            }))
+            .child(label)
+    }
+
+    fn render_sidebar_nav(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+        t: &crate::theme::Colors,
+    ) -> gpui::Div {
+        let library_available = self.source_available(TrackSource::Navidrome);
+        let youtube_available = self.source_available(TrackSource::YouTube);
+        let mut column = div().flex().flex_col().gap(gpui::px(12.0));
+
+        if library_available && youtube_available {
+            column = column.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(gpui::px(2.0))
+                    .p(gpui::px(3.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(t.glass_tint)
+                    .border_1()
+                    .border_color(t.glass_border)
+                    .child(self.source_pill(TrackSource::Navidrome, "Library", window, cx, t))
+                    .child(self.source_pill(TrackSource::YouTube, "YouTube", window, cx, t)),
+            );
+        } else if youtube_available {
+            column = column.child(
+                div()
+                    .px(gpui::px(10.0))
+                    .py(gpui::px(6.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(t.glass_tint)
+                    .border_1()
+                    .border_color(t.glass_border)
+                    .text_size(gpui::px(9.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(t.text_tertiary)
+                    .child("Source · YouTube Music"),
+            );
+        } else if library_available {
+            column = column.child(
+                div()
+                    .px(gpui::px(10.0))
+                    .py(gpui::px(6.0))
+                    .rounded(gpui::px(999.0))
+                    .bg(t.glass_tint)
+                    .border_1()
+                    .border_color(t.glass_border)
+                    .text_size(gpui::px(9.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(t.text_tertiary)
+                    .child("Source · Library"),
+            );
+        }
+
+        let mut nav = div().flex().flex_col().gap(gpui::px(4.0));
+        nav =
+            nav.child(self.nav_link("nav-home", "Home", self.route == Route::Home, window, cx, t));
+        nav = nav.child(self.nav_link(
+            "nav-nowplaying",
+            "Now Playing",
+            self.route == Route::NowPlaying,
+            window,
+            cx,
+            t,
+        ));
+        nav = nav.child(self.nav_link(
+            "nav-search",
+            "Search",
+            self.route == Route::Search,
+            window,
+            cx,
+            t,
+        ));
+        if self.active_source == TrackSource::Navidrome {
+            nav = nav.child(self.nav_link(
+                "nav-albums",
+                "Albums",
+                self.route == Route::Albums,
+                window,
+                cx,
+                t,
+            ));
+            nav = nav.child(self.nav_link(
+                "nav-artists",
+                "Artists",
+                self.route == Route::Artists,
+                window,
+                cx,
+                t,
+            ));
+            nav = nav.child(self.nav_link(
+                "nav-playlists",
+                "Playlists",
+                self.route == Route::Playlists,
+                window,
+                cx,
+                t,
+            ));
+            nav = nav.child(self.nav_link(
+                "nav-favorites",
+                "Favorites",
+                self.route == Route::Favorites,
+                window,
+                cx,
+                t,
+            ));
+        } else {
+            nav = nav.child(self.nav_link(
+                "nav-moods",
+                "Moods & genres",
+                self.route == Route::Moods,
+                window,
+                cx,
+                t,
+            ));
+        }
+        nav = nav.child(self.nav_link(
+            "nav-settings",
+            "Settings",
+            self.route == Route::Settings,
+            window,
+            cx,
+            t,
+        ));
+        column.child(nav)
+    }
+
     /// Run the action of whatever control currently has keyboard focus.
     ///
     /// gpui at this revision wires `on_click` to the mouse only, so a control
@@ -700,14 +1039,24 @@ impl Shell {
     ) {
         match key {
             // Sidebar navigation.
-            "nav-home" => self.go(Route::Home),
-            "nav-nowplaying" => self.go(Route::NowPlaying),
-            "nav-search" => self.go(Route::Search),
-            "nav-albums" => self.go(Route::Albums),
-            "nav-artists" => self.go(Route::Artists),
-            "nav-playlists" => self.go(Route::Playlists),
-            "nav-favorites" => self.go(Route::Favorites),
-            "nav-settings" => self.go(Route::Settings),
+            "nav-home" => self.navigate_nav(Route::Home, cx),
+            "nav-nowplaying" => self.navigate_nav(Route::NowPlaying, cx),
+            "nav-search" => {
+                self.navigate_nav(Route::Search, cx);
+                window.focus(&self.search_focus, cx);
+            }
+            "nav-albums" => self.navigate_nav(Route::Albums, cx),
+            "nav-artists" => self.navigate_nav(Route::Artists, cx),
+            "nav-playlists" => self.navigate_nav(Route::Playlists, cx),
+            "nav-favorites" => self.navigate_nav(Route::Favorites, cx),
+            "nav-moods" => self.dispatch(AppAction::OpenMoods, cx),
+            "nav-settings" => self.navigate_nav(Route::Settings, cx),
+            "source-library" => {
+                self.set_active_source(TrackSource::Navidrome, cx);
+            }
+            "source-youtube" => {
+                self.set_active_source(TrackSource::YouTube, cx);
+            }
             "sidebar-pin-lyrics" | "player-pin-lyrics" => self.toggle_overlay(cx),
             // Page content.
             "content-search-shortcut" => self.go(Route::Search),
@@ -721,6 +1070,11 @@ impl Shell {
                     self.play_tracks(detail.songs, 0, cx);
                 }
             }
+            "album-enqueue" => {
+                if let Some(detail) = self.album_detail.clone() {
+                    self.enqueue_tracks(detail.songs, cx);
+                }
+            }
             "album-star" => self.toggle_album_star(cx),
             // Player bar.
             "player-now-playing" => self.go(Route::NowPlaying),
@@ -730,6 +1084,11 @@ impl Shell {
             }
             "player-shuffle" => self.toggle_shuffle(cx),
             "player-repeat" => self.toggle_repeat(cx),
+            "player-queue" => self.dispatch(AppAction::Queue(QueueAction::TogglePanel), cx),
+            "queue-close" => self.dispatch(AppAction::Queue(QueueAction::TogglePanel), cx),
+            "queue-clear-upcoming" => {
+                self.dispatch(AppAction::Queue(QueueAction::ClearUpcoming), cx)
+            }
             "player-prev" => self.play_previous(cx),
             "player-next" => self.play_next(cx),
             "player-seek-back" => {
@@ -752,6 +1111,40 @@ impl Shell {
             "player-volume-up" => self.adjust_volume(0.05, cx),
             // Settings rows.
             "settings-quality" => self.cycle_quality(),
+            "settings-youtube" => self.toggle_youtube(cx),
+            "settings-youtube-quality" => self.cycle_youtube_quality(cx),
+            "settings-youtube-cache" => self.clear_youtube_cache(cx),
+            "settings-server" => {
+                self.route = Route::Setup;
+                self.setup_error = None;
+                self.setup_focus_requested = false;
+            }
+            "search-youtube-retry" => self.schedule_search(true, cx),
+            "youtube-moods" => self.open_moods(cx),
+            "youtube-home-retry" => self.refresh_youtube_home(cx),
+            "detail-back" => self.detail_back(cx),
+            "detail-play-all" => {
+                if let Some(detail) = self.album_detail.clone() {
+                    self.play_tracks(detail.songs, 0, cx);
+                }
+            }
+            "detail-enqueue" => {
+                if let Some(detail) = self.album_detail.clone() {
+                    self.enqueue_tracks(detail.songs, cx);
+                }
+            }
+            "detail-star" => self.toggle_album_star(cx),
+            "playlist-play-all" => {
+                if let Some(detail) = self.playlist_detail.clone() {
+                    self.play_tracks(detail.songs, 0, cx);
+                }
+            }
+            "playlist-enqueue" => {
+                if let Some(detail) = self.playlist_detail.clone() {
+                    self.enqueue_tracks(detail.songs, cx);
+                }
+            }
+            "setup-youtube" => self.use_youtube_setup(cx),
             "settings-scrobble" => self.toggle_scrobble(),
             "settings-clear-cache" => self.clear_library_cache(cx),
             "settings-shuffle" => self.toggle_shuffle(cx),
@@ -770,11 +1163,11 @@ impl Shell {
             // `playlist:<id>` and `track-<index>`.
             other => {
                 if let Some(id) = other.strip_prefix("album:") {
-                    self.open_album(id.to_string(), cx);
+                    self.open_album(source_for_id(id), id.to_string(), cx);
                 } else if let Some(id) = other.strip_prefix("artist:") {
-                    self.select_artist(id.to_string(), cx);
+                    self.open_artist(source_for_id(id), id.to_string(), cx);
                 } else if let Some(id) = other.strip_prefix("playlist:") {
-                    self.play_playlist(id.to_string(), cx);
+                    self.open_playlist(source_for_id(id), id.to_string(), cx);
                 } else if let Some(index) = other
                     .strip_prefix("track-")
                     .and_then(|i| i.parse::<usize>().ok())
@@ -790,39 +1183,194 @@ impl Shell {
                 {
                     self.play_tracks(songs, index, cx);
                 } else if let Some(index) = other
+                    .strip_prefix("detail-track-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(detail) = self.album_detail.clone() {
+                        self.play_tracks(detail.songs, index, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("detail-next-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(track) = self
+                        .album_detail
+                        .as_ref()
+                        .and_then(|detail| detail.songs.get(index))
+                        .cloned()
+                    {
+                        self.enqueue_next(track, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("detail-add-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(track) = self
+                        .album_detail
+                        .as_ref()
+                        .and_then(|detail| detail.songs.get(index))
+                        .cloned()
+                    {
+                        self.enqueue_tracks(vec![track], cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("playlist-next-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(track) = self
+                        .playlist_detail
+                        .as_ref()
+                        .and_then(|detail| detail.songs.get(index))
+                        .cloned()
+                    {
+                        self.enqueue_next(track, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("playlist-add-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(track) = self
+                        .playlist_detail
+                        .as_ref()
+                        .and_then(|detail| detail.songs.get(index))
+                        .cloned()
+                    {
+                        self.enqueue_tracks(vec![track], cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("playlist-track-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if let Some(detail) = self.playlist_detail.clone() {
+                        self.play_tracks(detail.songs, index, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("mood-playlist-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                    && let Some(playlist) = self.mood_playlists.get(index).cloned()
+                {
+                    self.open_playlist(TrackSource::YouTube, playlist.id, cx);
+                } else if let Some(index) = other
+                    .strip_prefix("mood-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    let mood = self.mood_categories.as_ref().and_then(|categories| {
+                        categories
+                            .iter()
+                            .flat_map(|category| category.moods.iter())
+                            .nth(index)
+                            .cloned()
+                    });
+                    if let Some(mood) = mood {
+                        self.open_mood(mood.title, mood.params, cx);
+                    }
+                } else if let Some(key) = other.strip_prefix("yt-card-")
+                    && let Some((section, index)) = key.split_once('-')
+                    && let (Ok(section), Ok(index)) =
+                        (section.parse::<usize>(), index.parse::<usize>())
+                {
+                    let card = self
+                        .youtube_home
+                        .as_ref()
+                        .and_then(|sections| sections.get(section))
+                        .and_then(|section| section.items.get(index))
+                        .cloned();
+                    if let Some(card) = card {
+                        use crate::provider::youtube::BrowseCard;
+                        match card {
+                            BrowseCard::Song(track) => self.play_youtube_result(track, cx),
+                            BrowseCard::Album(album) => {
+                                self.open_album(TrackSource::YouTube, album.id, cx)
+                            }
+                            BrowseCard::Playlist(playlist) => {
+                                self.open_playlist(TrackSource::YouTube, playlist.id, cx)
+                            }
+                            BrowseCard::Artist(artist) => {
+                                self.open_artist(TrackSource::YouTube, artist.id, cx)
+                            }
+                        }
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("queue-play-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    self.dispatch(AppAction::Queue(QueueAction::PlayAt(index)), cx);
+                } else if let Some(index) = other
+                    .strip_prefix("queue-up-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    if index > 0 {
+                        self.dispatch(
+                            AppAction::Queue(QueueAction::Move {
+                                from: index,
+                                to: index - 1,
+                            }),
+                            cx,
+                        );
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("queue-down-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    let len = self.player_state.read(cx).queue.len();
+                    if index + 1 < len {
+                        self.dispatch(
+                            AppAction::Queue(QueueAction::Move {
+                                from: index,
+                                to: index + 1,
+                            }),
+                            cx,
+                        );
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("queue-remove-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    self.dispatch(AppAction::Queue(QueueAction::Remove(index)), cx);
+                } else if let Some(index) = other
+                    .strip_prefix("search-youtube-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                    && let Some(track) = self
+                        .search_results
+                        .as_ref()
+                        .and_then(|results| results.youtube.get(index))
+                        .cloned()
+                {
+                    self.play_youtube_result(track, cx);
+                } else if let Some(index) = other
                     .strip_prefix("search-album-")
                     .and_then(|i| i.parse::<usize>().ok())
                 {
-                    if let Some(id) = self
+                    if let Some((source, id)) = self
                         .search_results
                         .as_ref()
                         .and_then(|r| r.albums.get(index))
-                        .map(|a| a.id.clone())
+                        .map(|a| (a.source, a.id.clone()))
                     {
-                        self.open_album(id, cx);
+                        self.open_album(source, id, cx);
                     }
                 } else if let Some(index) = other
                     .strip_prefix("search-artist-")
                     .and_then(|i| i.parse::<usize>().ok())
                 {
-                    if let Some(id) = self
+                    if let Some((source, id)) = self
                         .search_results
                         .as_ref()
                         .and_then(|r| r.artists.get(index))
-                        .map(|a| a.id.clone())
+                        .map(|a| (a.source, a.id.clone()))
                     {
-                        self.select_artist(id, cx);
+                        self.open_artist(source, id, cx);
                     }
                 } else if let Some(index) = other
                     .strip_prefix("search-playlist-")
                     .and_then(|i| i.parse::<usize>().ok())
-                    && let Some(id) = self
+                    && let Some((source, id)) = self
                         .search_results
                         .as_ref()
                         .and_then(|r| r.playlists.get(index))
-                        .map(|p| p.id.clone())
+                        .map(|p| (p.source, p.id.clone()))
                 {
-                    self.play_playlist(id, cx);
+                    self.play_playlist(source, id, cx);
                 }
             }
         }
@@ -994,6 +1542,37 @@ impl Shell {
             let queue = self.player_state.read(cx).queue.clone();
             mh.update_queue(&queue);
         }
+    }
+
+    /// Insert one track immediately after the current one.
+    pub fn enqueue_next(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
+        let title = track.title.clone();
+        self.player_state.update(cx, |ps, _cx| {
+            ps.queue.play_next(track);
+            ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+        });
+        self.sync_mpris_queue(cx);
+        self.toast_from_app(format!("Playing {title} next."), cx);
+    }
+
+    /// Append a collection to the queue without disturbing playback.
+    pub fn enqueue_tracks(&mut self, tracks: Vec<crate::library::Track>, cx: &mut gpui::App) {
+        if tracks.is_empty() {
+            return;
+        }
+        let count = tracks.len();
+        self.player_state.update(cx, |ps, _cx| {
+            ps.queue.append(tracks);
+            ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+        });
+        self.sync_mpris_queue(cx);
+        self.toast_from_app(
+            format!(
+                "Added {count} track{} to the queue.",
+                if count == 1 { "" } else { "s" }
+            ),
+            cx,
+        );
     }
 
     /// Nudge the volume by `delta`, keeping state, engine and MPRIS in step.
@@ -1184,7 +1763,34 @@ impl Shell {
             } else {
                 None
             };
-            self.route = if cfg.server_url.is_empty() {
+            self.lyrics_provider = Some(Arc::new(LyricsProvider::with_optional_client(
+                self.client.as_ref().map(|client| (**client).clone()),
+                crate::lyrics::cache::LyricsCache::new(self.paths.lyrics.clone()),
+                cfg.prefer_navidrome_lyrics,
+            )));
+            self.youtube = if cfg.youtube_enabled {
+                let cookies = {
+                    let path = cfg.youtube_cookies.trim();
+                    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+                };
+                Some(Arc::new(YouTubeProvider::new(
+                    self.paths.cache.join("streams"),
+                    cfg.youtube_quality,
+                    cookies,
+                    cfg.stream_cache_mb,
+                )))
+            } else {
+                None
+            };
+            self.youtube_cache_bytes = self
+                .youtube
+                .as_ref()
+                .map(|provider| provider.cache_bytes())
+                .unwrap_or(0);
+            self.rebuild_services();
+            self.route = if self.client.is_none() && cfg.youtube_enabled {
+                Route::Search
+            } else if self.client.is_none() {
                 Route::Setup
             } else {
                 Route::Home
@@ -1333,66 +1939,187 @@ impl Shell {
     /// Typing used to do nothing until Enter was pressed, while the field
     /// promised "Type to search". A short debounce coalesces keystrokes, and the
     /// generation counter still discards out-of-order responses.
+    ///
+    /// Search follows the sidebar's active source. Library results are local
+    /// or Navidrome; YouTube results use the one-shot helper. The two are never
+    /// merged, so switching source cannot leave stale results from the other.
     fn schedule_search(&mut self, immediate: bool, cx: &mut gpui::Context<Self>) {
+        use std::sync::atomic::Ordering;
+
         let query = self.search_query.trim().to_string();
-        // Search the cached library first: it is instant and works offline, so a
-        // keystroke never waits for the server. The server is only asked when no
-        // snapshot exists yet (first run, before the first sync).
-        if let Some(index) = &self.library_index
-            && !index.is_empty()
-        {
-            let results = if query.is_empty() {
-                None
-            } else {
-                Some(index.search(&query))
-            };
-            self.search_results = results;
+        if query.is_empty() {
+            self.search_generation.fetch_add(1, Ordering::SeqCst);
+            self.cancel_youtube_search();
+            self.search_results = None;
+            self.youtube_loading = false;
+            self.youtube_error = None;
             cx.notify();
             return;
         }
-        let generation = self
-            .search_generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        if query.is_empty() {
-            self.search_results = None;
+
+        let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.cancel_youtube_search();
+
+        // Search only the source the sidebar is browsing. Switching source
+        // clears the other source's results, so no stale mix can reappear.
+        if self.active_source == TrackSource::Navidrome {
+            self.youtube_loading = false;
+            self.youtube_error = None;
+            // Local results immediately. The server is only asked when no
+            // snapshot exists yet (first run, before the first sync).
+            if let Some(index) = &self.library_index
+                && !index.is_empty()
+            {
+                self.search_results = Some(index.search(&query));
+                cx.notify();
+            } else if let Some(client) = self.client.clone() {
+                let counter = self.search_generation.clone();
+                let entity = cx.entity();
+                let query_bg = query.clone();
+                cx.spawn(async move |_, cx| {
+                    if !immediate {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(250))
+                            .await;
+                        if counter.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                    }
+                    let request = client.clone();
+                    let res = cx
+                        .background_executor()
+                        .spawn(async move { request.search(&query_bg) })
+                        .await;
+                    if counter.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    cx.update(|app| {
+                        app.update_entity(&entity, |shell, cx| {
+                            if let Ok(results) = res {
+                                shell.search_results = Some(results);
+                                cx.notify();
+                            }
+                        });
+                    });
+                })
+                .detach();
+            }
+
             return;
         }
-        let Some(client) = self.client.clone() else {
+
+        // YouTube only: do not mix library groups into the results.
+        self.search_results = None;
+
+        // YouTube Music. The helper is a process spawn, so debounce more than
+        // the local path and reuse a very recent identical query.
+        let Some(provider) = self.youtube.clone() else {
+            self.youtube_loading = false;
+            self.youtube_error = None;
+            cx.notify();
             return;
         };
+        if let Ok(cache) = self.youtube_search_cache.lock()
+            && let Some((cached_at, cached)) = cache.get(&query)
+            && cached_at.elapsed() < std::time::Duration::from_secs(60)
+        {
+            let cached = cached.clone();
+            if let Some(results) = &mut self.search_results {
+                results.youtube = cached;
+            } else {
+                self.search_results = Some(crate::library::SearchResults {
+                    youtube: cached,
+                    ..Default::default()
+                });
+            }
+            self.youtube_loading = false;
+            self.youtube_error = None;
+            cx.notify();
+            return;
+        }
+
+        self.youtube_loading = true;
+        self.youtube_error = None;
+        cx.notify();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.youtube_search_cancel = Some(cancel.clone());
         let counter = self.search_generation.clone();
+        let cache = self.youtube_search_cache.clone();
         let entity = cx.entity();
+        let query_bg = query.clone();
         cx.spawn(async move |_, cx| {
             if !immediate {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(250))
+                    .timer(std::time::Duration::from_millis(350))
                     .await;
-                if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                if counter.load(Ordering::SeqCst) != generation || cancel.load(Ordering::Relaxed) {
                     return;
                 }
             }
-            let request = client.clone();
+            let provider_bg = provider.clone();
+            let query_for_helper = query_bg.clone();
+            let cancel_bg = cancel.clone();
             let res = cx
                 .background_executor()
-                .spawn(async move { request.search(&query) })
+                .spawn(async move { provider_bg.search(&query_for_helper, 20, &cancel_bg) })
                 .await;
-            if counter.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            if counter.load(Ordering::SeqCst) != generation || cancel.load(Ordering::Relaxed) {
                 return;
             }
             cx.update(|app| {
                 app.update_entity(&entity, |shell, cx| {
-                    if let Ok(results) = res {
-                        shell.search_results = Some(results);
-                        cx.notify();
+                    shell.youtube_loading = false;
+                    match res {
+                        Ok(tracks) => {
+                            shell.youtube_error = None;
+                            if let Ok(mut cache) = cache.lock() {
+                                cache.insert(
+                                    query_bg.clone(),
+                                    (std::time::Instant::now(), tracks.clone()),
+                                );
+                                if cache.len() > 32 {
+                                    let oldest = cache
+                                        .iter()
+                                        .min_by_key(|(_, (at, _))| *at)
+                                        .map(|(key, _)| key.clone());
+                                    if let Some(key) = oldest {
+                                        cache.remove(&key);
+                                    }
+                                }
+                            }
+                            if let Some(results) = &mut shell.search_results {
+                                results.youtube = tracks;
+                            } else {
+                                shell.search_results = Some(crate::library::SearchResults {
+                                    youtube: tracks,
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                        Err(crate::provider::ProviderError::Cancelled) => {}
+                        Err(error) => {
+                            shell.youtube_error = Some(provider_search_error_text(&error));
+                        }
                     }
+                    cx.notify();
                 });
             });
         })
         .detach();
     }
 
+    fn cancel_youtube_search(&mut self) {
+        if let Some(cancel) = self.youtube_search_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     pub fn play_track(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
+        if track.is_youtube() {
+            self.play_youtube_result(track, cx);
+            return;
+        }
+        self.cancel_youtube_radio();
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(vec![track.clone()], 0);
         });
@@ -1422,6 +2149,11 @@ impl Shell {
         if tracks.is_empty() || start >= tracks.len() {
             return;
         }
+        self.cancel_youtube_radio();
+        if tracks.len() == 1 && tracks[0].is_youtube() {
+            self.play_youtube_result(tracks[0].clone(), cx);
+            return;
+        }
         self.player_state.update(cx, |ps, _cx| {
             ps.play_now(tracks.clone(), start);
         });
@@ -1430,7 +2162,128 @@ impl Shell {
         self.load_and_play(&tracks[start], cx);
     }
 
+    /// Play one YouTube search result and queue its YouTube Music radio.
+    ///
+    /// The real client does not put the whole search page into the queue. A
+    /// song opens with its watch playlist/radio: the song plus related tracks
+    /// chosen by YouTube Music. AudioTube's `UserPlaylistModel` does the same
+    /// through `get_watch_playlist`; Sung exposes it as the `radio` op.
+    fn play_youtube_result(&mut self, track: crate::library::Track, cx: &mut gpui::App) {
+        self.cancel_youtube_radio();
+        self.player_state.update(cx, |ps, _cx| {
+            ps.play_now(vec![track.clone()], 0);
+        });
+        self.sync_mpris_queue(cx);
+        self.radio.lock().unwrap_or_else(|e| e.into_inner()).reset();
+        self.load_and_play(&track, cx);
+        self.fetch_youtube_radio(track, false, cx);
+    }
+
+    fn cancel_youtube_radio(&mut self) {
+        if let Some(cancel) = self.youtube_radio_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.youtube_radio_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fetch the radio/watch playlist for `seed` and append it to the queue.
+    ///
+    /// `continue_playback` is used when the queue has just run out: the first
+    /// new track is adopted and loaded, instead of only being appended.
+    fn fetch_youtube_radio(
+        &mut self,
+        seed: crate::library::Track,
+        continue_playback: bool,
+        cx: &mut gpui::App,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let Some(provider) = self.youtube.clone() else {
+            return;
+        };
+        if let Some(cancel) = self.youtube_radio_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.youtube_radio_cancel = Some(cancel.clone());
+        let generation = self.youtube_radio_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let counter = self.youtube_radio_generation.clone();
+        let entity = self.self_weak.clone();
+        let seed_id = seed.id.clone();
+        let seed_for_fetch = seed.clone();
+        cx.spawn(async move |cx| {
+            let provider_bg = provider.clone();
+            let cancel_bg = cancel.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { provider_bg.radio(&seed_for_fetch, 30, &cancel_bg) })
+                .await;
+            if counter.load(Ordering::SeqCst) != generation || cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            cx.update(|app| {
+                let _ = entity.update(app, |shell, cx| {
+                    let still_current = shell
+                        .player_state
+                        .read(cx)
+                        .current
+                        .as_ref()
+                        .is_some_and(|track| track.id == seed_id);
+                    if !still_current {
+                        return;
+                    }
+                    match result {
+                        Ok(items) => {
+                            let mut existing = shell.player_state.read(cx).queue.ids();
+                            let mut fresh = Vec::new();
+                            for item in items {
+                                if item.id != seed_id && existing.insert(item.id.clone()) {
+                                    fresh.push(item);
+                                }
+                            }
+                            if fresh.is_empty() {
+                                return;
+                            }
+                            if continue_playback {
+                                let resumed = shell.player_state.update(cx, |ps, _cx| {
+                                    let resumed = ps.queue.append_continue(fresh);
+                                    if let Some(track) = &resumed {
+                                        ps.adopt(track.clone());
+                                    }
+                                    ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+                                    resumed
+                                });
+                                if let Some(track) = resumed {
+                                    shell.load_and_play(&track, cx);
+                                }
+                            } else {
+                                shell.player_state.update(cx, |ps, _cx| {
+                                    ps.queue.append(fresh);
+                                    ps.queue.trim_front_to(crate::player::queue::MAX_QUEUE);
+                                });
+                            }
+                            shell.sync_mpris_queue(cx);
+                        }
+                        Err(crate::provider::ProviderError::Cancelled) => {}
+                        Err(error) => {
+                            shell.show_toast(
+                                format!(
+                                    "YouTube radio unavailable. {}",
+                                    provider_error_text(&error)
+                                ),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn play_next(&mut self, cx: &mut gpui::App) {
+        self.cancel_youtube_radio();
         let next = self.player_state.update(cx, |ps, _cx| ps.next());
         self.sync_mpris_queue(cx);
         match next {
@@ -1446,6 +2299,7 @@ impl Shell {
     }
 
     pub fn play_previous(&mut self, cx: &mut gpui::App) {
+        self.cancel_youtube_radio();
         let prev = self.player_state.update(cx, |ps, _cx| ps.previous());
         self.sync_mpris_queue(cx);
         if let Some(track) = prev {
@@ -1454,19 +2308,22 @@ impl Shell {
     }
 
     fn cache_track_cover(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
-        let Some(cid) = track.cover_art_id.clone() else {
+        let Some(key) = track.cover_key() else {
             return;
         };
-        if self.home_state.read(cx).covers.contains_key(&cid) {
+        tracing::debug!(cover = %key, "track cover request");
+        if self.home_state.read(cx).covers.contains_key(&key) {
+            tracing::debug!(cover = %key, "track cover already in memory");
             return;
         }
-        let Some(client) = self.client.clone() else {
+        let Some(service) = self.services.service(track.source).cloned() else {
             return;
         };
         let covers = self.cover_cache.clone();
+        let track_for_cover = track.clone();
         // Claim the download before spawning: skipping quickly through an album
         // used to fire several downloads of the same cover at once.
-        let Some(claim) = covers.begin_fetch(&cid) else {
+        let Some(claim) = covers.begin_fetch(&key) else {
             return;
         };
         let os_for_cover = self.overlay_state.clone();
@@ -1475,8 +2332,7 @@ impl Shell {
         let np = self.now_playing.clone();
         let track = track.clone();
         cx.spawn(async move |cx| {
-            let c = client.clone();
-            let cid2 = cid.clone();
+            let key2 = key.clone();
             // Decoding the cover, masking its corners into a fresh PNG and
             // writing it to disk are all CPU/IO work. They used to run inside
             // `cx.spawn`, which gpui polls on the main thread, so every track
@@ -1488,20 +2344,23 @@ impl Shell {
                     // Hold the in-flight claim until the bytes are on disk.
                     let _claim = claim;
                     // Disk first: the bytes are usually already there.
-                    let (bytes, format, path) = match covers.read(&cid2) {
+                    let (bytes, format, path) = match covers.read(&key2) {
                         Some(bytes) => {
                             let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
                                 gpui::ImageFormat::Png
                             } else {
                                 gpui::ImageFormat::Jpeg
                             };
-                            let path = covers.existing_path(&cid2).unwrap_or_default();
+                            let path = covers.existing_path(&key2).unwrap_or_default();
                             (bytes, format, path)
                         }
                         None => {
-                            let bytes = c.cover_bytes(&cid2, 512).ok()?;
+                            let bytes = match service.cover(&track_for_cover, 512).ok()? {
+                                crate::services::CoverSource::Bytes(bytes) => bytes,
+                                crate::services::CoverSource::Url(url) => fetch_remote_cover(&url)?,
+                            };
                             let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                            let path = covers.write(&cid2, &bytes).ok()?;
+                            let path = covers.write(&key2, &bytes).ok()?;
                             let format = if is_png {
                                 gpui::ImageFormat::Png
                             } else {
@@ -1513,18 +2372,20 @@ impl Shell {
                     let image = std::sync::Arc::new(gpui::Image {
                         format,
                         bytes,
-                        id: fxhash_id(&cid2),
+                        id: fxhash_id(&key2),
                     });
                     let rounded = crate::overlay::rounded_cover(&image);
                     Some((image, rounded, path))
                 })
                 .await;
             let Some((image, rounded, path)) = prepared else {
+                tracing::debug!(cover = %key, "track cover produced no image");
                 return;
             };
+            tracing::debug!(cover = %key, "track cover ready");
             cx.update(|app| {
                 app.update_entity(&hs, |h, _| {
-                    h.insert_cover(cid.clone(), image.clone());
+                    h.insert_cover(key.clone(), image.clone());
                 });
                 app.update_entity(&np, |view, _cx| {
                     view.set_cover(Some(image.clone()));
@@ -1541,18 +2402,130 @@ impl Shell {
         .detach();
     }
 
-    fn load_and_play(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
-        if let Some(client) = &self.client
-            && let Ok(uri) = client.stream_url(&track.id, self.config.quality)
-        {
-            self.player_handle
-                .tx
-                .send(PlayerCommand::Load {
-                    uri,
-                    track_id: track.id.clone(),
+    /// Fetch any cover bytes into the shared cover cache and the in-memory map.
+    /// The closure runs on the background executor, so callers may do network
+    /// or disk work there.
+    fn cache_cover_bytes<F>(&mut self, key: String, fetch: F, cx: &mut gpui::App)
+    where
+        F: FnOnce() -> Option<Vec<u8>> + Send + 'static,
+    {
+        if self.home_state.read(cx).covers.contains_key(&key) {
+            return;
+        }
+        let covers = self.cover_cache.clone();
+        let Some(claim) = covers.begin_fetch(&key) else {
+            return;
+        };
+        let hs = self.home_state.clone();
+        let shell = self.self_weak.clone();
+        let key_for_task = key.clone();
+        cx.spawn(async move |cx| {
+            let prepared = cx
+                .background_executor()
+                .spawn(async move {
+                    let _claim = claim;
+                    let (bytes, format) = match covers.read(&key_for_task) {
+                        Some(bytes) => {
+                            let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                                gpui::ImageFormat::Png
+                            } else {
+                                gpui::ImageFormat::Jpeg
+                            };
+                            (bytes, format)
+                        }
+                        None => {
+                            let bytes = fetch()?;
+                            let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+                            covers.write(&key_for_task, &bytes).ok()?;
+                            let format = if is_png {
+                                gpui::ImageFormat::Png
+                            } else {
+                                gpui::ImageFormat::Jpeg
+                            };
+                            (bytes, format)
+                        }
+                    };
+                    let image = std::sync::Arc::new(gpui::Image {
+                        format,
+                        bytes,
+                        id: fxhash_id(&key_for_task),
+                    });
+                    Some(image)
                 })
-                .ok();
-            self.player_handle.tx.send(PlayerCommand::Play).ok();
+                .await;
+            let Some(image) = prepared else {
+                return;
+            };
+            cx.update(|app| {
+                app.update_entity(&hs, |h, _| {
+                    h.insert_cover(key.clone(), image);
+                });
+                if let Some(shell) = shell.upgrade() {
+                    shell.update(app, |_, cx| cx.notify());
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn cache_remote_cover(&mut self, url: String, cx: &mut gpui::App) {
+        let key = crate::library::url_cover_key(&url);
+        self.cache_cover_bytes(key, move || fetch_remote_cover(&url), cx);
+    }
+
+    fn cache_cover_id(&mut self, source: TrackSource, cover_id: String, cx: &mut gpui::App) {
+        let Some(service) = self.services.service(source).cloned() else {
+            return;
+        };
+        let key = cover_id.clone();
+        self.cache_cover_bytes(
+            key,
+            move || match service.cover_id(&cover_id, 512).ok()? {
+                crate::services::CoverSource::Bytes(bytes) => Some(bytes),
+                crate::services::CoverSource::Url(url) => fetch_remote_cover(&url),
+            },
+            cx,
+        );
+    }
+
+    fn load_and_play(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
+        match track.source {
+            TrackSource::YouTube => self.play_youtube(track, cx),
+            TrackSource::Navidrome => {
+                if let Some(service) = self.services.service(TrackSource::Navidrome) {
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    match service.resolve(track, &cancel) {
+                        Ok(PlaybackSource::Url(uri)) => {
+                            self.player_handle
+                                .tx
+                                .send(PlayerCommand::Load {
+                                    uri,
+                                    track_id: track.id.clone(),
+                                })
+                                .ok();
+                            self.player_handle.tx.send(PlayerCommand::Play).ok();
+                        }
+                        Ok(PlaybackSource::LocalFile(path)) => {
+                            self.player_handle
+                                .tx
+                                .send(PlayerCommand::Load {
+                                    uri: format!("file://{}", path.display()),
+                                    track_id: track.id.clone(),
+                                })
+                                .ok();
+                            self.player_handle.tx.send(PlayerCommand::Play).ok();
+                        }
+                        Err(error) => {
+                            self.toast_from_app(
+                                format!("Could not resolve this track: {error}"),
+                                cx,
+                            );
+                        }
+                    }
+                } else {
+                    self.toast_from_app("Connect a music server to play this track.", cx);
+                }
+            }
         }
         self.cache_track_cover(track, cx);
         // Show the new track's placeholder immediately: without this the pin kept
@@ -1560,9 +2533,8 @@ impl Shell {
         // Reuse the cached artwork so the PiP shows it immediately; if it is not
         // cached yet, `cache_track_cover` fills it in when it lands.
         let cached_cover = track
-            .cover_art_id
-            .as_ref()
-            .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned())
+            .cover_key()
+            .and_then(|key| self.home_state.read(cx).covers.get(&key).cloned())
             .map(|cover| crate::overlay::rounded_cover(&cover));
         self.overlay_state.update(cx, |st, cx| {
             st.begin(track.title.clone(), track.artist.clone());
@@ -1578,9 +2550,8 @@ impl Shell {
             let np = self.now_playing.clone();
             let os = self.overlay_state.clone();
             let cover = track
-                .cover_art_id
-                .as_ref()
-                .and_then(|cid| self.home_state.read(cx).covers.get(cid).cloned());
+                .cover_key()
+                .and_then(|key| self.home_state.read(cx).covers.get(&key).cloned());
             let generation = self
                 .lyrics_generation
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -1620,7 +2591,10 @@ impl Shell {
                         v.set_lyrics(cx, status.clone());
                     });
                     app.update_entity(&os, |st, cx| {
-                        st.begin(t.title.clone(), t.artist.clone());
+                        // `begin` is for a new track and clears the artwork.
+                        // This is a late label update, so it must not wipe a
+                        // cover that the artwork fetch already painted.
+                        st.set_track(t.title.clone(), t.artist.clone());
                         st.set_status(&status);
                         cx.notify();
                     });
@@ -1636,9 +2610,109 @@ impl Shell {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .note_played(&track.id);
-        if self.config.autoplay && self.player_state.read(cx).queue.remaining() == 0 {
+        if track.source == TrackSource::Navidrome
+            && self.config.autoplay
+            && self.player_state.read(cx).queue.remaining() == 0
+        {
             self.ensure_radio(false, cx);
         }
+    }
+
+    /// Resolve a YouTube track to a local file and hand it to the player.
+    ///
+    /// The helper downloads the whole track first. That costs a short start
+    /// delay, but it gives GStreamer a stable, seekable source and keeps the
+    /// signed googlevideo URL out of the player and the logs.
+    fn play_youtube(&mut self, track: &crate::library::Track, cx: &mut gpui::App) {
+        use std::sync::atomic::Ordering;
+
+        let Some(provider) = self.youtube.clone() else {
+            self.toast_from_app("YouTube Music is disabled in Settings.", cx);
+            return;
+        };
+        if track.video_id().is_none() {
+            self.toast_from_app("This YouTube track has no video id.", cx);
+            return;
+        }
+        if let Some(cancel) = self.youtube_buffer_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.youtube_buffer_cancel = Some(cancel.clone());
+        let generation = self.youtube_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.player_state.update(cx, |state, cx| {
+            state.set_status(PlaybackStatus::Buffering);
+            cx.notify();
+        });
+
+        let counter = self.youtube_generation.clone();
+        let entity = self.self_weak.clone();
+        let track_id = track.id.clone();
+        let track_for_buffer = track.clone();
+        cx.spawn(async move |cx| {
+            let provider_bg = provider.clone();
+            let cancel_bg = cancel.clone();
+            let first = provider_bg.clone();
+            let track_for_retry = track_for_buffer.clone();
+            let mut result = cx
+                .background_executor()
+                .spawn(async move { first.buffer(&track_for_buffer, &cancel_bg) })
+                .await;
+            if matches!(
+                result,
+                Err(crate::provider::ProviderError::Unavailable(_))
+                    | Err(crate::provider::ProviderError::Network(_))
+            ) && !cancel.load(Ordering::Relaxed)
+            {
+                // A container-specific failure is worth one different attempt.
+                let cancel_retry = cancel.clone();
+                result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        provider_bg.buffer_with_fallback(&track_for_retry, &cancel_retry, true)
+                    })
+                    .await;
+            }
+            if counter.load(Ordering::SeqCst) != generation || cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            cx.update(|app| {
+                let _ = entity.update(app, |shell, cx| {
+                    let still_current = shell
+                        .player_state
+                        .read(cx)
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current.id == track_id);
+                    if !still_current {
+                        return;
+                    }
+                    match result {
+                        Ok(stream) => {
+                            shell.youtube_cache_bytes = stream.cache_bytes;
+                            let uri = format!("file://{}", stream.file.display());
+                            shell
+                                .player_handle
+                                .tx
+                                .send(PlayerCommand::Load {
+                                    uri,
+                                    track_id: track_id.clone(),
+                                })
+                                .ok();
+                            shell.player_handle.tx.send(PlayerCommand::Play).ok();
+                        }
+                        Err(crate::provider::ProviderError::Cancelled) => {}
+                        Err(error) => {
+                            shell.player_state.update(cx, |state, _| {
+                                state.set_status(PlaybackStatus::Stopped);
+                            });
+                            shell.show_toast(provider_error_text(&error), cx);
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     /// Autoplay: keep the queue from running dry.
@@ -1669,6 +2743,11 @@ impl Shell {
             reset(&self.radio_in_flight);
             return;
         };
+        if seed.is_youtube() {
+            reset(&self.radio_in_flight);
+            self.fetch_youtube_radio(seed, continue_playback, cx);
+            return;
+        }
         if continue_playback {
             self.radio_continue_pending.store(true, Ordering::SeqCst);
         }
@@ -1825,6 +2904,10 @@ impl Shell {
                                 crate::lyrics::cache::LyricsCache::new(shell.paths.lyrics.clone()),
                                 shell.config.prefer_navidrome_lyrics,
                             )));
+                            shell.rebuild_services();
+                            shell.active_source = TrackSource::Navidrome;
+                            shell.config.active_source = TrackSource::Navidrome;
+                            shell.persist_config();
                             shell.route = Route::Home;
                             if let Some(client) = shell.client.clone() {
                                 spawn_home_fetch(
@@ -1851,6 +2934,45 @@ impl Shell {
         let _ = crate::config::save_config(&self.paths, &self.config);
     }
 
+    /// First-run path for users who do not have a Navidrome server. The setup
+    /// screen stays available from Settings, so this does not lock anyone out
+    /// of the server-backed library later.
+    fn use_youtube_setup(&mut self, cx: &mut gpui::Context<Self>) {
+        self.config.youtube_enabled = true;
+        self.persist_config();
+        if self.youtube.is_none() {
+            let cookies = {
+                let path = self.config.youtube_cookies.trim();
+                (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+            };
+            self.youtube = Some(Arc::new(YouTubeProvider::new(
+                self.paths.cache.join("streams"),
+                self.config.youtube_quality,
+                cookies,
+                self.config.stream_cache_mb,
+            )));
+        }
+        self.youtube_cache_bytes = self
+            .youtube
+            .as_ref()
+            .map(|provider| provider.cache_bytes())
+            .unwrap_or(0);
+        self.rebuild_services();
+        self.active_source = TrackSource::YouTube;
+        self.config.active_source = TrackSource::YouTube;
+        self.persist_config();
+        self.route = Route::Home;
+        self.setup_focus_requested = false;
+        self.youtube_home = None;
+        self.refresh_youtube_home(cx);
+        self.toast = Some(if YouTubeProvider::helper_installed() {
+            "YouTube Music is ready. Browse Home or search for a song.".to_string()
+        } else {
+            "YouTube support is not installed yet. Run ./scripts/setup-youtube.sh.".to_string()
+        });
+        cx.notify();
+    }
+
     pub fn cycle_quality(&mut self) {
         self.config.quality = match self.config.quality {
             crate::config::StreamQuality::Original => crate::config::StreamQuality::Kbps320,
@@ -1858,6 +2980,112 @@ impl Shell {
             crate::config::StreamQuality::Kbps192 => crate::config::StreamQuality::Original,
         };
         self.persist_config();
+        self.rebuild_services();
+    }
+
+    fn rebuild_youtube_provider(&mut self) {
+        self.youtube = if self.config.youtube_enabled {
+            let cookies = {
+                let path = self.config.youtube_cookies.trim();
+                (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+            };
+            Some(Arc::new(YouTubeProvider::new(
+                self.paths.cache.join("streams"),
+                self.config.youtube_quality,
+                cookies,
+                self.config.stream_cache_mb,
+            )))
+        } else {
+            None
+        };
+        self.youtube_cache_bytes = self
+            .youtube
+            .as_ref()
+            .map(|provider| provider.cache_bytes())
+            .unwrap_or(0);
+        self.youtube_home = None;
+        self.youtube_home_error = None;
+        self.mood_categories = None;
+        self.mood_playlists.clear();
+        self.mood_title = None;
+        self.rebuild_services();
+    }
+
+    fn rebuild_services(&mut self) {
+        let navidrome = self.client.as_ref().map(|client| {
+            Arc::new(NavidromeService::new(
+                (**client).clone(),
+                self.config.quality,
+            )) as Arc<dyn MusicService>
+        });
+        let youtube = self.youtube.as_ref().map(|provider| {
+            Arc::new(YouTubeService::new(provider.clone())) as Arc<dyn MusicService>
+        });
+        self.services = SourceRegistry::new(navidrome, youtube);
+    }
+
+    fn toggle_youtube(&mut self, cx: &mut gpui::Context<Self>) {
+        self.config.youtube_enabled = !self.config.youtube_enabled;
+        self.persist_config();
+        self.rebuild_youtube_provider();
+        if !self.config.youtube_enabled {
+            self.cancel_youtube_search();
+            if let Some(cancel) = self.youtube_buffer_cancel.take() {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.youtube_loading = false;
+            self.youtube_error = None;
+            self.search_results = None;
+            self.search_query.clear();
+            self.search_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.cancel_youtube_search();
+            if self.active_source == TrackSource::YouTube {
+                if self.client.is_some() {
+                    self.active_source = TrackSource::Navidrome;
+                    self.config.active_source = TrackSource::Navidrome;
+                    self.persist_config();
+                    self.route = Route::Home;
+                } else {
+                    self.route = Route::Setup;
+                }
+            }
+        } else if self.client.is_none() {
+            // YouTube is the only configured source.
+            self.active_source = TrackSource::YouTube;
+            self.config.active_source = TrackSource::YouTube;
+            self.persist_config();
+            self.route = Route::Home;
+            self.refresh_youtube_home(cx);
+        }
+        cx.notify();
+    }
+
+    fn cycle_youtube_quality(&mut self, cx: &mut gpui::Context<Self>) {
+        self.config.youtube_quality = match self.config.youtube_quality {
+            YouTubeQuality::Standard => YouTubeQuality::Saver,
+            YouTubeQuality::Saver => YouTubeQuality::Standard,
+        };
+        self.persist_config();
+        if let Some(cancel) = self.youtube_buffer_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.rebuild_youtube_provider();
+        cx.notify();
+    }
+
+    fn clear_youtube_cache(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(provider) = &self.youtube else {
+            self.show_toast("YouTube Music is disabled.", cx);
+            return;
+        };
+        match provider.clear_cache() {
+            Ok(()) => {
+                self.youtube_cache_bytes = 0;
+                self.show_toast("YouTube stream cache cleared.", cx);
+            }
+            Err(error) => self.show_toast(format!("Could not clear the cache: {error}"), cx),
+        }
     }
 
     pub fn toggle_scrobble(&mut self) {
@@ -1935,104 +3163,163 @@ impl Shell {
         self.config.scrobble
     }
 
-    pub fn open_album(&mut self, id: String, cx: &mut gpui::Context<Self>) {
+    pub fn open_album(&mut self, source: TrackSource, id: String, cx: &mut gpui::Context<Self>) {
+        self.route = Route::Album(SourceId::new(source, id.clone()));
         self.selected_album = Some(id.clone());
         self.album_detail = None;
+        self.artist_detail = None;
+        self.playlist_detail = None;
+        self.detail_error = None;
+        self.detail_loading = true;
         self.album_loading = true;
-        let Some(client) = self.client.clone() else {
+        let Some(service) = self.services.service(source).cloned() else {
+            self.detail_loading = false;
+            self.album_loading = false;
+            self.detail_error = Some("This music source is not enabled.".to_string());
             return;
         };
         let entity = cx.entity();
-        let client_for_cover = client.clone();
-        let covers_for_album = self.cover_cache.clone();
         cx.spawn(async move |_, cx| {
-            let client_for_album = client.clone();
             let album_id = id.clone();
             let res = cx
                 .background_executor()
-                .spawn(async move { client_for_album.album(&album_id) })
+                .spawn(async move { service.album(&album_id) })
                 .await;
-            let cover = match &res {
-                Ok(d) => match d.album.cover_art_id.clone() {
-                    Some(cid) => {
-                        let client = client_for_cover.clone();
-                        let cid_for_fetch = cid.clone();
-                        let covers = covers_for_album.clone();
-                        cx.background_executor()
-                            .spawn(async move {
-                                if let Some(bytes) = covers.read(&cid_for_fetch) {
-                                    return Some(bytes);
-                                }
-                                let _claim = covers.begin_fetch(&cid_for_fetch)?;
-                                let bytes = client.cover_bytes(&cid_for_fetch, 512).ok()?;
-                                let _ = covers.write(&cid_for_fetch, &bytes);
-                                Some(bytes)
-                            })
-                            .await
-                            .map(|bytes| (cid, bytes))
-                    }
-                    None => None,
-                },
-                Err(_) => None,
-            };
             cx.update(|app| {
                 entity.update(app, |shell, cx| {
+                    shell.detail_loading = false;
                     shell.album_loading = false;
-                    if let Ok(d) = res {
-                        shell.album_detail = Some(d);
-                        if let Some((cid, bytes)) = cover {
-                            let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                            let format = if is_png {
-                                gpui::ImageFormat::Png
-                            } else {
-                                gpui::ImageFormat::Jpeg
-                            };
-                            let image = std::sync::Arc::new(gpui::Image {
-                                format,
-                                bytes,
-                                id: fxhash_id(&cid),
-                            });
-                            shell.home_state.update(cx, |h, _cx| {
-                                h.insert_cover(cid, image);
-                            });
+                    match res {
+                        Ok(detail) => {
+                            if let Some(url) = detail.album.cover_url.clone() {
+                                shell.cache_remote_cover(url, cx);
+                            }
+                            if source == TrackSource::Navidrome
+                                && let Some(cover_id) = detail.album.cover_art_id.clone()
+                            {
+                                shell.cache_cover_id(source, cover_id, cx);
+                            }
+                            if let Some(first) = detail.songs.first().cloned() {
+                                shell.cache_track_cover(&first, cx);
+                            }
+                            shell.album_detail = Some(detail);
+                        }
+                        Err(error) => {
+                            shell.detail_error =
+                                Some(format!("Could not open this album. {error}"));
                         }
                     }
+                    cx.notify();
                 });
             });
         })
         .detach();
     }
 
-    pub fn select_artist(&mut self, id: String, cx: &mut gpui::Context<Self>) {
-        let Some(client) = self.client.clone() else {
+    pub fn open_artist(&mut self, source: TrackSource, id: String, cx: &mut gpui::Context<Self>) {
+        self.route = Route::Artist(SourceId::new(source, id.clone()));
+        self.artist_detail = None;
+        self.album_detail = None;
+        self.playlist_detail = None;
+        self.detail_error = None;
+        self.detail_loading = true;
+        let Some(service) = self.services.service(source).cloned() else {
+            self.detail_loading = false;
+            self.detail_error = Some("This music source is not enabled.".to_string());
             return;
         };
         let entity = cx.entity();
         cx.spawn(async move |_, cx| {
-            let detail = cx
+            let artist_id = id.clone();
+            let res = cx
                 .background_executor()
-                .spawn(async move { client.artist(&id) })
+                .spawn(async move { service.artist(&artist_id) })
                 .await;
-            if let Ok(d) = detail {
-                cx.update(|app| {
-                    entity.update(app, |shell, _cx| {
-                        shell.artist_detail = Some(d);
-                    });
+            cx.update(|app| {
+                entity.update(app, |shell, cx| {
+                    shell.detail_loading = false;
+                    match res {
+                        Ok(detail) => {
+                            if let Some(url) = detail.artist.cover_url.clone() {
+                                shell.cache_remote_cover(url, cx);
+                            } else if let Some(cover_id) = detail.artist.cover_art_id.clone() {
+                                shell.cache_cover_id(source, cover_id, cx);
+                            }
+                            for album in &detail.albums {
+                                if let Some(url) = album.cover_url.clone() {
+                                    shell.cache_remote_cover(url, cx);
+                                } else if let Some(cover_id) = album.cover_art_id.clone() {
+                                    shell.cache_cover_id(source, cover_id, cx);
+                                }
+                            }
+                            shell.artist_detail = Some(detail);
+                        }
+                        Err(error) => {
+                            shell.detail_error =
+                                Some(format!("Could not open this artist. {error}"));
+                        }
+                    }
+                    cx.notify();
                 });
-            }
+            });
         })
         .detach();
     }
 
-    pub fn play_playlist(&mut self, id: String, cx: &mut gpui::Context<Self>) {
-        let Some(client) = self.client.clone() else {
+    pub fn open_playlist(&mut self, source: TrackSource, id: String, cx: &mut gpui::Context<Self>) {
+        self.route = Route::Playlist(SourceId::new(source, id.clone()));
+        self.playlist_detail = None;
+        self.album_detail = None;
+        self.artist_detail = None;
+        self.detail_error = None;
+        self.detail_loading = true;
+        let Some(service) = self.services.service(source).cloned() else {
+            self.detail_loading = false;
+            self.detail_error = Some("This music source is not enabled.".to_string());
+            return;
+        };
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let playlist_id = id.clone();
+            let res = cx
+                .background_executor()
+                .spawn(async move { service.playlist(&playlist_id) })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, cx| {
+                    shell.detail_loading = false;
+                    match res {
+                        Ok(detail) => {
+                            if let Some(url) = detail.playlist.cover_url.clone() {
+                                shell.cache_remote_cover(url, cx);
+                            }
+                            if let Some(first) = detail.songs.first().cloned() {
+                                shell.cache_track_cover(&first, cx);
+                            }
+                            shell.playlist_detail = Some(detail);
+                        }
+                        Err(error) => {
+                            shell.detail_error =
+                                Some(format!("Could not open this playlist. {error}"));
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Load and immediately play a playlist without navigating to its page.
+    pub fn play_playlist(&mut self, source: TrackSource, id: String, cx: &mut gpui::Context<Self>) {
+        let Some(service) = self.services.service(source).cloned() else {
             return;
         };
         let entity = cx.entity();
         cx.spawn(async move |_, cx| {
             let detail = cx
                 .background_executor()
-                .spawn(async move { client.playlist(&id) })
+                .spawn(async move { service.playlist(&id) })
                 .await;
             if let Ok(d) = detail {
                 cx.update(|app| {
@@ -2045,11 +3332,131 @@ impl Shell {
         .detach();
     }
 
+    /// The YouTube Music front page. Navidrome installs use the snapshot-backed
+    /// home state instead.
+    pub fn refresh_youtube_home(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.youtube_home_loading {
+            return;
+        }
+        let Some(service) = self.services.service(TrackSource::YouTube).cloned() else {
+            self.youtube_home_error = Some("YouTube Music is disabled in Settings.".to_string());
+            return;
+        };
+        self.youtube_home_loading = true;
+        self.youtube_home_error = None;
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let res = cx
+                .background_executor()
+                .spawn(async move { service.home(10, &cancel) })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, cx| {
+                    shell.youtube_home_loading = false;
+                    match res {
+                        Ok(sections) => {
+                            for section in &sections {
+                                for card in &section.items {
+                                    if let Some(url) = card.cover_url() {
+                                        shell.cache_remote_cover(url.to_string(), cx);
+                                    }
+                                }
+                            }
+                            shell.youtube_home = Some(sections);
+                            shell.youtube_home_error = None;
+                        }
+                        Err(error) => {
+                            shell.youtube_home_error =
+                                Some(format!("Could not load YouTube home. {error}"));
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub fn open_moods(&mut self, cx: &mut gpui::Context<Self>) {
+        self.route = Route::Moods;
+        if self.mood_categories.is_none() && !self.mood_loading {
+            self.load_moods(cx);
+        }
+    }
+
+    fn load_moods(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(service) = self.services.service(TrackSource::YouTube).cloned() else {
+            self.mood_loading = false;
+            return;
+        };
+        self.mood_loading = true;
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let res = cx
+                .background_executor()
+                .spawn(async move { service.moods(&cancel) })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, _cx| {
+                    shell.mood_loading = false;
+                    if let Ok(categories) = res {
+                        shell.mood_categories = Some(categories);
+                    }
+                    shell.detail_error = None;
+                    _cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub fn open_mood(&mut self, title: String, params: String, cx: &mut gpui::Context<Self>) {
+        self.route = Route::Moods;
+        self.mood_title = Some(title);
+        self.mood_playlists.clear();
+        self.mood_loading = true;
+        let Some(service) = self.services.service(TrackSource::YouTube).cloned() else {
+            self.mood_loading = false;
+            return;
+        };
+        let entity = cx.entity();
+        cx.spawn(async move |_, cx| {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let res = cx
+                .background_executor()
+                .spawn(async move { service.mood_playlists(&params, &cancel) })
+                .await;
+            cx.update(|app| {
+                entity.update(app, |shell, cx| {
+                    shell.mood_loading = false;
+                    match res {
+                        Ok(playlists) => {
+                            for playlist in &playlists {
+                                if let Some(url) = playlist.cover_url.clone() {
+                                    shell.cache_remote_cover(url, cx);
+                                }
+                            }
+                            shell.mood_playlists = playlists;
+                        }
+                        Err(error) => {
+                            shell.detail_error = Some(format!("Could not load this mood. {error}"));
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn toggle_album_star(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(detail) = &self.album_detail else {
             return;
         };
-        let Some(client) = self.client.clone() else {
+        let source = detail.album.source;
+        let Some(service) = self.services.service(source).cloned() else {
             return;
         };
         let id = detail.album.id.clone();
@@ -2058,16 +3465,19 @@ impl Shell {
         cx.spawn(async move |_, cx| {
             let res = cx
                 .background_executor()
-                .spawn(async move { client.set_starred(&id, next) })
+                .spawn(async move { service.set_starred(&id, next) })
                 .await;
             cx.update(|app| {
-                if res.is_ok() {
-                    app.update_entity(&entity, |shell, _cx| {
+                entity.update(app, |shell, cx| match res {
+                    Ok(()) => {
                         if let Some(d) = &mut shell.album_detail {
                             d.album.starred = next;
                         }
-                    });
-                }
+                    }
+                    Err(error) => {
+                        shell.show_toast(format!("Could not update the favorite: {error}"), cx)
+                    }
+                });
             });
         })
         .detach();
@@ -2081,8 +3491,71 @@ impl Shell {
         self.route.clone()
     }
 
+    /// Which source the sidebar is currently browsing.
+    pub fn active_source(&self) -> TrackSource {
+        self.active_source
+    }
+
+    pub fn source_available(&self, source: TrackSource) -> bool {
+        match source {
+            TrackSource::Navidrome => self.client.is_some(),
+            TrackSource::YouTube => self.youtube.is_some(),
+        }
+    }
+
+    /// Switch the browsing source. Playback and the queue are intentionally
+    /// untouched: a track from the other source keeps playing.
+    pub fn set_active_source(&mut self, source: TrackSource, cx: &mut gpui::Context<Self>) -> bool {
+        if !self.source_available(source) {
+            self.show_toast("That music source is not configured.", cx);
+            return false;
+        }
+        if self.active_source == source {
+            if self.config.active_source != source {
+                self.config.active_source = source;
+                self.persist_config();
+            }
+            return true;
+        }
+        self.active_source = source;
+        self.config.active_source = source;
+        self.persist_config();
+
+        // Do not leave a detail page or a scoped search from the old source on
+        // screen. Browse starts again from Home.
+        self.selected_album = None;
+        self.album_detail = None;
+        self.artist_detail = None;
+        self.playlist_detail = None;
+        self.detail_loading = false;
+        self.detail_error = None;
+        self.search_results = None;
+        self.search_query.clear();
+        self.search_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.cancel_youtube_search();
+        self.youtube_loading = false;
+        self.youtube_error = None;
+        self.route = Route::Home;
+
+        if source == TrackSource::YouTube
+            && (self.youtube_home.is_none() || self.youtube_home_error.is_some())
+        {
+            self.refresh_youtube_home(cx);
+        }
+        cx.notify();
+        true
+    }
+
     pub fn loaded_album_count(&self, cx: &gpui::App) -> usize {
         self.home_state.read(cx).albums.len()
+    }
+
+    /// Whether the YouTube home feed has at least one shelf.
+    pub fn youtube_home_loaded(&self) -> bool {
+        self.youtube_home
+            .as_ref()
+            .is_some_and(|sections| !sections.is_empty())
     }
 
     /// Number of tracks in the queue (used by the autoplay tests and MPRIS).
@@ -2090,9 +3563,88 @@ impl Shell {
         self.player_state.read(cx).queue.len()
     }
 
+    /// Snapshot of queue ids, for tests that need to prove what was queued
+    /// rather than only how many items there are.
+    pub fn queue_ids(&self, cx: &gpui::App) -> Vec<String> {
+        self.player_state.read(cx).queue.ids().into_iter().collect()
+    }
+
+    /// Queue order (current position is visible via `queue_current_index`).
+    pub fn queue_track_ids(&self, cx: &gpui::App) -> Vec<String> {
+        self.player_state
+            .read(cx)
+            .queue
+            .tracks()
+            .into_iter()
+            .map(|track| track.id)
+            .collect()
+    }
+
+    pub fn queue_current_index(&self, cx: &gpui::App) -> Option<usize> {
+        self.player_state.read(cx).queue.current_index()
+    }
+
     /// Tracks still to play before the queue runs out.
     pub fn queue_remaining(&self, cx: &gpui::App) -> usize {
         self.player_state.read(cx).queue.remaining()
+    }
+
+    /// Queue drawer visibility, exposed for UI tests.
+    pub fn queue_panel_open(&self) -> bool {
+        self.queue_panel_open
+    }
+
+    /// Single entry point for UI intents. Screens will use this instead of
+    /// reaching into `PlayerState`/queue internals once they are extracted.
+    pub fn dispatch(&mut self, action: AppAction, cx: &mut gpui::Context<Self>) {
+        match action {
+            AppAction::Queue(action) => self.dispatch_queue(action, cx),
+            AppAction::OpenAlbum(id) => self.open_album(id.source, id.id, cx),
+            AppAction::OpenArtist(id) => self.open_artist(id.source, id.id, cx),
+            AppAction::OpenPlaylist(id) => self.open_playlist(id.source, id.id, cx),
+            AppAction::OpenMoods => self.open_moods(cx),
+            AppAction::RefreshYouTubeHome => self.refresh_youtube_home(cx),
+        }
+    }
+
+    fn dispatch_queue(&mut self, action: QueueAction, cx: &mut gpui::Context<Self>) {
+        match action {
+            QueueAction::TogglePanel => {
+                self.queue_panel_open = !self.queue_panel_open;
+            }
+            QueueAction::PlayAt(index) => {
+                let track = self.player_state.update(cx, |ps, _cx| ps.play_at(index));
+                if let Some(track) = track {
+                    self.sync_mpris_queue(cx);
+                    self.load_and_play(&track, cx);
+                }
+            }
+            QueueAction::Remove(index) => {
+                let removed = self
+                    .player_state
+                    .update(cx, |ps, _cx| ps.queue.remove(index));
+                if removed.is_some() {
+                    self.sync_mpris_queue(cx);
+                }
+            }
+            QueueAction::Move { from, to } => {
+                let moved = self
+                    .player_state
+                    .update(cx, |ps, _cx| ps.queue.move_item(from, to));
+                if moved {
+                    self.sync_mpris_queue(cx);
+                }
+            }
+            QueueAction::ClearUpcoming => {
+                let removed = self
+                    .player_state
+                    .update(cx, |ps, _cx| ps.queue.clear_upcoming());
+                if removed > 0 {
+                    self.sync_mpris_queue(cx);
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// Id of the track that is playing, if any.
@@ -2136,14 +3688,18 @@ impl Shell {
     pub fn select_first_artist_with_albums(&mut self, cx: &mut gpui::Context<Self>) {
         if let Some(id) = self.artist_with_albums(cx) {
             self.route = Route::Artists;
-            self.select_artist(id, cx);
+            self.open_artist(TrackSource::Navidrome, id, cx);
         }
     }
 
     pub fn open_first_artist_album(&mut self, cx: &mut gpui::Context<Self>) {
-        if let Some(id) = self.first_artist_album_id() {
-            self.route = Route::Home;
-            self.open_album(id, cx);
+        if let Some((source, id)) = self
+            .artist_detail
+            .as_ref()
+            .and_then(|d| d.albums.first())
+            .map(|a| (a.source, a.id.clone()))
+        {
+            self.open_album(source, id, cx);
         }
     }
 
@@ -2203,6 +3759,11 @@ impl Shell {
         }
     }
 
+    /// True when the pinned overlay has artwork to draw.
+    pub fn overlay_cover_present(&self, cx: &gpui::App) -> bool {
+        self.overlay_state.read(cx).cover.is_some()
+    }
+
     pub fn current_track_title(&self, cx: &gpui::App) -> Option<String> {
         self.player_state
             .read(cx)
@@ -2222,6 +3783,13 @@ impl Shell {
     fn show_toast(&mut self, message: impl Into<String>, cx: &mut gpui::Context<Self>) {
         self.toast = Some(message.into());
         cx.notify();
+    }
+
+    /// The same surface for callers that hold `App` (the player dispatch path)
+    /// rather than a `Context<Shell>`.
+    fn toast_from_app(&mut self, message: impl Into<String>, cx: &mut gpui::App) {
+        self.toast = Some(message.into());
+        cx.refresh_windows();
     }
 
     pub fn overlay_open(&self) -> bool {
@@ -2249,7 +3817,22 @@ impl Shell {
     pub fn search_result_count(&self) -> usize {
         self.search_results
             .as_ref()
+            .map(|r| r.songs.len() + r.albums.len() + r.artists.len() + r.youtube.len())
+            .unwrap_or(0)
+    }
+
+    /// Results from the active source, excluding the other provider's section.
+    pub fn library_result_count(&self) -> usize {
+        self.search_results
+            .as_ref()
             .map(|r| r.songs.len() + r.albums.len() + r.artists.len())
+            .unwrap_or(0)
+    }
+
+    pub fn youtube_result_count(&self) -> usize {
+        self.search_results
+            .as_ref()
+            .map(|r| r.youtube.len())
             .unwrap_or(0)
     }
 
@@ -2355,6 +3938,7 @@ impl Render for Shell {
                     )
             };
             let key_entity = setup_entity.clone();
+            let f_setup_youtube = self.focus_for("setup-youtube", Self::TAB_CONTENT, cx);
             return div()
                 .size_full()
                 .bg(t.bg_base)
@@ -2473,6 +4057,35 @@ impl Render for Shell {
                                 } else {
                                     "Connect".to_string()
                                 }),
+                        )
+                        .child(
+                            div()
+                                .id("setup-youtube")
+                                .debug_selector(|| "setup-youtube".to_string())
+                                .track_focus(&f_setup_youtube)
+                                .tab_index(Self::TAB_CONTENT)
+                                .role(gpui::Role::Button)
+                                .aria_label("Use YouTube Music instead")
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_setup_youtube,
+                                    window,
+                                    t.glass_border,
+                                    t,
+                                ))
+                                .cursor_pointer()
+                                .px(gpui::px(12.0))
+                                .py(gpui::px(8.0))
+                                .rounded(gpui::px(999.0))
+                                .bg(t.glass_tint)
+                                .border_1()
+                                .border_color(t.glass_border)
+                                .text_color(t.text_secondary)
+                                .text_size(gpui::px(10.0))
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.use_youtube_setup(cx);
+                                }))
+                                .child("Use YouTube Music instead — no server needed"),
                         ),
                 )
                 .into_any_element();
@@ -2482,19 +4095,6 @@ impl Render for Shell {
         // player bar and the window controls are always rendered, so their
         // handles exist up front; content controls create theirs in the branch
         // that renders them.
-        let nav_focus: Vec<gpui::FocusHandle> = [
-            "nav-home",
-            "nav-nowplaying",
-            "nav-search",
-            "nav-albums",
-            "nav-artists",
-            "nav-playlists",
-            "nav-favorites",
-            "nav-settings",
-        ]
-        .iter()
-        .map(|key| self.focus_for(key, Self::TAB_NAV, cx))
-        .collect();
         let f_np_open = self.focus_for("player-now-playing", Self::TAB_PLAYER, cx);
         let f_seek_back = self.focus_for("player-seek-back", Self::TAB_PLAYER, cx);
         let f_prev = self.focus_for("player-prev", Self::TAB_PLAYER, cx);
@@ -2502,6 +4102,7 @@ impl Render for Shell {
         let f_next = self.focus_for("player-next", Self::TAB_PLAYER, cx);
         let f_shuffle = self.focus_for("player-shuffle", Self::TAB_PLAYER, cx);
         let f_repeat = self.focus_for("player-repeat", Self::TAB_PLAYER, cx);
+        let f_queue = self.focus_for("player-queue", Self::TAB_PLAYER, cx);
         let f_seek_fwd = self.focus_for("player-seek-forward", Self::TAB_PLAYER, cx);
         let f_vol_down = self.focus_for("player-volume-down", Self::TAB_PLAYER, cx);
         let f_vol_up = self.focus_for("player-volume-up", Self::TAB_PLAYER, cx);
@@ -2537,13 +4138,19 @@ impl Render for Shell {
             .as_ref()
             .map(|t| t.artist.clone())
             .unwrap_or_default();
+        let current_source = self
+            .player_state
+            .read(cx)
+            .current
+            .as_ref()
+            .map(|t| t.source);
         let current_cover = self
             .player_state
             .read(cx)
             .current
             .as_ref()
-            .and_then(|t| t.cover_art_id.clone())
-            .and_then(|cid| self.home_state.read(cx).covers.get(&cid).cloned());
+            .and_then(|t| t.cover_key())
+            .and_then(|key| self.home_state.read(cx).covers.get(&key).cloned());
         let position = self.player_state.read(cx).position;
         let duration = self
             .player_state
@@ -2556,6 +4163,8 @@ impl Render for Shell {
         } else {
             0.0
         };
+
+        let queue_panel = self.render_queue_panel(window, cx);
 
         // Player bar
         let player = div()
@@ -2571,7 +4180,7 @@ impl Render for Shell {
                 gpui::linear_color_stop(t.clay_gradient_end, 1.0),
             ))
             .border_1()
-            .border_color(gpui::rgba(0xFFFFFFFF))
+            .border_color(t.glass_border_on_clay)
             .shadow(vec![
                 gpui::BoxShadow {
                     color: gpui::hsla(0.0, 0.0, 0.0, 0.45),
@@ -2654,18 +4263,51 @@ impl Render for Shell {
                             .gap(gpui::px(2.0))
                             .child(
                                 div()
-                                    .text_size(gpui::px(13.0))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(t.clay_ink)
-                                    // A long title used to wrap to three lines
-                                    // inside the 88 px player bar and push the
-                                    // artist out of it.
-                                    .line_clamp(1)
-                                    .text_ellipsis()
-                                    .child(if current_title.is_empty() {
-                                        "Nothing playing".to_string()
-                                    } else {
-                                        current_title.clone()
+                                    .flex()
+                                    .items_center()
+                                    .gap(gpui::px(6.0))
+                                    .child(
+                                        div()
+                                            .text_size(gpui::px(13.0))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(t.clay_ink)
+                                            // A long title used to wrap to three
+                                            // lines inside the 88 px player bar
+                                            // and push the artist out of it.
+                                            .line_clamp(1)
+                                            .text_ellipsis()
+                                            .child(if current_title.is_empty() {
+                                                "Nothing playing".to_string()
+                                            } else {
+                                                current_title.clone()
+                                            }),
+                                    )
+                                    .child(match current_source {
+                                        Some(TrackSource::YouTube) => div()
+                                            .px(gpui::px(5.0))
+                                            .py(gpui::px(1.0))
+                                            .rounded(gpui::px(999.0))
+                                            .bg(t.gold_tint)
+                                            .border_1()
+                                            .border_color(t.gold_tint_border)
+                                            .text_size(gpui::px(8.0))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(t.clay_ink)
+                                            .child("YouTube")
+                                            .into_any_element(),
+                                        Some(TrackSource::Navidrome) => div()
+                                            .px(gpui::px(5.0))
+                                            .py(gpui::px(1.0))
+                                            .rounded(gpui::px(999.0))
+                                            .bg(t.glass_highlight_soft)
+                                            .border_1()
+                                            .border_color(t.glass_border)
+                                            .text_size(gpui::px(8.0))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_color(t.text_secondary)
+                                            .child("Library")
+                                            .into_any_element(),
+                                        None => div().into_any_element(),
                                     }),
                             )
                             .child(
@@ -2781,7 +4423,7 @@ impl Render for Shell {
                                             inset: true,
                                         },
                                         gpui::BoxShadow {
-                                            color: gpui::rgba(0x5A411E55).into(),
+                                            color: t.shadow_warm.into(),
                                             offset: gpui::point(gpui::px(-2.5), gpui::px(-2.5)),
                                             blur_radius: gpui::px(6.0),
                                             spread_radius: gpui::px(0.0),
@@ -2906,6 +4548,42 @@ impl Render for Shell {
                                         "↻"
                                     })
                             })
+                            .child(
+                                div()
+                                    .w(gpui::px(30.0))
+                                    .h(gpui::px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(gpui::px(12.0))
+                                    .text_color(t.clay_ink)
+                                    .opacity(0.7)
+                                    .cursor_pointer()
+                                    .id("queue-btn")
+                                    .debug_selector(|| "queue-btn".to_string())
+                                    .track_focus(&f_queue)
+                                    .tab_index(Self::TAB_PLAYER)
+                                    .role(gpui::Role::Button)
+                                    .border_2()
+                                    .border_color(self.focus_border(
+                                        &f_queue,
+                                        window,
+                                        gpui::rgba(0x00000000),
+                                        t,
+                                    ))
+                                    .aria_label(if self.queue_panel_open {
+                                        "Close queue"
+                                    } else {
+                                        "Open queue"
+                                    })
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.dispatch(
+                                            AppAction::Queue(QueueAction::TogglePanel),
+                                            cx,
+                                        );
+                                    }))
+                                    .child("☰"),
+                            )
                             .child(
                                 div()
                                     .w(gpui::px(30.0))
@@ -3282,7 +4960,7 @@ impl Render for Shell {
                             .rounded(gpui::px(999.0))
                             .bg(t.ambient_teal)
                             .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(0x2F6B6348).into(),
+                                color: t.ambient_teal_deep.into(),
                                 offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                                 blur_radius: gpui::px(240.0),
                                 spread_radius: gpui::px(0.0),
@@ -3299,7 +4977,7 @@ impl Render for Shell {
                             .rounded(gpui::px(999.0))
                             .bg(t.ambient_rose)
                             .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(0x7A4A5540).into(),
+                                color: t.ambient_rose_deep.into(),
                                 offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
                                 blur_radius: gpui::px(220.0),
                                 spread_radius: gpui::px(0.0),
@@ -3464,20 +5142,7 @@ impl Render for Shell {
                                             .child("myuzik"),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(gpui::px(4.0))
-                                    .child(nav_item("Home", self.route == Route::Home, t).id("nav-home").track_focus(&nav_focus[0]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Home").aria_selected(self.route == Route::Home).border_2().border_color(self.focus_border(&nav_focus[0], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-home".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Home; this.selected_album = None; this.album_detail = None; })))
-                                    .child(nav_item("Now Playing", self.route == Route::NowPlaying, t).id("nav-nowplaying").track_focus(&nav_focus[1]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Now Playing").aria_selected(self.route == Route::NowPlaying).border_2().border_color(self.focus_border(&nav_focus[1], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-nowplaying".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::NowPlaying; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Search", self.route == Route::Search, t).id("nav-search").track_focus(&nav_focus[2]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Search").aria_selected(self.route == Route::Search).border_2().border_color(self.focus_border(&nav_focus[2], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-search".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, window, cx| { this.route = Route::Search; this.album_detail = None; this.selected_album = None; window.focus(&this.search_focus, cx); })))
-                                    .child(nav_item("Albums", self.route == Route::Albums, t).id("nav-albums").track_focus(&nav_focus[3]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Albums").aria_selected(self.route == Route::Albums).border_2().border_color(self.focus_border(&nav_focus[3], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-albums".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Albums; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Artists", self.route == Route::Artists, t).id("nav-artists").track_focus(&nav_focus[4]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Artists").aria_selected(self.route == Route::Artists).border_2().border_color(self.focus_border(&nav_focus[4], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-artists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Artists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Playlists", self.route == Route::Playlists, t).id("nav-playlists").track_focus(&nav_focus[5]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Playlists").aria_selected(self.route == Route::Playlists).border_2().border_color(self.focus_border(&nav_focus[5], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-playlists".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Playlists; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Favorites", self.route == Route::Favorites, t).id("nav-favorites").track_focus(&nav_focus[6]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Favorites").aria_selected(self.route == Route::Favorites).border_2().border_color(self.focus_border(&nav_focus[6], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-favorites".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Favorites; this.album_detail = None; this.selected_album = None; })))
-                                    .child(nav_item("Settings", self.route == Route::Settings, t).id("nav-settings").track_focus(&nav_focus[7]).tab_index(Self::TAB_NAV).role(gpui::Role::Link).aria_label("Settings").aria_selected(self.route == Route::Settings).border_2().border_color(self.focus_border(&nav_focus[7], window, gpui::rgba(0x00000000), t)).debug_selector(|| "nav-settings".to_string()).active(|style| style.bg(t.clay_surface).text_color(t.clay_ink)).on_click(cx.listener(|this, _event, _window, _cx| { this.route = Route::Settings; this.album_detail = None; this.selected_album = None; }))),
-                            )
+                            .child(self.render_sidebar_nav(window, cx, t))
                             .child(
                                 div()
                                     .mt_auto()
@@ -3536,7 +5201,11 @@ impl Render for Shell {
                             .pb(gpui::px(112.0))
                             .id("main-scroll")
                             .overflow_y_scroll()
-                            .child(if self.route == Route::Home && self.selected_album.is_some() {
+                            .child(if matches!(
+                                self.route,
+                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods
+                            ) || (self.route == Route::Home && self.selected_album.is_some())
+                            {
                                 div()
                             } else {
                                 div()
@@ -3555,8 +5224,7 @@ impl Render for Shell {
                                                     .text_size(gpui::px(38.0))
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                                     .child(match self.route {
-                                                        crate::app::Route::Home => "Good evening",
-                                                        crate::app::Route::Search => "Search",
+                                                        crate::app::Route::Home => greeting_for_now(),                                                        crate::app::Route::Search => "Search",
                                                         crate::app::Route::NowPlaying => "Now Playing",
                                                         crate::app::Route::Settings => "Settings",
                                                         crate::app::Route::Setup => "Setup",
@@ -3564,7 +5232,10 @@ impl Render for Shell {
                                                         crate::app::Route::Artists => "Artists",
                                                         crate::app::Route::Playlists => "Playlists",
                                                         crate::app::Route::Favorites => "Favorites",
-                                                        _ => "Myuzik",
+                                                        crate::app::Route::Album(_) => "Album",
+                                                        crate::app::Route::Artist(_) => "Artist",
+                                                        crate::app::Route::Playlist(_) => "Playlist",
+                                                        crate::app::Route::Moods => "Moods & genres",
                                                     }),
                                             )
                                             .child(
@@ -3583,7 +5254,7 @@ impl Render for Shell {
                                             .track_focus(&f_search_shortcut)
                                             .tab_index(Self::TAB_CONTENT)
                                             .role(gpui::Role::Button)
-                                            .aria_label("Search your library (Ctrl K)")
+                                            .aria_label("Search music (Ctrl K)")
                                             .border_2()
                                             .border_color(self.focus_border(&f_search_shortcut, window, t.glass_border, t))
                                             .cursor_pointer()
@@ -3601,7 +5272,7 @@ impl Render for Shell {
                                             ))
                                             .shadow(vec![
                                                 gpui::BoxShadow {
-                                                    color: gpui::rgba(0xFFFFFFFF).into(),
+                                                    color: t.glass_border_on_clay.into(),
                                                     offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
                                                     blur_radius: gpui::px(3.0),
                                                     spread_radius: gpui::px(0.0),
@@ -3621,7 +5292,7 @@ impl Render for Shell {
                                                 this.route = Route::Search; this.album_detail = None; this.selected_album = None;
                                                 window.focus(&this.search_focus, cx);
                                             }))
-                                            .child("Search your library…")
+                                            .child("Search music…")
                                             .child(div().flex_1())
                                             .child(
                                                 div()
@@ -3633,7 +5304,8 @@ impl Render for Shell {
                                     )
                             })
                             .child(if self.selected_album.is_some()
-                                || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings | Route::Artists | Route::Playlists | Route::Favorites) {
+                                || (self.route == Route::Home && self.active_source == TrackSource::YouTube)
+                                || matches!(self.route, Route::NowPlaying | Route::Search | Route::Settings | Route::Artists | Route::Playlists | Route::Favorites | Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods) {
                                 div()
                             } else {
                                 div()
@@ -3691,13 +5363,31 @@ impl Render for Shell {
                             } else if self.route == Route::Search {
                                 let mut col = div().flex().flex_col().gap(gpui::px(12.0));
                                 let search_entity = cx.entity();
+                                let searching_youtube =
+                                    self.active_source == TrackSource::YouTube;
+                                col = col.child(
+                                    div()
+                                        .text_size(gpui::px(9.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t.gold)
+                                        .debug_selector(|| "search-source".to_string())
+                                        .child(if searching_youtube {
+                                            "YOUTUBE MUSIC"
+                                        } else {
+                                            "YOUR LIBRARY"
+                                        }),
+                                );
                                 col = col.child(
                                     div()
                                         .id("search-box")
                                         .track_focus(&self.search_focus)
                                         .tab_index(Self::TAB_CONTENT)
                                         .role(gpui::Role::TextInput)
-                                        .aria_label("Search your library")
+                                        .aria_label(if self.active_source == TrackSource::YouTube {
+                                            "Search YouTube Music"
+                                        } else {
+                                            "Search your library"
+                                        })
                                         .focusable()
                                         .on_key_down(move |ev, _window, app| {
                                             let entity = search_entity.clone();
@@ -3755,7 +5445,11 @@ impl Render for Shell {
                                                 .text_size(gpui::px(12.0))
                                                 .text_color(t.text_primary)
                                                 .child(if self.search_query.is_empty() {
-                                                    "Type to search artists, albums, songs…".to_string()
+                                                    if self.active_source == TrackSource::YouTube {
+                                                        "Search YouTube Music…".to_string()
+                                                    } else {
+                                                        "Search artists, albums, songs…".to_string()
+                                                    }
                                                 } else {
                                                     self.search_query.clone()
                                                 }),
@@ -3777,6 +5471,7 @@ impl Render for Shell {
                                         |kind: &'static str,
                                          idx: usize,
                                          id: String,
+                                         source: TrackSource,
                                          label: String,
                                          aria: String,
                                          window: &gpui::Window,
@@ -3810,9 +5505,9 @@ impl Render for Shell {
                                                 .text_ellipsis()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                                     match kind {
-                                                        "album" => this.open_album(id.clone(), cx),
-                                                        "artist" => this.select_artist(id.clone(), cx),
-                                                        _ => this.play_playlist(id.clone(), cx),
+                                                        "album" => this.open_album(source, id.clone(), cx),
+                                                        "artist" => this.open_artist(source, id.clone(), cx),
+                                                        _ => this.open_playlist(source, id.clone(), cx),
                                                     }
                                                 }))
                                                 .child(label)
@@ -3828,6 +5523,7 @@ impl Render for Shell {
                                                 "artist",
                                                 i,
                                                 artist.id.clone(),
+                                                artist.source,
                                                 format!("{}{album_count}", artist.name),
                                                 format!("Open artist {}", artist.name),
                                                 window,
@@ -3842,6 +5538,7 @@ impl Render for Shell {
                                                 "album",
                                                 i,
                                                 album.id.clone(),
+                                                album.source,
                                                 format!("{} — {}", album.name, album.artist),
                                                 format!("Open album {}", album.name),
                                                 window,
@@ -3856,6 +5553,7 @@ impl Render for Shell {
                                                 "playlist",
                                                 i,
                                                 playlist.id.clone(),
+                                                playlist.source,
                                                 playlist.name.clone(),
                                                 format!("Play playlist {}", playlist.name),
                                                 window,
@@ -3899,10 +5597,126 @@ impl Render for Shell {
                                             );
                                         }
                                     }
+                                    // YouTube Music: a separate source, so a
+                                    // separate section. Results are already
+                                    // merged into `results.youtube` by the
+                                    // generation-guarded search task.
+                                    if self.youtube_loading {
+                                        col = col.child(
+                                            div()
+                                                .text_size(gpui::px(11.0))
+                                                .text_color(t.text_secondary)
+                                                .child("Searching YouTube Music…"),
+                                        );
+                                    }
+                                    if let Some(error) = &self.youtube_error {
+                                        let f_retry = self.focus_for(
+                                            "search-youtube-retry",
+                                            Self::TAB_CONTENT,
+                                            cx,
+                                        );
+                                        col = col.child(
+                                            div()
+                                                .id("search-youtube-error")
+                                                .debug_selector(|| "search-youtube-error".to_string())
+                                                .flex()
+                                                .items_center()
+                                                .gap(gpui::px(8.0))
+                                                .text_size(gpui::px(11.0))
+                                                .text_color(t.text_secondary)
+                                                .child(error.clone())
+                                                .child(
+                                                    div()
+                                                        .id("search-youtube-retry")
+                                                        .track_focus(&f_retry)
+                                                        .tab_index(Self::TAB_CONTENT)
+                                                        .role(gpui::Role::Button)
+                                                        .aria_label("Retry YouTube search")
+                                                        .border_2()
+                                                        .border_color(self.focus_border(
+                                                            &f_retry,
+                                                            window,
+                                                            t.glass_border,
+                                                            t,
+                                                        ))
+                                                        .cursor_pointer()
+                                                        .px(gpui::px(8.0))
+                                                        .py(gpui::px(4.0))
+                                                        .rounded(gpui::px(8.0))
+                                                        .bg(t.glass_tint)
+                                                        .on_click(cx.listener(
+                                                            |this, _event, _window, cx| {
+                                                                this.schedule_search(true, cx);
+                                                            },
+                                                        ))
+                                                        .child("Retry"),
+                                                ),
+                                        );
+                                    }
+                                    if !results.youtube.is_empty() {
+                                        col = col.child(section_label("YOUTUBE MUSIC", t));
+                                        for (i, tr) in results.youtube.iter().take(20).enumerate() {
+                                            let track = tr.clone();
+                                            let f_search_youtube = self.focus_for(
+                                                &format!("search-youtube-{i}"),
+                                                Self::TAB_CONTENT,
+                                                cx,
+                                            );
+                                            let duration = if tr.duration.as_secs() > 0 {
+                                                format!(" · {}", format_time(tr.duration.as_secs_f64()))
+                                            } else {
+                                                String::new()
+                                            };
+                                            col = col.child(
+                                                div()
+                                                    .id(format!("search-youtube-{}", i))
+                                                    .debug_selector(move || {
+                                                        format!("search-youtube-{}", i)
+                                                    })
+                                                    .track_focus(&f_search_youtube)
+                                                    .tab_index(Self::TAB_CONTENT)
+                                                    .role(gpui::Role::Button)
+                                                    .border_2()
+                                                    .border_color(self.focus_border(
+                                                        &f_search_youtube,
+                                                        window,
+                                                        t.glass_border,
+                                                        t,
+                                                    ))
+                                                    .aria_label(format!(
+                                                        "Play {} by {} on YouTube Music",
+                                                        tr.title, tr.artist
+                                                    ))
+                                                    .cursor_pointer()
+                                                    .px(gpui::px(12.0))
+                                                    .py(gpui::px(8.0))
+                                                    .rounded(gpui::px(10.0))
+                                                    .bg(t.glass_tint)
+                                                    .border_1()
+                                                    .border_color(t.glass_border)
+                                                    .text_size(gpui::px(12.0))
+                                                    .line_clamp(1)
+                                                    .text_ellipsis()
+                                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                        // A search result starts its
+                                                        // song radio; it does not
+                                                        // queue the search page.
+                                                        this.play_youtube_result(track.clone(), cx);
+                                                    }))
+                                                    .child(format!(
+                                                        "{} — {}{}",
+                                                        tr.title, tr.artist, duration
+                                                    )),
+                                            );
+                                        }
+                                    }
                                     if results.songs.is_empty()
                                         && results.albums.is_empty()
                                         && results.artists.is_empty()
                                         && results.playlists.is_empty()
+                                        && results.youtube.is_empty()
+                                        && !self.youtube_loading
+                                        && self.youtube_error.is_none()
                                     {
                                         col = col.child(
                                             div().text_size(gpui::px(11.0)).text_color(t.text_secondary).child("No results"),
@@ -3910,6 +5724,13 @@ impl Render for Shell {
                                     }
                                 }
                                 col
+                            } else if matches!(
+                                self.route,
+                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods
+                            ) {
+                                div().w_full().child(self.render_detail_route(window, cx))
+                            } else if self.route == Route::Home && self.active_source == TrackSource::YouTube {
+                                div().w_full().child(self.render_youtube_home(window, cx))
                             } else if self.route == Route::Settings {
                                 let mut col = div().flex().flex_col().gap(gpui::px(8.0));
                                 let f_set_quality = self.focus_for("settings-quality", Self::TAB_CONTENT, cx);
@@ -3923,12 +5744,55 @@ impl Render for Shell {
                                     self.focus_for("settings-autoplay", Self::TAB_CONTENT, cx);
                                 let f_set_close_to_tray =
                                     self.focus_for("settings-close-to-tray", Self::TAB_CONTENT, cx);
+                                let f_youtube =
+                                    self.focus_for("settings-youtube", Self::TAB_CONTENT, cx);
+                                let f_youtube_quality =
+                                    self.focus_for("settings-youtube-quality", Self::TAB_CONTENT, cx);
+                                let f_youtube_cache =
+                                    self.focus_for("settings-youtube-cache", Self::TAB_CONTENT, cx);
+                                let f_server =
+                                    self.focus_for("settings-server", Self::TAB_CONTENT, cx);
                                 let f_offset_down = self.focus_for("settings-offset-down", Self::TAB_CONTENT, cx);
                                 let f_offset_up = self.focus_for("settings-offset-up", Self::TAB_CONTENT, cx);
                                 col = col
                                     .child(settings_section("Account", t))
                                     .child(setting_row("Server URL", &self.config.server_url, t))
                                     .child(setting_row("Username", &self.config.username, t))
+                                    .child(
+                                        setting_row(
+                                            "Music server",
+                                            if self.client.is_some() {
+                                                "Connected"
+                                            } else {
+                                                "Not connected"
+                                            },
+                                            t,
+                                        )
+                                        .id("set-server")
+                                        .debug_selector(|| "set-server".to_string())
+                                        .track_focus(&f_server)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::Button)
+                                        .aria_label(if self.client.is_some() {
+                                            "Music server connected; open connection settings"
+                                        } else {
+                                            "Connect a music server"
+                                        })
+                                        .border_2()
+                                        .border_color(self.focus_border(
+                                            &f_server,
+                                            window,
+                                            t.glass_border,
+                                            t,
+                                        ))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.route = Route::Setup;
+                                            this.setup_error = None;
+                                            this.setup_focus_requested = false;
+                                            cx.notify();
+                                        })),
+                                    )
                                     .child(settings_section("Playback", t))
                                     .child(
                                         setting_row("Stream quality", self.quality_label(), t)
@@ -4083,7 +5947,106 @@ impl Render for Shell {
                                     )
                                     .child(settings_section("About", t))
                                     .child(setting_row("Version", "0.1.0", t))
-                                    .child(setting_row("License", "MIT", t));
+                                    .child(setting_row("License", "MIT", t))
+                                    .child(settings_section("Sources", t))
+                                    .child(
+                                        setting_row(
+                                            "YouTube Music",
+                                            if self.config.youtube_enabled {
+                                                "On"
+                                            } else {
+                                                "Off"
+                                            },
+                                            t,
+                                        )
+                                        .id("set-youtube")
+                                        .debug_selector(|| "set-youtube".to_string())
+                                        .track_focus(&f_youtube)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::Button)
+                                        .aria_label(format!(
+                                            "YouTube Music, {}",
+                                            if self.config.youtube_enabled {
+                                                "on"
+                                            } else {
+                                                "off"
+                                            }
+                                        ))
+                                        .border_2()
+                                        .border_color(self.focus_border(
+                                            &f_youtube,
+                                            window,
+                                            t.glass_border,
+                                            t,
+                                        ))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.toggle_youtube(cx);
+                                        })),
+                                    )
+                                    .child(
+                                        setting_row(
+                                            "YouTube quality",
+                                            self.config.youtube_quality.label(),
+                                            t,
+                                        )
+                                        .id("set-youtube-quality")
+                                        .debug_selector(|| "set-youtube-quality".to_string())
+                                        .track_focus(&f_youtube_quality)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::Button)
+                                        .aria_label(format!(
+                                            "YouTube quality, {}",
+                                            self.config.youtube_quality.label()
+                                        ))
+                                        .border_2()
+                                        .border_color(self.focus_border(
+                                            &f_youtube_quality,
+                                            window,
+                                            t.glass_border,
+                                            t,
+                                        ))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.cycle_youtube_quality(cx);
+                                        })),
+                                    )
+                                    .child(setting_row(
+                                        "YouTube helper",
+                                        if YouTubeProvider::helper_installed() {
+                                            "Installed"
+                                        } else {
+                                            "Not installed"
+                                        },
+                                        t,
+                                    ))
+                                    .child(
+                                        setting_row(
+                                            "Stream cache",
+                                            &format!(
+                                                "{} MB",
+                                                self.youtube_cache_bytes / (1024 * 1024)
+                                            ),
+                                            t,
+                                        )
+                                        .id("set-youtube-cache")
+                                        .debug_selector(|| "set-youtube-cache".to_string())
+                                        .track_focus(&f_youtube_cache)
+                                        .tab_index(Self::TAB_CONTENT)
+                                        .role(gpui::Role::Button)
+                                        .aria_label("Clear the YouTube stream cache")
+                                        .border_2()
+                                        .border_color(self.focus_border(
+                                            &f_youtube_cache,
+                                            window,
+                                            t.glass_border,
+                                            t,
+                                        ))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.clear_youtube_cache(cx);
+                                        })),
+                                    );
                                 col
                             } else if self.route == Route::Artists {
                                 if let Some(detail) = &self.artist_detail {
@@ -4101,6 +6064,7 @@ impl Render for Shell {
                                         .aria_label(artist_grid_label);
                                     for a in albums.iter() {
                                         let aid = a.id.clone();
+                                        let album_source = a.source;
                                         let f_album =
                                             self.focus_for(&format!("artist-album:{}", aid), Self::TAB_CONTENT, cx);
                                         grid = grid.child(
@@ -4123,8 +6087,7 @@ impl Render for Shell {
                                                 })
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    this.route = Route::Home;
-                                                    this.open_album(aid.clone(), cx);
+                                                    this.open_album(album_source, aid.clone(), cx);
                                                 })),
                                         );
                                     }
@@ -4174,6 +6137,7 @@ impl Render for Shell {
                                         .aria_label("Artists");
                                     for a in &hs.artists {
                                         let aid = a.id.clone();
+                                        let artist_source = a.source;
                                         let f_artist =
                                             self.focus_for(&format!("artist:{}", aid), Self::TAB_CONTENT, cx);
                                         col = col.child(
@@ -4206,7 +6170,7 @@ impl Render for Shell {
                                                 .border_color(t.glass_border)
                                                 .text_size(gpui::px(12.0))
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    this.select_artist(aid.clone(), cx);
+                                                    this.open_artist(artist_source, aid.clone(), cx);
                                                 }))
                                                 .child(a.name.clone()),
                                         );
@@ -4224,6 +6188,7 @@ impl Render for Shell {
                                     .aria_label("Playlists");
                                 for p in &hs.playlists {
                                     let pid = p.id.clone();
+                                    let playlist_source = p.source;
                                     let f_playlist =
                                         self.focus_for(&format!("playlist:{}", pid), Self::TAB_CONTENT, cx);
                                     col = col.child(
@@ -4233,7 +6198,7 @@ impl Render for Shell {
                                             .tab_index(Self::TAB_CONTENT)
                                             .role(gpui::Role::ListItem)
                                             .aria_label(format!(
-                                                "Play playlist {}",
+                                                "Open playlist {}",
                                                 p.name
                                             ))
                                             .border_2()
@@ -4256,7 +6221,7 @@ impl Render for Shell {
                                             .border_color(t.glass_border)
                                             .text_size(gpui::px(12.0))
                                             .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                this.play_playlist(pid.clone(), cx);
+                                                this.open_playlist(playlist_source, pid.clone(), cx);
                                             }))
                                             .child(format!("{} · {} tracks", p.name, p.song_count)),
                                     );
@@ -4368,6 +6333,7 @@ impl Render for Shell {
                                 let limit = if matches!(self.route, Route::Albums | Route::Favorites) { source.len() } else { 8 };
                                     for a in source.iter().take(limit) {
                                         let aid = a.id.clone();
+                                        let album_source = a.source;
                                         let f_album =
                                             self.focus_for(&format!("album:{}", aid), Self::TAB_CONTENT, cx);
                                         let cover = a.cover_art_id.as_ref().and_then(|cid| hs.covers.get(cid)).cloned();
@@ -4392,7 +6358,7 @@ impl Render for Shell {
                                                 .active(|style| style.opacity(0.94))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    this.open_album(aid.clone(), cx);
+                                                    this.open_album(album_source, aid.clone(), cx);
                                                 })),
                                         );
                                     }
@@ -4405,7 +6371,10 @@ impl Render for Shell {
                                 let f_album_star = self.focus_for("album-star", Self::TAB_CONTENT, cx);
                                 let f_album_play_all =
                                     self.focus_for("album-play-all", Self::TAB_CONTENT, cx);
+                                let f_album_enqueue =
+                                    self.focus_for("album-enqueue", Self::TAB_CONTENT, cx);
                                 let songs_all = detail.songs.clone();
+                                let songs_all_queue = songs_all.clone();
                                 let album_name = detail.album.name.clone();
                                 let album_artist = detail.album.artist.clone();
                                 let album_meta = {
@@ -4419,7 +6388,19 @@ impl Render for Shell {
                                     } else {
                                         format!("{count} songs")
                                     });
-                                    if let Some(duration) = detail.album.duration {
+                                    let computed_duration: Option<std::time::Duration> =
+                                        if detail.songs.is_empty() {
+                                            detail.album.duration
+                                        } else {
+                                            let total: std::time::Duration =
+                                                detail.songs.iter().map(|t| t.duration).sum();
+                                            if total.as_secs() > 0 {
+                                                Some(total)
+                                            } else {
+                                                detail.album.duration
+                                            }
+                                        };
+                                    if let Some(duration) = computed_duration {
                                         parts.push(format!("{} min", duration.as_secs() / 60));
                                     }
                                     parts.join(" · ")
@@ -4595,6 +6576,36 @@ impl Render for Shell {
                                                                     this.play_tracks(songs_all.clone(), 0, cx);
                                                                 }))
                                                                 .child("Play all"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("album-enqueue")
+                                                                .debug_selector(|| "album-enqueue".to_string())
+                                                                .track_focus(&f_album_enqueue)
+                                                                .tab_index(Self::TAB_CONTENT)
+                                                                .role(gpui::Role::Button)
+                                                                .aria_label("Add all tracks to the queue")
+                                                                .border_2()
+                                                                .border_color(self.focus_border(
+                                                                    &f_album_enqueue,
+                                                                    window,
+                                                                    t.glass_border,
+                                                                    t,
+                                                                ))
+                                                                .cursor_pointer()
+                                                                .px(gpui::px(14.0))
+                                                                .py(gpui::px(8.0))
+                                                                .rounded(gpui::px(999.0))
+                                                                .bg(t.glass_highlight_soft)
+                                                                .border_1()
+                                                                .border_color(t.glass_border)
+                                                                .text_color(t.gold_light)
+                                                                .text_size(gpui::px(10.0))
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                                    this.enqueue_tracks(songs_all_queue.clone(), cx);
+                                                                }))
+                                                                .child("Add to queue"),
                                                         ),
                                                 ),
                                         ),
@@ -4622,6 +6633,7 @@ impl Render for Shell {
                                             &t_.artist,
                                             &format_time(t_.duration.as_secs_f64()),
                                             is_current,
+                                            None,
                                             t,
                                         )
                                         .id(format!("track-{}", i))
@@ -4655,6 +6667,7 @@ impl Render for Shell {
                 ),
             )
             .child(player)
+            .child(queue_panel)
             // Failure surface. Playback, autoplay and library errors are all
             // stored in `self.toast`; without this element they were stored and
             // thrown away, so every async failure was silent.
@@ -4921,9 +6934,9 @@ fn fetch_full_library(
 /// A section heading inside a results page (SONGS, ALBUMS, …).
 fn section_label(label: &'static str, t: &crate::theme::Colors) -> impl IntoElement {
     div()
-        .text_size(gpui::px(9.0))
+        .text_size(gpui::px(11.0))
         .font_weight(gpui::FontWeight::BOLD)
-        .text_color(t.gold)
+        .text_color(t.text_secondary)
         .child(label)
 }
 
@@ -4935,6 +6948,95 @@ fn error_text(error: &crate::navidrome::error::NavidromeError) -> String {
     match error.hint() {
         Some(hint) => format!("{} {}", error.user_message(), hint),
         None => error.user_message().to_string(),
+    }
+}
+
+/// Fetch a remote cover and return bytes GPUI can decode.
+///
+/// YouTube serves WebP for some thumbnails. GPUI's image loader at the pinned
+/// revision expects PNG/JPEG, so anything else is decoded and re-encoded once,
+/// on the background executor. The 5 MiB cap keeps a hostile URL from becoming
+/// a memory problem.
+/// Legacy dynamic keys carry only an id. Provider ids are namespaced (`yt:`),
+/// so the source can be recovered without threading it through the key.
+fn source_for_id(id: &str) -> TrackSource {
+    if id.starts_with("yt:") {
+        TrackSource::YouTube
+    } else {
+        TrackSource::Navidrome
+    }
+}
+
+fn fetch_remote_cover(url: &str) -> Option<Vec<u8>> {
+    const MAX_COVER_BYTES: usize = 5 * 1024 * 1024;
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return None;
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .user_agent("Myuzik/0.1 (https://github.com/SamVivan1/myuzik)")
+        .timeout_connect(Some(std::time::Duration::from_secs(8)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(15)))
+        .timeout_global(Some(std::time::Duration::from_secs(25)))
+        .build()
+        .into();
+    let bytes = agent
+        .get(url)
+        .header("Accept", "image/jpeg,image/png")
+        .call()
+        .ok()?
+        .into_body()
+        .read_to_vec()
+        .ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_COVER_BYTES {
+        return None;
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) || bytes.starts_with(&[0xFF, 0xD8]) {
+        return Some(bytes);
+    }
+    let image = image::load_from_memory(&bytes).ok()?;
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    (!png.is_empty()).then_some(png)
+}
+
+fn provider_search_error_text(error: &crate::provider::ProviderError) -> String {
+    use crate::provider::ProviderError;
+    match error {
+        ProviderError::Unavailable(_) => {
+            "YouTube search failed. Try a different query.".to_string()
+        }
+        other => provider_error_text(other),
+    }
+}
+
+fn provider_error_text(error: &crate::provider::ProviderError) -> String {
+    use crate::provider::ProviderError;
+    match error {
+        ProviderError::HelperMissing => {
+            "YouTube support is not installed. Run ./install.sh --with-youtube.".to_string()
+        }
+        ProviderError::PythonMissing => {
+            "Python 3 was not found. Install python3 and the YouTube helper.".to_string()
+        }
+        ProviderError::NodeMissing => "Node.js 20+ is required for YouTube playback.".to_string(),
+        ProviderError::Timeout => "YouTube took too long to respond. Try again.".to_string(),
+        ProviderError::Cancelled => "YouTube search cancelled.".to_string(),
+        ProviderError::Unavailable(_) => {
+            "This track isn't available on YouTube. Try another result.".to_string()
+        }
+        ProviderError::SignInRequired => {
+            "This track needs sign-in. Set youtube_cookies in config.toml.".to_string()
+        }
+        ProviderError::TooLarge => "This track is too large to buffer (limit 32 MB).".to_string(),
+        ProviderError::Network(_) => {
+            "Couldn't reach YouTube. Check your connection and try again.".to_string()
+        }
+        ProviderError::Protocol(message) => {
+            format!("YouTube returned an unexpected response: {message}")
+        }
     }
 }
 
@@ -5008,47 +7110,59 @@ fn spawn_home_fetch(
                 h.favorites = favorites;
             });
         });
+        // PF-07: fetch the (up to 24) cover thumbnails concurrently instead of
+        // serially awaiting them one by one. Each task still honours the shared
+        // cover cache (read-through + in-flight claim), so dedup is preserved.
         let covers_dir_for_grid = covers.clone();
+        let mut futures_list: Vec<_> = Vec::new();
         for album in albums.iter().take(24) {
             if let Some(cover_id) = &album.cover_art_id {
                 let cid_bg = cover_id.clone();
                 let client_bg = client.clone();
                 let covers_bg = covers_dir_for_grid.clone();
-                let fetched = cx
-                    .background_executor()
-                    .spawn(async move {
-                        if let Some(bytes) = covers_bg.read(&cid_bg) {
-                            return Ok::<Vec<u8>, crate::navidrome::error::NavidromeError>(bytes);
-                        }
-                        let Some(_claim) = covers_bg.begin_fetch(&cid_bg) else {
-                            return Err(crate::navidrome::error::NavidromeError::Protocol(
+                let fut = cx.background_executor().spawn(async move {
+                    if let Some(bytes) = covers_bg.read(&cid_bg) {
+                        return (
+                            cid_bg,
+                            Ok::<Vec<u8>, crate::navidrome::error::NavidromeError>(bytes),
+                        );
+                    }
+                    let Some(_claim) = covers_bg.begin_fetch(&cid_bg) else {
+                        return (
+                            cid_bg,
+                            Err(crate::navidrome::error::NavidromeError::Protocol(
                                 "cover already downloading".to_string(),
-                            ));
-                        };
-                        let bytes = client_bg.cover_bytes(&cid_bg, 512)?;
-                        let _ = covers_bg.write(&cid_bg, &bytes);
-                        Ok(bytes)
-                    })
-                    .await;
-                if let Ok(bytes) = fetched {
-                    let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-                        gpui::ImageFormat::Png
-                    } else {
-                        gpui::ImageFormat::Jpeg
+                            )),
+                        );
                     };
-                    let image = std::sync::Arc::new(gpui::Image {
-                        format,
-                        bytes,
-                        id: fxhash_id(cover_id),
+                    let res = client_bg.cover_bytes(&cid_bg, 512).inspect(|bytes| {
+                        let _ = covers_bg.write(&cid_bg, bytes);
                     });
-                    let _ = covers_dir_for_grid.write(cover_id, &image.bytes);
-                    let cid = cover_id.clone();
-                    cx.update(|app| {
-                        app.update_entity(&hs, |h, _| {
-                            h.insert_cover(cid, image);
-                        });
+                    (cid_bg, res)
+                });
+                futures_list.push(fut);
+            }
+        }
+        let results = futures::future::join_all(futures_list).await;
+        for (cover_id, fetched) in results {
+            if let Ok(bytes) = fetched {
+                let format = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    gpui::ImageFormat::Png
+                } else {
+                    gpui::ImageFormat::Jpeg
+                };
+                let image = std::sync::Arc::new(gpui::Image {
+                    format,
+                    bytes,
+                    id: fxhash_id(&cover_id),
+                });
+                let _ = covers_dir_for_grid.write(&cover_id, &image.bytes);
+                let cid = cover_id.clone();
+                cx.update(|app| {
+                    app.update_entity(&hs, |h, _| {
+                        h.insert_cover(cid, image);
                     });
-                }
+                });
             }
         }
 
@@ -5077,9 +7191,9 @@ fn spawn_home_fetch(
 fn settings_section(title: &str, t: &crate::theme::Colors) -> gpui::Div {
     div()
         .mt(gpui::px(6.0))
-        .text_size(gpui::px(9.0))
-        .font_weight(gpui::FontWeight::BOLD)
-        .text_color(t.gold)
+        .text_size(gpui::px(13.0))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(t.text_secondary)
         .child(title.to_uppercase())
 }
 
@@ -5094,7 +7208,6 @@ fn setting_row(label: &str, value: &str, t: &crate::theme::Colors) -> gpui::Div 
         .bg(t.glass_tint)
         .border_1()
         .border_color(t.glass_border)
-        .hover(|style| style.bg(t.glass_highlight_soft))
         .child(
             div()
                 .text_size(gpui::px(12.0))
@@ -5126,7 +7239,7 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .font_weight(gpui::FontWeight::BOLD)
             .shadow(vec![
                 gpui::BoxShadow {
-                    color: gpui::rgba(0xFFFFFFFF).into(),
+                    color: t.glass_border_on_clay.into(),
                     offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
                     blur_radius: gpui::px(3.0),
                     spread_radius: gpui::px(0.0),
@@ -5220,7 +7333,7 @@ fn album_card(
                 .border_1()
                 .border_color(t.glass_border)
                 .shadow(vec![gpui::BoxShadow {
-                    color: gpui::hsla(0.05, 0.4, 0.05, 0.35),
+                    color: t.shadow_deep.into(),
                     offset: gpui::point(gpui::px(0.0), gpui::px(14.0)),
                     blur_radius: gpui::px(32.0),
                     spread_radius: gpui::px(0.0),
@@ -5297,6 +7410,7 @@ fn track_row(
     artist: &str,
     dur: &str,
     active: bool,
+    cover: Option<std::sync::Arc<gpui::Image>>,
     t: &crate::theme::Colors,
 ) -> gpui::Div {
     let bg = if active { t.gold_tint } else { t.glass_tint };
@@ -5327,10 +7441,20 @@ fn track_row(
             gpui::div()
                 .w(gpui::px(34.0))
                 .h(gpui::px(34.0))
+                .flex_shrink_0()
                 .rounded(gpui::px(9.0))
+                .overflow_hidden()
                 .bg(t.glass_tint)
                 .border_1()
-                .border_color(t.glass_border),
+                .border_color(t.glass_border)
+                .child(match cover {
+                    Some(image) => gpui::img(gpui::ImageSource::Image(image))
+                        .w_full()
+                        .h_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .into_any_element(),
+                    None => gpui::div().into_any_element(),
+                }),
         )
         .child(
             gpui::div()
@@ -5412,4 +7536,21 @@ fn fxhash_id(s: &str) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
+}
+
+/// Time-aware greeting for the Home screen (UI-30). Uses the local clock, not UTC.
+fn greeting_for_now() -> &'static str {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as libc::time_t)
+        .unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&now, &mut tm);
+    }
+    match tm.tm_hour {
+        0..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        _ => "Good evening",
+    }
 }

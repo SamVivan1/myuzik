@@ -6,11 +6,18 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
+/// How long a cached lyric entry is considered fresh. After this the entry is
+/// treated as a miss and re-fetched, so corrected/deleted lyrics on the server
+/// or LRCLIB eventually replace the stale copy instead of living forever.
+pub const TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
 #[derive(Serialize, Deserialize)]
 struct CacheEntry {
     instrumental: bool,
     synced: String,
     plain: String,
+    #[serde(default)]
+    fetched_at: u64,
 }
 
 pub struct LyricsCache {
@@ -66,6 +73,17 @@ impl LyricsCache {
         let path = self.dir.join(format!("{}.json", key));
         let text = fs::read_to_string(path).ok()?;
         let entry: CacheEntry = serde_json::from_str(&text).ok()?;
+        // TTL: a fresh entry (fetched_at > 0) older than TTL_SECS is stale.
+        // Legacy entries without fetched_at (0) are kept for backward compat.
+        if entry.fetched_at > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if now.saturating_sub(entry.fetched_at) > TTL_SECS {
+                return None;
+            }
+        }
         if entry.instrumental {
             return Some(LyricsStatus::Instrumental);
         }
@@ -88,10 +106,15 @@ impl LyricsCache {
     ) -> std::io::Result<()> {
         let _ = self.ensure();
         let path = self.dir.join(format!("{}.json", key));
+        let fetched_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let entry = CacheEntry {
             instrumental,
             synced: synced_text.to_string(),
             plain: plain_text.to_string(),
+            fetched_at,
         };
         let text = serde_json::to_string(&entry).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");

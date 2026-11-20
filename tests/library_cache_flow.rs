@@ -5,6 +5,7 @@
 use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
 use httpmock::prelude::*;
 use myuzik::config::{AppConfig, Paths};
+use myuzik::library::TrackSource;
 use myuzik::library::cache::{LibraryCache, LibrarySnapshot, SNAPSHOT_VERSION};
 use myuzik::library::{Album, Artist, Playlist, Track};
 use myuzik::player::engine::PlayerHandle;
@@ -46,6 +47,8 @@ fn track(id: &str, title: &str, artist: &str, album: &str) -> Track {
         year: None,
         starred: false,
         genre: Some("Jazz".to_string()),
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -63,12 +66,16 @@ fn snapshot_with_cached_library() -> LibrarySnapshot {
             duration: None,
             year: None,
             starred: false,
+            source: TrackSource::Navidrome,
+            cover_url: None,
         }],
         artists: vec![Artist {
             id: "ar1".to_string(),
             name: "Cached Artist".to_string(),
             album_count: Some(1),
             cover_art_id: None,
+            source: TrackSource::Navidrome,
+            cover_url: None,
         }],
         playlists: vec![Playlist {
             id: "pl1".to_string(),
@@ -76,6 +83,8 @@ fn snapshot_with_cached_library() -> LibrarySnapshot {
             song_count: 1,
             duration: Duration::from_secs(200),
             owner: "tester".to_string(),
+            source: TrackSource::Navidrome,
+            cover_url: None,
         }],
         songs: vec![track("s1", "Kind of Blue", "Miles Davis", "Cached Album")],
     }

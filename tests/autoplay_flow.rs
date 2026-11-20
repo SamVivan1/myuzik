@@ -64,6 +64,8 @@ fn seed_track() -> Track {
         year: Some(2026),
         starred: false,
         genre: Some("Indie Pop".to_string()),
+        source: Default::default(),
+        cover_url: None,
     }
 }
 

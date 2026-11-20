@@ -22,6 +22,8 @@ fn sample_track() -> Track {
         year: Some(2026),
         starred: false,
         genre: None,
+        source: Default::default(),
+        cover_url: None,
     }
 }
 

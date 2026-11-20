@@ -413,8 +413,8 @@ impl Render for NowPlayingView {
                                     .gap(gpui::px(2.0))
                                     .child(
                                         div()
-                                            .text_size(gpui::px(9.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_size(gpui::px(13.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(t.gold)
                                             .debug_selector(|| "np-lyrics-header".to_string())
                                             .child(self.lyrics.read(cx).header_label()),
@@ -509,7 +509,7 @@ impl Render for NowPlayingView {
                                             .px(gpui::px(11.0))
                                             .py(gpui::px(7.0))
                                             .rounded(gpui::px(999.0))
-                                            .bg(gpui::rgb(0x2A241C))
+                                            .bg(t.clay_dark)
                                             .text_color(t.gold_light)
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)

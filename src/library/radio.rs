@@ -355,6 +355,8 @@ mod tests {
             year: None,
             starred: false,
             genre: Some("Rock".to_string()),
+            source: Default::default(),
+            cover_url: None,
         }
     }
 

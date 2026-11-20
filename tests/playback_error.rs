@@ -29,6 +29,8 @@ fn track(id: &str) -> Track {
         year: None,
         starred: false,
         genre: None,
+        source: Default::default(),
+        cover_url: None,
     }
 }
 

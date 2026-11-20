@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use myuzik::library::search_index::{MAX_PER_GROUP, SearchIndex};
-use myuzik::library::{Album, Artist, Playlist, SearchResults, Track};
+use myuzik::library::{Album, Artist, Playlist, SearchResults, Track, TrackSource};
 
 fn track(id: &str, title: &str, artist: &str, album: &str, genre: Option<&str>) -> Track {
     Track {
@@ -20,6 +20,8 @@ fn track(id: &str, title: &str, artist: &str, album: &str, genre: Option<&str>) 
         year: None,
         starred: false,
         genre: genre.map(str::to_string),
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -34,6 +36,8 @@ fn album(id: &str, name: &str, artist: &str) -> Album {
         duration: None,
         year: None,
         starred: false,
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -43,6 +47,8 @@ fn artist(id: &str, name: &str) -> Artist {
         name: name.to_string(),
         album_count: None,
         cover_art_id: None,
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 
@@ -53,6 +59,8 @@ fn playlist(id: &str, name: &str) -> Playlist {
         song_count: 3,
         duration: Duration::from_secs(600),
         owner: "sam".to_string(),
+        source: TrackSource::Navidrome,
+        cover_url: None,
     }
 }
 

@@ -1,8 +1,8 @@
 # Myuzik
 
-A low-RAM, native Linux music player for a self-hosted **Navidrome** server, with synced lyrics
-and a desktop-pinned lyric overlay. Built with Rust, [GPUI](https://github.com/zed-industries/zed),
-and GStreamer.
+A low-RAM, native Linux music player for a self-hosted **Navidrome** server, with optional
+**YouTube Music** search and synced lyrics plus a desktop-pinned lyric overlay. Built with Rust,
+[GPUI](https://github.com/zed-industries/zed), and GStreamer.
 
 > v0.1.0. The core library, playback, lyrics, overlay, search, settings, scrobbling, and MPRIS
 > flows work, with full keyboard navigation. Playlist editing, offline downloads, gapless
@@ -11,8 +11,14 @@ and GStreamer.
 ## Features
 
 - Browse **recent**, **starred**, **artists**, and **playlists** from Navidrome (Subsonic API).
+- Optional **YouTube Music** as a first-class source (unofficial): when enabled, **Home** is the
+  YouTube Music front page with personalised shelves, and albums, artists, playlists and
+  moods/genres are browsable. Search and buffered playback use the same provider and GStreamer
+  engine. Requires the optional Python helper; see [docs/youtube.md](docs/youtube.md).
 - Real cover art, with an in-memory LRU and 512 px covers.
 - Playback via GStreamer (`playbin`), with queue, next/previous, repeat/shuffle, seek, volume.
+- **Queue drawer**: see what is playing and what is next; jump to a track, remove, reorder, clear
+  upcoming, and add a whole album with **Add to queue**.
 - **Synced lyrics** from Navidrome (OpenSubsonic) with LRCLIB fallback and a disk cache. LRCLIB
   results are matched by title, artist and duration, so a different edit of the same song is not
   accepted: no lyrics beats the wrong lyrics.
@@ -42,6 +48,17 @@ and GStreamer.
 - No telemetry. Credentials in the Secret Service, with a `0600` file fallback when no
   keyring answers.
 
+## Documentation
+
+Agent- and contributor-facing docs live under `docs/`:
+
+- [`docs/README.md`](docs/README.md) — documentation index.
+- [`AGENTS.md`](AGENTS.md) — architecture, module map, conventions, known gaps.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — threading, data flows, state ownership.
+- [`docs/MODULES.md`](docs/MODULES.md) — per-module reference.
+- [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) — coding conventions.
+- [`docs/audit/`](docs/audit/) — full audit with file:line evidence.
+
 ## Prerequisites
 
 - Linux with Wayland (primary) or X11/XWayland.
@@ -54,6 +71,8 @@ and GStreamer.
     openssl-devel clang cmake pkgconf gstreamer1-devel gstreamer1-plugins-base-devel
     gstreamer1-plugins-good gstreamer1-plugins-bad-free`
 - A running Navidrome server (tested with 0.64.x) and a Subsonic user.
+- Optional YouTube Music support: Python 3 with `venv`/`pip`, Node.js 20+ (used by `yt-dlp`),
+  and `ffmpeg` recommended. These are only needed if you install the YouTube helper.
 
 ## Build and run
 
@@ -68,6 +87,10 @@ On first launch Myuzik shows a **Connect to Navidrome** form. Enter the server U
 The URL and username go to `~/.config/myuzik/config.toml`; the password is stored in the Secret
 Service if available, otherwise in `~/.config/myuzik/credentials` with mode `0600`.
 
+If you do not have a server, choose **Use YouTube Music instead** on that form after installing
+the optional helper. Settings → Sources can enable it later, and the server form remains
+available from Settings.
+
 ### Install for the current user
 
 One command, no sudo:
@@ -76,7 +99,18 @@ One command, no sudo:
 ./install.sh          # release build + binary, desktop entry, icon, caches, GNOME extension
 ./install.sh --no-extension   # skip the GNOME pin extension
 ./install.sh --skip-build     # reuse an existing target/release/myuzik
+./install.sh --with-youtube   # also install the optional YouTube helper
 ```
+
+To add YouTube support to an existing install:
+
+```bash
+./scripts/setup-youtube.sh
+```
+
+This creates a private Python environment under `~/.local/lib/myuzik/runtime` and installs
+`ytmusicapi` and `yt-dlp`. It does not touch the system Python. Update the helper later with
+the command printed by the script.
 
 Then launch it as `myuzik`, from the app grid, or by searching **Myuzik** in Activities.
 
@@ -94,6 +128,42 @@ Remove everything again with:
 ./uninstall.sh --purge        # also delete config and caches
 ./uninstall.sh --dry-run      # show what would be removed
 ```
+
+## YouTube Music (optional, unofficial)
+
+When enabled, a **Library / YouTube** switch appears at the top of the sidebar. The active source
+controls Home, the navigation menu, and Search; the queue and player are global, so a track from
+either source keeps playing while you browse the other. Myuzik remembers the last source you
+chose. YouTube is off by default because it needs an extra runtime and because the extraction is
+unofficial.
+
+1. Install the helper: `./scripts/setup-youtube.sh` (or `./install.sh --with-youtube`).
+2. Enable it: Settings → Sources → **YouTube Music**, or use **Use YouTube Music instead** on
+   the first-run form.
+3. Choose **YouTube** in the sidebar switch. **Home** shows YouTube Music shelves; the menu
+   becomes Home / Now Playing / Search / Moods & genres / Settings. Open an album, artist,
+   playlist or mood to browse.
+4. **Search** follows the active source: library mode searches Navidrome, YouTube mode searches
+   YouTube Music. Clicking a song starts it and queues that song's YouTube Music radio/watch
+   playlist (related tracks), not the search results. The first play of a track takes a moment;
+   replay is instant.
+
+The helper uses `ytmusicapi` for search and `yt-dlp` for audio. It runs once per request, exits,
+and leaves no daemon. Myuzik never hands a signed YouTube URL to GStreamer and never logs one.
+Audio is downloaded only to a bounded cache (`stream_cache_mb`, default 1 GiB) and is not a
+library download; there is no export button.
+
+Quality: **Standard** (best Opus, ~130 kbps) or **Data saver** (≤80 kbps). There is no lossless
+mode. For tracks that need sign-in, put a Netscape cookie file in `youtube_cookies` in
+`config.toml`; the file is read by `yt-dlp`, never copied, and a UI importer is planned.
+
+M1 supports songs, playback and song radio. Album/artist/playlist browsing, category pages,
+preloading the next track and a cookie import UI are later milestones.
+
+**Legal note:** YouTube's terms do not grant third-party clients a right to extract streams.
+This feature is unofficial, may break at any time, and is intended for personal use. Myuzik is
+not affiliated with Google or YouTube. See [docs/youtube.md](docs/youtube.md) for details and
+attribution.
 
 ## GNOME pin extension
 
@@ -137,8 +207,8 @@ with `scripts/measure-ram.sh`; method and per-test bounds are in
 ## Testing
 
 ```bash
-./scripts/test-all.sh                 # fmt + clippy + 79 tests (31 unit + 48 headless UI)
-MYUZIK_LIVE=1 ./scripts/test-all.sh   # also live Navidrome (7) + GStreamer (1) tests
+./scripts/test-all.sh                 # fmt + clippy + full offline suite
+MYUZIK_LIVE=1 ./scripts/test-all.sh   # also live Navidrome + GStreamer tests
 scripts/measure-ram.sh                # RSS / CPU / startup of the release binary
 ```
 
@@ -160,9 +230,14 @@ lyrics_offset_ms = 0
 prefer_navidrome_lyrics = true
 reduce_motion = false
 follow_os_accent = true
+youtube_enabled = false       # optional, unofficial YouTube Music source
+active_source = "navidrome"   # last browsed source: navidrome | youtube
+youtube_quality = "standard"  # standard | saver
+youtube_cookies = ""          # optional Netscape cookie file for sign-in tracks
+stream_cache_mb = 1024        # buffered YouTube audio bound
 ```
 
-Caches live in `~/.cache/myuzik/` (`covers/`, `lyrics/`, `logs/`).
+Caches live in `~/.cache/myuzik/` (`covers/`, `lyrics/`, `streams/`, `logs/`).
 
 ## Troubleshooting
 
@@ -173,12 +248,21 @@ See [docs/troubleshooting.md](docs/troubleshooting.md). Common issues:
 - **Overlay not above other windows**: install/enable the GNOME extension; log out/in after install.
 - **Codec errors**: install `gstreamer1.0-plugins-good` / `-bad`.
 - **Wrong password**: re-run the setup form or update `~/.config/myuzik/credentials`.
+- **YouTube search says support is not installed**: run `./scripts/setup-youtube.sh`, then
+  enable YouTube in Settings → Sources.
+- **YouTube playback fails after an upstream change**: update the helper runtime with the
+  command printed by `scripts/setup-youtube.sh`.
+- **Dock icon missing or another app's icon**: run `scripts/fix-gnome-dock.sh`. On GNOME 51,
+  an old Dash2Dock build can be forced active although it only supports Shell 45–50; switch to
+  Ubuntu Dock with `scripts/fix-gnome-dock.sh --use-ubuntu-dock`.
 - **Blur**: Mutter does not implement `ext-background-effect-v1`; Myuzik simulates glass with
   translucency and ambient color instead of compositor blur.
 
 ## What is not in v0.1.0
 
 - Playlist editing, offline downloads, gapless playback.
+- YouTube preloading the next track, a sign-in cookie import UI, and deep paging beyond the
+  first artist/playlist shelf.
 - Flatpak/AppImage packaging.
 - Pixel theme (Midnight Brass only).
 - Last.fm (Navidrome handles scrobbling).

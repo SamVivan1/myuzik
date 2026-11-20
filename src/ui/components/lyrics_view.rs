@@ -132,15 +132,15 @@ impl LyricsView {
         }
         let pos = position.as_secs_f64() + (self.offset_ms as f64 / 1000.0);
         let pos = if pos < 0.0 { 0.0 } else { pos };
-        // binary search for active line
-        let mut idx = None;
-        for (i, line) in self.lines.iter().enumerate() {
-            if line.time.as_secs_f64() <= pos {
-                idx = Some(i);
-            } else {
-                break;
-            }
-        }
+        // binary search for active line (partition_point keeps it O(log n)).
+        let idx = if self.lines.is_empty() {
+            None
+        } else {
+            let n = self
+                .lines
+                .partition_point(|line| line.time.as_secs_f64() <= pos);
+            if n == 0 { None } else { Some(n - 1) }
+        };
         if idx != self.active {
             let previous = self.active;
             self.active = idx;

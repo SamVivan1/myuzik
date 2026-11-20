@@ -181,6 +181,17 @@ impl PlayerState {
         self.duration = self.current.as_ref().map(|t| t.duration);
     }
 
+    /// Jump to an item already in the queue. Used by the queue panel.
+    pub fn play_at(&mut self, index: usize) -> Option<Track> {
+        let track = self.queue.set_current(index)?;
+        self.current = Some(track.clone());
+        self.status = PlaybackStatus::Playing;
+        self.load_pending = true;
+        self.position = Duration::ZERO;
+        self.duration = Some(track.duration);
+        Some(track)
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Track> {
         let t = self.queue.next()?;

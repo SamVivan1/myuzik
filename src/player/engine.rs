@@ -184,6 +184,9 @@ pub fn spawn_player() -> PlayerHandle {
         // shutdown; quitting the loop first and keeping the source alive would
         // leave the pipeline and the channels owned by a loop that never runs
         // again (audit FL-19).
+        // Position is published every 5th tick (500 ms) to cut MPRIS/UI traffic
+        // (PF-18); commands are still drained every 100 ms.
+        let mut pos_counter: u8 = 0;
         glib::timeout_add_local(Duration::from_millis(100), move || {
             loop {
                 match cmd_rx_tick.try_recv() {
@@ -203,7 +206,10 @@ pub fn spawn_player() -> PlayerHandle {
                     }
                 }
             }
-            if let Some(pos) = pipeline_clone.query_position::<gst::ClockTime>() {
+            pos_counter = pos_counter.wrapping_add(1);
+            if pos_counter.is_multiple_of(5)
+                && let Some(pos) = pipeline_clone.query_position::<gst::ClockTime>()
+            {
                 let _ =
                     evt_tx_tick.send(PlayerEvent::Position(Duration::from_nanos(pos.nseconds())));
             }

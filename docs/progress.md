@@ -72,10 +72,33 @@ Last updated: 2026-11-10
   the server. Toggle in Settings → Playback (`autoplay` in the config). Nine engine tests,
   three end-to-end flow tests, eight queue tests and one live test cover it.
 
+## Post-0.1.0 — Core contract and queue
+- [x] Backend seam: `MusicService`/`SourceRegistry`, `PlaybackSource`/`CoverSource`, `AppAction`
+  and `QueueAction`. Playback, detail loading, covers and favorites dispatch by `TrackSource`.
+- [x] Queue drawer: jump, remove, reorder, clear upcoming, add album to queue, MPRIS sync.
+- [x] YouTube M2: Home shelves, album/artist/playlist detail routes, moods/genres,
+  YouTube-primary Home, and no-Navidrome startup.
+- [x] Split the queue drawer and browse/detail screens out of `ui/shell.rs` (`ui/shell/queue.rs`,
+  `ui/shell/browse.rs`).
+- [x] Sidebar source switch (`active_source`): Library/YouTube scopes Home, nav and Search;
+  queue/player stay global; last choice persisted with fallbacks.
+- [ ] Next: extract the remaining screens/components and theme tokens for the design overhaul.
+
+## Post-0.1.0 — YouTube Music (optional)
+- [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).
+  Search results in their own section; one-shot Python helper (`ytmusicapi` + `yt-dlp`) buffers
+  to `~/.cache/myuzik/streams`; GStreamer plays the local file; cover art, LRCLIB lyrics,
+  overlay and MPRIS work; scrobbling and Navidrome radio are skipped, while a YouTube search
+  result starts that song's YouTube radio/watch playlist. No download/export surface and no
+  signed URL reaches the player or logs. `tests/provider_youtube.rs` (9 offline + 1 ignored live)
+  and `tests/youtube_flow.rs` cover the process boundary and the real Shell.
+- [ ] M2: YouTube album/artist/playlist browse, category pages, no-Navidrome library routes.
+- [ ] M3: preload next, cookie import UI, richer history/likes.
+- [ ] M4: provider trait + Audius/Internet Archive.
+
 ## Testing
-- `./scripts/test-all.sh` — fmt, clippy, 102 tests serial (34 unit + 68 headless integration;
-  10 live/screenshot tests are `#[ignore]`d).
-- `MYUZIK_LIVE=1 ./scripts/test-all.sh` — adds the live Navidrome (7) and GStreamer (1) suites.
+- `./scripts/test-all.sh` — fmt, clippy, full offline suite serial.
+- `MYUZIK_LIVE=1 ./scripts/test-all.sh` — adds live Navidrome, GStreamer and YouTube tests.
 - `scripts/measure-ram.sh` — RSS / CPU / startup of the release binary (see `docs/performance.md`).
 - `tests/a11y.rs` — keyboard focus order, roles/labels, search not hijacked.
 - `tests/stress.rs` — 20k-track library and queue, 200 searches, 500 cover inserts.
@@ -88,5 +111,7 @@ Last updated: 2026-11-10
   logout/login); its logic and every Mutter API it calls are tested.
 - Accesskit tree-level assertions, forced-colors/high-contrast and a 200% scaling pass are
   open; the first two are missing APIs in the pinned gpui revision.
+- YouTube M1 is search + playback + song radio only; album/artist/playlist browse, category
+  pages, preload and cookie UI are later. The helper is unofficial and off by default.
 - The 24 h idle soak is a manual run of `scripts/measure-ram.sh`; the growth-prone parts
   (caches, queue) are covered automatically.

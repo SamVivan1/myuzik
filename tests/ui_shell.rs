@@ -3,6 +3,7 @@
 use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
 use myuzik::app::Route;
 use myuzik::config::{AppConfig, Paths};
+use myuzik::library::{Track, TrackSource};
 use myuzik::player::engine::PlayerHandle;
 use myuzik::ui::Shell;
 
@@ -12,6 +13,26 @@ fn dummy_player() -> PlayerHandle {
     std::mem::forget(cmd_rx);
     std::mem::forget(evt_tx);
     PlayerHandle { tx, rx }
+}
+
+fn queue_track(id: &str) -> Track {
+    Track {
+        id: id.to_string(),
+        title: format!("Queue {id}"),
+        artist: "Artist".to_string(),
+        artist_id: None,
+        album: "Album".to_string(),
+        album_id: None,
+        cover_art_id: None,
+        cover_url: None,
+        duration: std::time::Duration::from_secs(120),
+        track_number: None,
+        disc_number: None,
+        year: None,
+        starred: false,
+        genre: None,
+        source: TrackSource::Navidrome,
+    }
 }
 
 fn temp_paths(tag: &str) -> Paths {
@@ -493,5 +514,60 @@ fn a_library_error_shows_the_reason_and_a_retry(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("library-retry").is_some(),
         "the error panel has no Retry control"
+    );
+}
+
+#[gpui::test]
+fn queue_panel_removes_and_reorders_tracks(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("queue-panel");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    shell.update(&mut cx, |shell, _cx| shell.go(Route::Home));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    shell.update(&mut cx, |shell, cx| {
+        shell.play_tracks(
+            vec![queue_track("q0"), queue_track("q1"), queue_track("q2")],
+            0,
+            cx,
+        );
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let queue_button = cx.debug_bounds("queue-btn").expect("queue button");
+    cx.simulate_click(queue_button.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(shell.read_with(&cx, |shell, _| shell.queue_panel_open()));
+
+    let remove = cx.debug_bounds("queue-remove-2").expect("remove button");
+    cx.simulate_click(remove.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_track_ids(cx)),
+        vec!["q0".to_string(), "q1".to_string()]
+    );
+
+    let up = cx.debug_bounds("queue-up-1").expect("move up button");
+    cx.simulate_click(up.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_track_ids(cx)),
+        vec!["q1".to_string(), "q0".to_string()]
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_current_index(cx)),
+        Some(1),
+        "moving an upcoming item must keep the playing track current"
     );
 }
