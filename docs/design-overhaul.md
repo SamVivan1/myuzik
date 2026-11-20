@@ -4,6 +4,14 @@ Status: core behaviour and layout are stable enough to start a visual redesign.
 This review is scoped to the UI layer; the backend contract is in
 [ui-contract.md](ui-contract.md).
 
+## Phase 1 — Done
+
+Liquid Glass tokens are in `src/theme.rs`. The palette is now deep ink + translucent
+glass + cool indigo accent (overridden at runtime from cover art). Typography is Inter
+at 12/14/16/20/28/36. Radii are 20/20/24/999/999. Sidebar is 220 px, player bar
+is 64 px, nav items have icon+text, and the accent is extracted from the currently
+playing cover.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

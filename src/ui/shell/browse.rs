@@ -287,6 +287,7 @@ impl Shell {
         };
         let theme = midnight_brass();
         let t = &theme.colors;
+        let accent = self.accent_color;
         let source = detail.album.source;
         let songs = detail.songs.clone();
         let current = self.current_track_id(cx);
@@ -341,7 +342,7 @@ impl Shell {
                 .px(gpui::px(16.0))
                 .py(gpui::px(8.0))
                 .rounded(gpui::px(999.0))
-                .bg(t.gold)
+                .bg(accent)
                 .text_color(t.clay_ink)
                 .text_size(gpui::px(10.0))
                 .font_weight(gpui::FontWeight::BOLD)
@@ -624,6 +625,7 @@ impl Shell {
         };
         let theme = midnight_brass();
         let t = &theme.colors;
+        let accent = self.accent_color;
         let source = detail.playlist.source;
         let songs = detail.songs.clone();
         let current = self.current_track_id(cx);
@@ -674,7 +676,7 @@ impl Shell {
                     .px(gpui::px(16.0))
                     .py(gpui::px(8.0))
                     .rounded(gpui::px(999.0))
-                    .bg(t.gold)
+                    .bg(accent)
                     .text_color(t.clay_ink)
                     .text_size(gpui::px(10.0))
                     .font_weight(gpui::FontWeight::BOLD)

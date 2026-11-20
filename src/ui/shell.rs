@@ -38,6 +38,8 @@ pub struct Shell {
     route: Route,
     /// Which source the sidebar is browsing. Playback and the queue are global.
     active_source: TrackSource,
+    /// Dynamic accent extracted from the currently playing cover art.
+    accent_color: gpui::Rgba,
     #[allow(dead_code)]
     client: Option<Arc<NavidromeClient>>,
     lyrics_provider: Option<Arc<LyricsProvider>>,
@@ -381,6 +383,7 @@ impl Shell {
         );
         let active_source = resolved_source.unwrap_or(TrackSource::Navidrome);
         config.active_source = active_source;
+        let accent_color = gpui::rgb(0x6F7CFF);
         let route = if resolved_source.is_some() {
             Route::Home
         } else {
@@ -702,6 +705,7 @@ impl Shell {
             paths,
             route,
             active_source,
+            accent_color,
             client,
             lyrics_provider,
             home_state,
@@ -829,6 +833,7 @@ impl Shell {
     fn nav_link(
         &mut self,
         key: &'static str,
+        icon: &'static str,
         label: &'static str,
         active: bool,
         window: &mut gpui::Window,
@@ -836,7 +841,7 @@ impl Shell {
         t: &crate::theme::Colors,
     ) -> gpui::Stateful<gpui::Div> {
         let handle = self.focus_for(key, Self::TAB_NAV, cx);
-        nav_item(label, active, t)
+        nav_item(icon, label, active, t)
             .id(key)
             .debug_selector(move || key.to_string())
             .track_focus(&handle)
@@ -952,10 +957,18 @@ impl Shell {
         }
 
         let mut nav = div().flex().flex_col().gap(gpui::px(4.0));
-        nav =
-            nav.child(self.nav_link("nav-home", "Home", self.route == Route::Home, window, cx, t));
+        nav = nav.child(self.nav_link(
+            "nav-home",
+            "⌂",
+            "Home",
+            self.route == Route::Home,
+            window,
+            cx,
+            t,
+        ));
         nav = nav.child(self.nav_link(
             "nav-nowplaying",
+            "♫",
             "Now Playing",
             self.route == Route::NowPlaying,
             window,
@@ -964,6 +977,7 @@ impl Shell {
         ));
         nav = nav.child(self.nav_link(
             "nav-search",
+            "⌕",
             "Search",
             self.route == Route::Search,
             window,
@@ -973,6 +987,7 @@ impl Shell {
         if self.active_source == TrackSource::Navidrome {
             nav = nav.child(self.nav_link(
                 "nav-albums",
+                " ",
                 "Albums",
                 self.route == Route::Albums,
                 window,
@@ -981,6 +996,7 @@ impl Shell {
             ));
             nav = nav.child(self.nav_link(
                 "nav-artists",
+                "◎",
                 "Artists",
                 self.route == Route::Artists,
                 window,
@@ -989,6 +1005,7 @@ impl Shell {
             ));
             nav = nav.child(self.nav_link(
                 "nav-playlists",
+                "≡",
                 "Playlists",
                 self.route == Route::Playlists,
                 window,
@@ -997,6 +1014,7 @@ impl Shell {
             ));
             nav = nav.child(self.nav_link(
                 "nav-favorites",
+                "★",
                 "Favorites",
                 self.route == Route::Favorites,
                 window,
@@ -1006,6 +1024,7 @@ impl Shell {
         } else {
             nav = nav.child(self.nav_link(
                 "nav-moods",
+                "◐",
                 "Moods & genres",
                 self.route == Route::Moods,
                 window,
@@ -1015,6 +1034,7 @@ impl Shell {
         }
         nav = nav.child(self.nav_link(
             "nav-settings",
+            "⚙",
             "Settings",
             self.route == Route::Settings,
             window,
@@ -2330,6 +2350,7 @@ impl Shell {
         let hs = self.home_state.clone();
         let mh = self.mpris_handle.clone();
         let np = self.now_playing.clone();
+        let shell_weak = self.self_weak.clone();
         let track = track.clone();
         cx.spawn(async move |cx| {
             let key2 = key.clone();
@@ -2369,16 +2390,17 @@ impl Shell {
                             (bytes, format, path)
                         }
                     };
+                    let accent = crate::theme::accent_from_bytes(&bytes);
                     let image = std::sync::Arc::new(gpui::Image {
                         format,
                         bytes,
                         id: fxhash_id(&key2),
                     });
                     let rounded = crate::overlay::rounded_cover(&image);
-                    Some((image, rounded, path))
+                    Some((image, rounded, path, accent))
                 })
                 .await;
-            let Some((image, rounded, path)) = prepared else {
+            let Some((image, rounded, path, accent)) = prepared else {
                 tracing::debug!(cover = %key, "track cover produced no image");
                 return;
             };
@@ -2387,6 +2409,14 @@ impl Shell {
                 app.update_entity(&hs, |h, _| {
                     h.insert_cover(key.clone(), image.clone());
                 });
+                if let Some(accent) = accent {
+                    if let Some(shell) = shell_weak.upgrade() {
+                        shell.update(app, |s, cx| {
+                            s.accent_color = accent;
+                            cx.notify();
+                        });
+                    }
+                }
                 app.update_entity(&np, |view, _cx| {
                     view.set_cover(Some(image.clone()));
                 });
@@ -2445,22 +2475,30 @@ impl Shell {
                             (bytes, format)
                         }
                     };
+                    let accent = crate::theme::accent_from_bytes(&bytes);
                     let image = std::sync::Arc::new(gpui::Image {
                         format,
                         bytes,
                         id: fxhash_id(&key_for_task),
                     });
-                    Some(image)
+                    Some((image, accent))
                 })
                 .await;
-            let Some(image) = prepared else {
+            let Some((image, accent)) = prepared else {
                 return;
             };
             cx.update(|app| {
                 app.update_entity(&hs, |h, _| {
                     h.insert_cover(key.clone(), image);
                 });
-                if let Some(shell) = shell.upgrade() {
+                if let Some(accent) = accent {
+                    if let Some(shell) = shell.upgrade() {
+                        shell.update(app, |s, cx| {
+                            s.accent_color = accent;
+                            cx.notify();
+                        });
+                    }
+                } else if let Some(shell) = shell.upgrade() {
                     shell.update(app, |_, cx| cx.notify());
                 }
             });
@@ -3878,6 +3916,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = midnight_brass();
         let t = &theme.colors;
+        let accent = self.accent_color;
 
         if self.route == Route::Setup {
             if !self.setup_focus_requested {
@@ -4174,7 +4213,7 @@ impl Render for Shell {
             .left(shadow_size + gpui::px(18.0))
             .right(shadow_size + gpui::px(18.0))
             .bottom(shadow_size + gpui::px(18.0))
-            .h(gpui::px(88.0))
+            .h(gpui::px(64.0))
             .rounded(gpui::px(30.0))
             .bg(gpui::linear_gradient(
                 145.0,
@@ -4245,8 +4284,8 @@ impl Render for Shell {
                             .justify_center()
                             .child(if let Some(image) = current_cover.clone() {
                                 gpui::img(gpui::ImageSource::Image(image))
-                                    .w(gpui::px(52.0))
-                                    .h(gpui::px(52.0))
+                                    .w(gpui::px(48.0))
+                                    .h(gpui::px(48.0))
                                     .rounded(gpui::px(14.0))
                                     .object_fit(gpui::ObjectFit::Cover)
                                     .into_any_element()
@@ -4328,9 +4367,9 @@ impl Render for Shell {
                             .items_end()
                             .gap(gpui::px(2.0))
                             .h(gpui::px(14.0))
-                            .child(eq_bar("eq1", 620, 4.0, 12.0, t.gold_deep))
-                            .child(eq_bar("eq2", 780, 6.0, 14.0, t.gold))
-                            .child(eq_bar("eq3", 700, 3.0, 10.0, t.gold_light))
+                            .child(eq_bar("eq1", 620, 4.0, 12.0, accent))
+                            .child(eq_bar("eq2", 780, 6.0, 14.0, accent))
+                            .child(eq_bar("eq3", 700, 3.0, 10.0, accent))
                             .into_any_element()
                     } else {
                         div().into_any_element()
@@ -4642,7 +4681,7 @@ impl Render for Shell {
                                             .w(gpui::px(progress_pct as f32 * 3.2))
                                             .h_full()
                                             .rounded(gpui::px(999.0))
-                                            .bg(t.gold),
+                                            .bg(accent),
                                     ),
                             )
                             .child(
@@ -5078,14 +5117,14 @@ impl Render for Shell {
                     .child(
                         // Sidebar
                         div()
-                            .w(gpui::px(212.0))
+                            .w(gpui::px(220.0))
                             .flex_shrink_0()
                             .flex()
                             .flex_col()
                             .gap(gpui::px(12.0))
                             .px(gpui::px(16.0))
                             .pt(gpui::px(18.0))
-                            .pb(gpui::px(118.0))
+                            .pb(gpui::px(92.0))
                             .bg(t.glass_inner)
                             .shadow(vec![gpui::BoxShadow {
                                 color: t.glass_highlight_soft.into(),
@@ -5200,7 +5239,7 @@ impl Render for Shell {
                             .gap(gpui::px(16.0))
                             .px(gpui::px(24.0))
                             .py(gpui::px(18.0))
-                            .pb(gpui::px(112.0))
+                            .pb(gpui::px(86.0))
                             .id("main-scroll")
                             .overflow_y_scroll()
                             .child(if matches!(
@@ -7225,7 +7264,7 @@ fn setting_row(label: &str, value: &str, t: &crate::theme::Colors) -> gpui::Div 
         )
 }
 
-fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
+fn nav_item(icon: &str, label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
     if active {
         gpui::div()
             .px(gpui::px(10.0))
@@ -7255,6 +7294,14 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
                     inset: true,
                 },
             ])
+            .flex()
+            .items_center()
+            .gap(gpui::px(8.0))
+            .child(
+                gpui::div()
+                    .text_size(gpui::px(13.0))
+                    .child(icon.to_string()),
+            )
             .child(label.to_string())
     } else {
         gpui::div()
@@ -7264,6 +7311,14 @@ fn nav_item(label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
             .text_color(t.text_secondary)
             .text_size(gpui::px(13.0))
             .hover(|style| style.bg(t.glass_hover))
+            .flex()
+            .items_center()
+            .gap(gpui::px(8.0))
+            .child(
+                gpui::div()
+                    .text_size(gpui::px(13.0))
+                    .child(icon.to_string()),
+            )
             .child(label.to_string())
     }
 }

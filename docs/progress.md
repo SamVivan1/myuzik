@@ -82,7 +82,9 @@ Last updated: 2026-11-10
   `ui/shell/browse.rs`).
 - [x] Sidebar source switch (`active_source`): Library/YouTube scopes Home, nav and Search;
   queue/player stay global; last choice persisted with fallbacks.
-- [ ] Next: extract the remaining screens/components and theme tokens for the design overhaul.
+- [x] Phase 1 — Liquid Glass tokens: deep ink base, translucent glass surfaces,
+  cool indigo accent, Inter typography, rounded-20 radii, dynamic accent from cover art.
+- [ ] Next: Phase 2 — shell/sidebar/player-bar layout, Phase 3 — cards/shelves.
 
 ## Post-0.1.0 — YouTube Music (optional)
 - [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).
