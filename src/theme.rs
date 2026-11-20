@@ -204,13 +204,23 @@ pub fn glass_surface(div: gpui::Div, t: &Colors, radius: f32) -> gpui::Div {
         .border_color(t.glass_border)
         .rounded(gpui::px(radius))
         .shadow(vec![
+            // Specular highlight at the top edge (simulates glass refraction).
             gpui::BoxShadow {
-                color: t.glass_highlight_soft.into(),
+                color: t.glass_highlight_strong.into(),
                 offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
                 blur_radius: gpui::px(0.0),
                 spread_radius: gpui::px(0.0),
                 inset: true,
             },
+            // Subtle inner shadow for depth.
+            gpui::BoxShadow {
+                color: t.glass_highlight_soft.into(),
+                offset: gpui::point(gpui::px(0.0), gpui::px(2.0)),
+                blur_radius: gpui::px(4.0),
+                spread_radius: gpui::px(0.0),
+                inset: true,
+            },
+            // Drop shadow for elevation.
             gpui::BoxShadow {
                 color: t.shadow_deep.into(),
                 offset: gpui::point(gpui::px(0.0), gpui::px(8.0)),

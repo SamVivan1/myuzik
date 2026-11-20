@@ -56,6 +56,12 @@ readable surface, aligned progress/timecodes and 120 px content clearance.
 Nav icons are inline SVGs. Aurora is neutralized, `text_tertiary` raised,
 cover radii unified at 20 px, and the duplicated player-bar pin/label removed.
 
+## Phase 6 — Done
+
+Glass surface specular highlight (inner shadow + top edge highlight). Motion
+refinement: 240 ms fade-in on browse cards, 180 ms route transition. Skeletons
+unified. Contrast: all text tokens pass WCAG AA on glass. Screenshots refreshed.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with
