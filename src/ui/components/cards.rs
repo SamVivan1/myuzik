@@ -1,7 +1,7 @@
 //! Card components: album cards and skeletons.
 
-use gpui::prelude::*;
 use gpui::AnimationExt;
+use gpui::prelude::*;
 
 pub fn album_skeleton(index: usize, t: &crate::theme::Colors) -> gpui::Div {
     let pulse = gpui::div()

@@ -6,7 +6,7 @@
 //! shell's private helpers and state.
 
 use super::*;
-use crate::ui::components::{album_card, format_time, track_row};
+use crate::ui::components::{album_card, format_time, skeleton_card, track_row};
 
 impl Shell {
     fn cover_element(
@@ -1012,19 +1012,10 @@ impl Shell {
 
         if self.youtube_home_loading && self.youtube_home.is_none() {
             let mut skeleton = div().flex().flex_col().gap(gpui::px(18.0));
-            for s in 0..2 {
-                let mut row = div().flex().items_center().gap(gpui::px(12.0));
-                for i in 0..5 {
-                    row = row.child(
-                        div()
-                            .id(format!("yt-skeleton-{s}-{i}"))
-                            .w(gpui::px(150.0))
-                            .h(gpui::px(190.0))
-                            .rounded(gpui::px(16.0))
-                            .bg(t.glass_tint)
-                            .border_1()
-                            .border_color(t.glass_border),
-                    );
+            for _ in 0..2 {
+                let mut row = div().flex().items_start().gap(gpui::px(12.0));
+                for _ in 0..5 {
+                    row = row.child(div().w(gpui::px(150.0)).child(skeleton_card(t)));
                 }
                 skeleton = skeleton.child(row);
             }

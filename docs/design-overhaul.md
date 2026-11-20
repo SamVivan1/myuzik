@@ -36,6 +36,12 @@ Component extraction: `album_card`, `album_skeleton`, `track_row`, `format_time`
 `nav_item` moved to `src/ui/components/{cards,rows,nav}.rs`. `GlassSurface` helper
 in `theme.rs`. Clean separation for design overhaul.
 
+## Phase 4–5 — Done
+
+Motion: 240 ms fade-in on browse cards, route transition fade. Skeletons unified
+via `skeleton_card`/`skeleton_row`. Component extraction: cards, rows, nav, skeleton
+modules. Contrast pass: all text tokens meet WCAG AA on glass.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

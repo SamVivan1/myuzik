@@ -11,7 +11,7 @@ use crate::services::{
     MusicService, NavidromeService, PlaybackSource, SourceRegistry, YouTubeService,
 };
 use crate::theme::midnight_brass;
-use crate::ui::components::{album_card, album_skeleton, format_time, nav_item, track_row};
+use crate::ui::components::{album_card, format_time, nav_item, track_row};
 use crate::ui::now_playing::NowPlayingView;
 use gpui::{
     AnimationExt, Context, InteractiveElement, Render, StatefulInteractiveElement, Window, div,
@@ -831,7 +831,7 @@ impl Shell {
         cx.notify();
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn nav_link(
         &mut self,
         key: &'static str,
@@ -6312,8 +6312,8 @@ impl Render for Shell {
                                     .role(gpui::Role::Grid)
                                     .aria_label(grid_label);
                                 if hs.loading && hs.albums.is_empty() {
-                                    for i in 0..8 {
-                                        grid = grid.child(album_skeleton(i, t));
+                                    for _ in 0..8 {
+                                        grid = grid.child(crate::ui::components::skeleton_card(t));
                                     }
                                 } else if let Some(error) = hs.error.clone() {
                                     // A network failure used to be rendered as
