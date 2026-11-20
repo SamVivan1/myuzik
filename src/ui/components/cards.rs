@@ -57,12 +57,12 @@ pub fn album_card(
         .flex_col()
         .gap(gpui::px(7.0))
         .w_full()
-        .hover(|style| style.bg(t.glass_hover).rounded(gpui::px(16.0)))
+        .hover(|style| style.bg(t.glass_hover).rounded(gpui::px(20.0)))
         .child(
             gpui::div()
                 .w_full()
                 .aspect_ratio(1.0)
-                .rounded(gpui::px(16.0))
+                .rounded(gpui::px(20.0))
                 .bg(gpui::linear_gradient(
                     135.0,
                     gpui::linear_color_stop(t.gold_deep, 0.0),
@@ -85,7 +85,7 @@ pub fn album_card(
                     gpui::img(gpui::ImageSource::Image(image))
                         .w_full()
                         .h_full()
-                        .rounded(gpui::px(16.0))
+                        .rounded(gpui::px(20.0))
                         .object_fit(gpui::ObjectFit::Cover)
                         .into_any_element()
                 } else {

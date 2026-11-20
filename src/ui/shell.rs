@@ -89,6 +89,8 @@ pub struct Shell {
     youtube_home_error: Option<String>,
     /// Detail screens are shared by both sources; the route carries the source.
     playlist_detail: Option<crate::library::PlaylistDetail>,
+    /// The YouTube shelf expanded through "See all".
+    shelf_section: Option<crate::provider::youtube::BrowseSection>,
     detail_loading: bool,
     detail_error: Option<String>,
     /// Mood/genre categories and the playlists for the selected one.
@@ -743,6 +745,7 @@ impl Shell {
             youtube_home_loading: false,
             youtube_home_error: None,
             playlist_detail: None,
+            shelf_section: None,
             detail_loading: false,
             detail_error: None,
             mood_categories: None,
@@ -827,6 +830,7 @@ impl Shell {
         self.album_detail = None;
         self.artist_detail = None;
         self.playlist_detail = None;
+        self.shelf_section = None;
         self.detail_error = None;
         cx.notify();
     }
@@ -1079,7 +1083,7 @@ impl Shell {
             "source-youtube" => {
                 self.set_active_source(TrackSource::YouTube, cx);
             }
-            "sidebar-pin-lyrics" | "player-pin-lyrics" => self.toggle_overlay(cx),
+            "sidebar-pin-lyrics" => self.toggle_overlay(cx),
             // Page content.
             "content-search-shortcut" => self.go(Route::Search),
             "content-see-all-albums" => self.go(Route::Albums),
@@ -1285,6 +1289,18 @@ impl Shell {
                     });
                     if let Some(mood) = mood {
                         self.open_mood(mood.title, mood.params, cx);
+                    }
+                } else if let Some(index) = other
+                    .strip_prefix("shelf-see-all-")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
+                    let section = self
+                        .youtube_home
+                        .as_ref()
+                        .and_then(|sections| sections.get(index))
+                        .cloned();
+                    if let Some(section) = section {
+                        self.open_shelf(section, cx);
                     }
                 } else if let Some(key) = other.strip_prefix("yt-card-")
                     && let Some((section, index)) = key.split_once('-')
@@ -3418,6 +3434,18 @@ impl Shell {
         .detach();
     }
 
+    pub fn open_shelf(
+        &mut self,
+        section: crate::provider::youtube::BrowseSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.route = Route::Shelf;
+        self.shelf_section = Some(section);
+        self.detail_error = None;
+        self.detail_loading = false;
+        cx.notify();
+    }
+
     pub fn open_moods(&mut self, cx: &mut gpui::Context<Self>) {
         self.route = Route::Moods;
         self.detail_error = None;
@@ -3569,6 +3597,7 @@ impl Shell {
         self.album_detail = None;
         self.artist_detail = None;
         self.playlist_detail = None;
+        self.shelf_section = None;
         self.detail_loading = false;
         self.detail_error = None;
         self.search_results = None;
@@ -4149,7 +4178,6 @@ impl Render for Shell {
         let f_seek_fwd = self.focus_for("player-seek-forward", Self::TAB_PLAYER, cx);
         let f_vol_down = self.focus_for("player-volume-down", Self::TAB_PLAYER, cx);
         let f_vol_up = self.focus_for("player-volume-up", Self::TAB_PLAYER, cx);
-        let f_pin = self.focus_for("player-pin-lyrics", Self::TAB_PLAYER, cx);
         let f_sidebar_pin = self.focus_for("sidebar-pin-lyrics", Self::TAB_NAV, cx);
         let f_win_close = self.focus_for("window-close", Self::TAB_CHROME, cx);
         let f_win_min = self.focus_for("window-minimize", Self::TAB_CHROME, cx);
@@ -4208,6 +4236,18 @@ impl Render for Shell {
         };
 
         let queue_panel = self.render_queue_panel(window, cx);
+        let bottom_scrim = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(gpui::px(112.0))
+            .bg(gpui::linear_gradient(
+                180.0,
+                gpui::linear_color_stop(gpui::rgba(0x00000000), 0.0),
+                gpui::linear_color_stop(t.bg_base, 1.0),
+            ))
+            .into_any_element();
 
         // Player bar
         let player = crate::theme::glass_surface(
@@ -4216,10 +4256,10 @@ impl Render for Shell {
                 .left(shadow_size + gpui::px(18.0))
                 .right(shadow_size + gpui::px(18.0))
                 .bottom(shadow_size + gpui::px(18.0))
-                .h(gpui::px(64.0))
-                .rounded(gpui::px(32.0)),
+                .h(gpui::px(76.0))
+                .rounded(gpui::px(34.0)),
             t,
-            32.0,
+            34.0,
         )
         .bg(gpui::linear_gradient(
             145.0,
@@ -4663,8 +4703,8 @@ impl Render for Shell {
                     div()
                         .flex()
                         .items_center()
-                        .gap(gpui::px(8.0))
-                        .w(gpui::px(320.0))
+                        .gap(gpui::px(10.0))
+                        .w(gpui::px(360.0))
                         .child(
                             div()
                                 .text_size(gpui::px(10.0))
@@ -4674,13 +4714,16 @@ impl Render for Shell {
                         )
                         .child(
                             div()
+                                .id("player-progress")
                                 .flex_1()
                                 .h(gpui::px(6.0))
                                 .rounded(gpui::px(999.0))
                                 .bg(t.clay_shade)
+                                .role(gpui::Role::Slider)
+                                .aria_label("Playback position")
                                 .child(
                                     div()
-                                        .w(gpui::px(progress_pct as f32 * 3.2))
+                                        .w(gpui::relative(progress_pct as f32 / 100.0))
                                         .h_full()
                                         .rounded(gpui::px(999.0))
                                         .bg(accent),
@@ -4701,7 +4744,7 @@ impl Render for Shell {
                 .flex()
                 .items_center()
                 .gap(gpui::px(12.0))
-                .w(gpui::px(180.0))
+                .w(gpui::px(260.0))
                 .child(
                     div()
                         .text_size(gpui::px(9.0))
@@ -4779,53 +4822,6 @@ impl Render for Shell {
                             }
                         }))
                         .child("+"),
-                )
-                .child(
-                    div()
-                        .px(gpui::px(10.0))
-                        .py(gpui::px(6.0))
-                        .rounded(gpui::px(999.0))
-                        .bg(gpui::linear_gradient(
-                            145.0,
-                            gpui::linear_color_stop(t.clay_dark, 0.0),
-                            gpui::linear_color_stop(t.clay_dark_2, 1.0),
-                        ))
-                        .shadow(vec![
-                            gpui::BoxShadow {
-                                color: t.glass_highlight_strong.into(),
-                                offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
-                                blur_radius: gpui::px(3.0),
-                                spread_radius: gpui::px(0.0),
-                                inset: true,
-                            },
-                            gpui::BoxShadow {
-                                color: t.scrim.into(),
-                                offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
-                                blur_radius: gpui::px(7.0),
-                                spread_radius: gpui::px(0.0),
-                                inset: true,
-                            },
-                        ])
-                        .text_color(t.gold_light)
-                        .text_size(gpui::px(10.0))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .cursor_pointer()
-                        .id("pin-btn")
-                        .track_focus(&f_pin)
-                        .tab_index(Self::TAB_PLAYER)
-                        .role(gpui::Role::Button)
-                        .aria_label("Pin or unpin the lyrics overlay")
-                        .border_2()
-                        .border_color(self.focus_border(&f_pin, window, gpui::rgba(0x00000000), t))
-                        .active(|style| style.opacity(0.9))
-                        .on_click(cx.listener(|this, _event, _window, _cx| {
-                            if this.overlay_handle.is_some() {
-                                this.close_overlay(_cx);
-                            } else {
-                                this.open_overlay(_cx);
-                            }
-                        }))
-                        .child("Pin lyrics"),
                 ),
         );
 
@@ -5121,7 +5117,7 @@ impl Render for Shell {
                             .gap(gpui::px(12.0))
                             .px(gpui::px(16.0))
                             .pt(gpui::px(18.0))
-                            .pb(gpui::px(92.0))
+                            .pb(gpui::px(110.0))
                             .bg(t.glass_tint)
                             .border_r_1()
                             .border_color(t.glass_border)
@@ -5238,12 +5234,12 @@ impl Render for Shell {
                             .gap(gpui::px(16.0))
                             .px(gpui::px(24.0))
                             .py(gpui::px(18.0))
-                            .pb(gpui::px(86.0))
+                            .pb(gpui::px(120.0))
                             .id("main-scroll")
                             .overflow_y_scroll()
                             .child(if matches!(
                                 self.route,
-                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods
+                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods | Route::Shelf
                             ) || (self.route == Route::Home && self.selected_album.is_some())
                             {
                                 div()
@@ -5261,7 +5257,7 @@ impl Render for Shell {
                                             .child(
                                                 div()
                                                     .font_family(theme.display_font)
-                                                    .text_size(gpui::px(38.0))
+                                                    .text_size(gpui::px(32.0))
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                                     .child(match self.route {
                                                         crate::app::Route::Home => greeting_for_now(),                                                        crate::app::Route::Search => "Search",
@@ -5276,6 +5272,7 @@ impl Render for Shell {
                                                         crate::app::Route::Artist(_) => "Artist",
                                                         crate::app::Route::Playlist(_) => "Playlist",
                                                         crate::app::Route::Moods => "Moods & genres",
+                                                        crate::app::Route::Shelf => "Shelf",
                                                     }),
                                             )
                                             .child(
@@ -5305,34 +5302,16 @@ impl Render for Shell {
                                             .px(gpui::px(14.0))
                                             .py(gpui::px(10.0))
                                             .rounded(gpui::px(999.0))
-                                            .bg(gpui::linear_gradient(
-                                                145.0,
-                                                gpui::linear_color_stop(t.clay_surface, 0.0),
-                                                gpui::linear_color_stop(t.clay_shade, 1.0),
-                                            ))
-                                            .shadow(vec![
-                                                gpui::BoxShadow {
-                                                    color: t.glass_border_on_clay.into(),
-                                                    offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
-                                                    blur_radius: gpui::px(3.0),
-                                                    spread_radius: gpui::px(0.0),
-                                                    inset: true,
-                                                },
-                                                gpui::BoxShadow {
-                                                    color: t.shadow_deep.into(),
-                                                    offset: gpui::point(gpui::px(-2.0), gpui::px(-2.0)),
-                                                    blur_radius: gpui::px(5.0),
-                                                    spread_radius: gpui::px(0.0),
-                                                    inset: true,
-                                                },
-                                            ])
-                                            .text_color(t.clay_ink)
+                                            .bg(t.glass_tint)
+                                            .border_1()
+                                            .border_color(t.glass_border)
+                                            .text_color(t.text_primary)
                                             .text_size(gpui::px(11.0))
                                             .on_click(cx.listener(|this, _event, window, cx| {
                                                 this.route = Route::Search; this.album_detail = None; this.selected_album = None;
                                                 window.focus(&this.search_focus, cx);
                                             }))
-                                            .child("Search music…")
+                                            .child(if self.active_source == TrackSource::YouTube { "Search YouTube Music…" } else { "Search music…" })
                                             .child(div().flex_1())
                                             .child(
                                                 div()
@@ -5794,7 +5773,7 @@ impl Render for Shell {
                                 col
                             } else if matches!(
                                 self.route,
-                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods
+                                Route::Album(_) | Route::Artist(_) | Route::Playlist(_) | Route::Moods | Route::Shelf
                             ) {
                                 div().w_full().child(self.render_detail_route(window, cx))
                             } else if self.route == Route::Home && self.active_source == TrackSource::YouTube {
@@ -6734,6 +6713,7 @@ impl Render for Shell {
                     ),
                 ),
             )
+            .child(bottom_scrim)
             .child(player)
             .child(queue_panel)
             // Failure surface. Playback, autoplay and library errors are all
@@ -6872,7 +6852,7 @@ impl Render for Shell {
                 format!("route-{:?}", self.route),
                 gpui::Animation::new(std::time::Duration::from_millis(180))
                     .with_easing(gpui::ease_out_quint()),
-                |el, delta| el.opacity(0.35 + 0.65 * delta),
+                |el, delta| el.opacity(0.92 + 0.08 * delta),
             )
             .into_any_element()
     }

@@ -237,6 +237,19 @@ fn youtube_home_browses_album_playlist_and_moods(cx: &mut TestAppContext) {
 
     cx = wait_for(cx, &shell, "yt-card-1-0");
 
+    let see_all = cx.debug_bounds("shelf-see-all-0").expect("see all");
+    cx.simulate_click(see_all.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(shell.read_with(&cx, |shell, _| shell.route()), Route::Shelf),
+        "See all should open the shelf route"
+    );
+    assert!(cx.debug_bounds("yt-card-0-0").is_some());
+    let back = cx.debug_bounds("detail-back").expect("shelf back");
+    cx.simulate_click(back.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx = wait_for(cx, &shell, "yt-card-1-0");
+
     let album = cx.debug_bounds("yt-card-1-0").expect("album card");
     cx.simulate_click(album.center(), gpui::Modifiers::default());
     cx.run_until_parked();

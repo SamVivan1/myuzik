@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+- **Liquid Glass audit fixes**: shelf overflow and a working "See all" grid,
+  readable 76 px player bar with aligned progress, inline SVG navigation icons,
+  neutralized background aurora, higher tertiary-text contrast, 20 px cover
+  radii, themed shelf fade, and removal of duplicate labels/pin controls.
+
 ### Added
 - **Sidebar source switch**: when both Navidrome and YouTube are configured, a **Library /
   YouTube** segmented control chooses what Home, the navigation menu and Search browse. The

@@ -56,6 +56,7 @@ pub enum Route {
     Artist(SourceId),
     Playlist(SourceId),
     Moods,
+    Shelf,
     NowPlaying,
     Settings,
 }

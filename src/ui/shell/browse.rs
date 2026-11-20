@@ -29,7 +29,7 @@ impl Shell {
             .w(gpui::px(size))
             .h(gpui::px(size))
             .flex_shrink_0()
-            .rounded(gpui::px(18.0))
+            .rounded(gpui::px(20.0))
             .overflow_hidden()
             .border_1()
             .border_color(t.glass_border)
@@ -111,7 +111,7 @@ impl Shell {
                     div()
                         .w_full()
                         .h(gpui::px(180.0))
-                        .rounded(gpui::px(18.0))
+                        .rounded(gpui::px(20.0))
                         .bg(t.glass_tint)
                         .border_1()
                         .border_color(t.glass_border),
@@ -170,6 +170,7 @@ impl Shell {
             Route::Artist(_) => self.render_artist_screen(window, cx),
             Route::Playlist(_) => self.render_playlist_screen(window, cx),
             Route::Moods => self.render_moods_screen(window, cx),
+            Route::Shelf => self.render_shelf_screen(window, cx),
             _ => div().into_any_element(),
         }
     }
@@ -1096,7 +1097,7 @@ impl Shell {
                 .overflow_x_scroll()
                 .pb(gpui::px(4.0));
             for (i, card) in section.items.iter().cloned().enumerate() {
-                row = row.child(self.browse_card(s, i, card, window, cx, t));
+                row = row.child(self.browse_card(s, i, card, 150.0, window, cx, t));
             }
             body = body.child(
                 div()
@@ -1120,28 +1121,27 @@ impl Shell {
                                         section.title.clone()
                                     }),
                             )
-                            .child(
-                                div()
-                                    .text_size(gpui::px(10.0))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(t.text_tertiary)
-                                    .child("See all ›"),
-                            ),
+                            .child(self.shelf_see_all(s, section.clone(), window, cx, t)),
                     )
                     .child(
-                        div().relative().child(row).child(
-                            div()
-                                .absolute()
-                                .right(gpui::px(0.0))
-                                .top(gpui::px(0.0))
-                                .bottom(gpui::px(0.0))
-                                .w(gpui::px(40.0))
-                                .bg(gpui::linear_gradient(
-                                    90.0,
-                                    gpui::linear_color_stop(gpui::rgba(0x0A0B1000), 0.0),
-                                    gpui::linear_color_stop(gpui::rgba(0x0A0B10CC), 1.0),
-                                )),
-                        ),
+                        div()
+                            .relative()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(row)
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right(gpui::px(0.0))
+                                    .top(gpui::px(0.0))
+                                    .bottom(gpui::px(0.0))
+                                    .w(gpui::px(40.0))
+                                    .bg(gpui::linear_gradient(
+                                        90.0,
+                                        gpui::linear_color_stop(gpui::rgba(0x00000000), 0.0),
+                                        gpui::linear_color_stop(t.fade, 1.0),
+                                    )),
+                            ),
                     ),
             );
         }
@@ -1149,21 +1149,116 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(gpui::px(16.0))
-            .child(
-                div()
-                    .text_size(gpui::px(10.0))
-                    .text_color(t.text_tertiary)
-                    .child("YouTube Music"),
-            )
             .child(body)
             .into_any_element()
     }
 
+    fn shelf_see_all(
+        &mut self,
+        index: usize,
+        section: crate::provider::youtube::BrowseSection,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+        t: &crate::theme::Colors,
+    ) -> gpui::Stateful<gpui::Div> {
+        let key = format!("shelf-see-all-{index}");
+        let selector = key.clone();
+        let handle = self.focus_for(&key, Self::TAB_CONTENT, cx);
+        div()
+            .id(key)
+            .debug_selector(move || selector.clone())
+            .track_focus(&handle)
+            .tab_index(Self::TAB_CONTENT)
+            .role(gpui::Role::Link)
+            .aria_label(format!("See all in {}", section.title))
+            .border_2()
+            .border_color(self.focus_border(&handle, window, gpui::rgba(0x00000000), t))
+            .cursor_pointer()
+            .text_size(gpui::px(11.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(t.text_secondary)
+            .hover(|style| style.text_color(t.text_primary))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.open_shelf(section.clone(), cx);
+            }))
+            .child("See all ›")
+    }
+
+    fn render_shelf_screen(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(section) = self.shelf_section.clone() else {
+            return div()
+                .text_size(gpui::px(12.0))
+                .text_color(midnight_brass().colors.text_secondary)
+                .child("This shelf is not loaded.")
+                .into_any_element();
+        };
+        let theme = midnight_brass();
+        let t = &theme.colors;
+        let f_back = self.focus_for("detail-back", Self::TAB_CONTENT, cx);
+        let mut grid = div().flex().flex_wrap().gap(gpui::px(16.0));
+        for (i, card) in section.items.iter().cloned().enumerate() {
+            grid = grid.child(self.browse_card(0, i, card, 190.0, window, cx, t));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(gpui::px(18.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .font_family(theme.display_font)
+                            .text_size(gpui::px(30.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(t.text_primary)
+                            .child(if section.title.is_empty() {
+                                "For you".to_string()
+                            } else {
+                                section.title.clone()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("detail-back")
+                            .debug_selector(|| "detail-back".to_string())
+                            .track_focus(&f_back)
+                            .tab_index(Self::TAB_CONTENT)
+                            .role(gpui::Role::Link)
+                            .aria_label("Go back")
+                            .border_2()
+                            .border_color(self.focus_border(
+                                &f_back,
+                                window,
+                                t.glass_border_soft,
+                                t,
+                            ))
+                            .cursor_pointer()
+                            .text_size(gpui::px(11.0))
+                            .text_color(t.text_secondary)
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.detail_back(cx);
+                            }))
+                            .child("← Back"),
+                    ),
+            )
+            .child(grid)
+            .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn browse_card(
         &mut self,
         section: usize,
         index: usize,
         card: crate::provider::youtube::BrowseCard,
+        width: f32,
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
         t: &crate::theme::Colors,
@@ -1186,7 +1281,7 @@ impl Shell {
                 } else if playlist.song_count > 0 {
                     format!("{} tracks", playlist.song_count)
                 } else {
-                    "Playlist".to_string()
+                    "Curated playlist".to_string()
                 }
             }
             BrowseCard::Artist(_) => "Artist".to_string(),
@@ -1203,7 +1298,7 @@ impl Shell {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".to_string());
-        let cover = self.cover_element(cover_url.as_deref(), None, &initial, 150.0, t, cx);
+        let cover = self.cover_element(cover_url.as_deref(), None, &initial, width, t, cx);
         let click_card = card.clone();
         div()
             .id(key.clone())
@@ -1218,12 +1313,12 @@ impl Shell {
             .border_2()
             .border_color(self.focus_border(&f, window, gpui::rgba(0x00000000), t))
             .cursor_pointer()
-            .w(gpui::px(150.0))
+            .w(gpui::px(width))
             .flex_shrink_0()
             .flex()
             .flex_col()
             .gap(gpui::px(6.0))
-            .rounded(gpui::px(16.0))
+            .rounded(gpui::px(20.0))
             .p(gpui::px(2.0))
             .hover(|style| style.bg(t.glass_highlight_soft))
             .on_click(
@@ -1243,7 +1338,7 @@ impl Shell {
             .child(cover)
             .child(
                 div()
-                    .text_size(gpui::px(11.0))
+                    .text_size(gpui::px(12.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(t.text_primary)
                     .line_clamp(2)
@@ -1251,7 +1346,7 @@ impl Shell {
             )
             .child(
                 div()
-                    .text_size(gpui::px(9.0))
+                    .text_size(gpui::px(10.0))
                     .text_color(t.text_secondary)
                     .line_clamp(1)
                     .text_ellipsis()
@@ -1261,7 +1356,7 @@ impl Shell {
                 format!("card-{}", key),
                 gpui::Animation::new(std::time::Duration::from_millis(240))
                     .with_easing(gpui::ease_out_quint()),
-                |el, delta| el.opacity(delta),
+                |el, delta| el.opacity(0.94 + 0.06 * delta),
             )
             .into_any_element()
     }

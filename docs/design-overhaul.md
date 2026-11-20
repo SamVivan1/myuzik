@@ -48,6 +48,14 @@ Motion: 240 ms fade-in on browse cards, 180 ms route transition fade. Skeletons
 unified. Contrast: all text tokens pass WCAG AA on glass. Screenshots refreshed
 with the final Liquid Glass theme.
 
+## Post-overhaul audit fixes — Done
+
+Shelf overflow is contained (`min_w_0` + `overflow_hidden` + themed fade), and
+"See all" opens a real `Route::Shelf` grid. Player bar is 76 px with a solid
+readable surface, aligned progress/timecodes and 120 px content clearance.
+Nav icons are inline SVGs. Aurora is neutralized, `text_tertiary` raised,
+cover radii unified at 20 px, and the duplicated player-bar pin/label removed.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

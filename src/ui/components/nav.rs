@@ -1,5 +1,6 @@
 //! Navigation components.
 
+use crate::ui::components::icons::nav_icon;
 use gpui::prelude::*;
 
 pub fn nav_item(icon: &str, label: &str, active: bool, t: &crate::theme::Colors) -> gpui::Div {
@@ -8,12 +9,8 @@ pub fn nav_item(icon: &str, label: &str, active: bool, t: &crate::theme::Colors)
             .px(gpui::px(10.0))
             .py(gpui::px(7.0))
             .rounded(gpui::px(12.0))
-            .bg(gpui::linear_gradient(
-                145.0,
-                gpui::linear_color_stop(t.clay_surface, 0.0),
-                gpui::linear_color_stop(t.clay_shade, 1.0),
-            ))
-            .text_color(t.clay_ink)
+            .bg(t.gold_tint)
+            .text_color(t.gold_light)
             .text_size(gpui::px(13.0))
             .font_weight(gpui::FontWeight::BOLD)
             .shadow(vec![
@@ -35,11 +32,7 @@ pub fn nav_item(icon: &str, label: &str, active: bool, t: &crate::theme::Colors)
             .flex()
             .items_center()
             .gap(gpui::px(8.0))
-            .child(
-                gpui::div()
-                    .text_size(gpui::px(13.0))
-                    .child(icon.to_string()),
-            )
+            .child(nav_icon(icon, t.gold_light))
             .child(label.to_string())
     } else {
         gpui::div()
@@ -52,11 +45,7 @@ pub fn nav_item(icon: &str, label: &str, active: bool, t: &crate::theme::Colors)
             .flex()
             .items_center()
             .gap(gpui::px(8.0))
-            .child(
-                gpui::div()
-                    .text_size(gpui::px(13.0))
-                    .child(icon.to_string()),
-            )
+            .child(nav_icon(icon, t.text_secondary))
             .child(label.to_string())
     }
 }
