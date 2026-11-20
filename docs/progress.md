@@ -90,7 +90,9 @@ Last updated: 2026-11-10
   breadcrumb + 220 px cover, search empty state, tighter track-row styling.
 - [x] Phase 4 — Liquid Glass motion: 240 ms fade-in on browse cards, route transition
   fade, spring-like easing. Skeletons, contrast pass (all AA), screenshot refresh.
-- [ ] Next: Phase 5 — component extraction, final polish, accessibility audit.
+- [x] Phase 5 — Component extraction: `album_card`, `album_skeleton`, `track_row`,
+  `format_time`, `nav_item` extracted to `src/ui/components/{cards,rows,nav}.rs`.
+- [ ] Next: Phase 6 — motion refinement, skeleton consistency, contrast audit, final polish.
 
 ## Post-0.1.0 — YouTube Music (optional)
 - [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).

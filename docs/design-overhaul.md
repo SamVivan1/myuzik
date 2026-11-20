@@ -30,6 +30,12 @@ Entrance animation (240 ms fade-in, ease-out-quint) on browse cards. Route
 transition fade (180 ms). Skeleton cards for loading states. Contrast pass: all
 text tokens meet WCAG AA on glass. Screenshots refreshed with the new theme.
 
+## Phase 5 — Done
+
+Component extraction: `album_card`, `album_skeleton`, `track_row`, `format_time`,
+`nav_item` moved to `src/ui/components/{cards,rows,nav}.rs`. `GlassSurface` helper
+in `theme.rs`. Clean separation for design overhaul.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with
