@@ -3380,6 +3380,8 @@ impl Shell {
 
     pub fn open_moods(&mut self, cx: &mut gpui::Context<Self>) {
         self.route = Route::Moods;
+        self.detail_error = None;
+        self.detail_loading = false;
         if self.mood_categories.is_none() && !self.mood_loading {
             self.load_moods(cx);
         }
