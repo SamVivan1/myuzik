@@ -4208,629 +4208,624 @@ impl Render for Shell {
         let queue_panel = self.render_queue_panel(window, cx);
 
         // Player bar
-        let player = div()
-            .absolute()
-            .left(shadow_size + gpui::px(18.0))
-            .right(shadow_size + gpui::px(18.0))
-            .bottom(shadow_size + gpui::px(18.0))
-            .h(gpui::px(64.0))
-            .rounded(gpui::px(30.0))
-            .bg(gpui::linear_gradient(
-                145.0,
-                gpui::linear_color_stop(t.clay_gradient_start, 0.0),
-                gpui::linear_color_stop(t.clay_gradient_end, 1.0),
-            ))
-            .border_1()
-            .border_color(t.glass_border_on_clay)
-            .shadow(vec![
-                gpui::BoxShadow {
-                    color: gpui::hsla(0.0, 0.0, 0.0, 0.45),
-                    offset: gpui::point(gpui::px(0.0), gpui::px(24.0)),
-                    blur_radius: gpui::px(52.0),
-                    spread_radius: gpui::px(0.0),
-                    inset: false,
-                },
-                gpui::BoxShadow {
-                    color: gpui::rgba(0xFFFFFFCC).into(),
-                    offset: gpui::point(gpui::px(2.0), gpui::px(2.0)),
-                    blur_radius: gpui::px(5.0),
-                    spread_radius: gpui::px(0.0),
-                    inset: true,
-                },
-                gpui::BoxShadow {
-                    color: t.shadow_deep.into(),
-                    offset: gpui::point(gpui::px(-4.0), gpui::px(-4.0)),
-                    blur_radius: gpui::px(10.0),
-                    spread_radius: gpui::px(0.0),
-                    inset: true,
-                },
-            ])
-            .flex()
-            .items_center()
-            .gap(gpui::px(16.0))
-            .px(gpui::px(20.0))
-            .child(
-                // Now playing info
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(gpui::px(12.0))
-                    .w(gpui::px(260.0))
-                    .cursor_pointer()
-                    .id("np-open")
-                    .track_focus(&f_np_open)
-                    .tab_index(Self::TAB_PLAYER)
-                    .role(gpui::Role::Button)
-                    .aria_label("Open Now Playing")
-                    .border_2()
-                    .border_color(self.focus_border(&f_np_open, window, gpui::rgba(0x00000000), t))
-                    .debug_selector(|| "np-open".to_string())
-                    .on_click(cx.listener(|this, _event, _window, _cx| {
-                        this.route = Route::NowPlaying;
-                        this.album_detail = None;
-                        this.selected_album = None;
-                    }))
-                    .child(
-                        div()
-                            .w(gpui::px(52.0))
-                            .h(gpui::px(52.0))
-                            .rounded(gpui::px(14.0))
-                            .bg(t.glass_tint)
-                            .border_1()
-                            .border_color(t.glass_border)
-                            .overflow_hidden()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if let Some(image) = current_cover.clone() {
-                                gpui::img(gpui::ImageSource::Image(image))
-                                    .w(gpui::px(48.0))
-                                    .h(gpui::px(48.0))
-                                    .rounded(gpui::px(14.0))
-                                    .object_fit(gpui::ObjectFit::Cover)
-                                    .into_any_element()
-                            } else {
-                                gpui::div()
-                                    .text_size(gpui::px(18.0))
-                                    .text_color(t.clay_ink)
-                                    .child("♪")
-                                    .into_any_element()
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(gpui::px(2.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(gpui::px(6.0))
-                                    .child(
-                                        div()
-                                            .text_size(gpui::px(13.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(t.clay_ink)
-                                            // A long title used to wrap to three
-                                            // lines inside the 88 px player bar
-                                            // and push the artist out of it.
-                                            .line_clamp(1)
-                                            .text_ellipsis()
-                                            .child(if current_title.is_empty() {
-                                                "Nothing playing".to_string()
-                                            } else {
-                                                current_title.clone()
-                                            }),
-                                    )
-                                    .child(match current_source {
-                                        Some(TrackSource::YouTube) => div()
-                                            .px(gpui::px(5.0))
-                                            .py(gpui::px(1.0))
-                                            .rounded(gpui::px(999.0))
-                                            .bg(t.gold_tint)
-                                            .border_1()
-                                            .border_color(t.gold_tint_border)
-                                            .text_size(gpui::px(8.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(t.clay_ink)
-                                            .child("YouTube")
-                                            .into_any_element(),
-                                        Some(TrackSource::Navidrome) => div()
-                                            .px(gpui::px(5.0))
-                                            .py(gpui::px(1.0))
-                                            .rounded(gpui::px(999.0))
-                                            .bg(t.glass_highlight_soft)
-                                            .border_1()
-                                            .border_color(t.glass_border)
-                                            .text_size(gpui::px(8.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(t.text_secondary)
-                                            .child("Library")
-                                            .into_any_element(),
-                                        None => div().into_any_element(),
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .line_clamp(1)
-                                    .text_ellipsis()
-                                    .child(current_artist.clone()),
-                            ),
-                    )
-                    .child(if is_playing {
-                        div()
-                            .flex()
-                            .items_end()
-                            .gap(gpui::px(2.0))
-                            .h(gpui::px(14.0))
-                            .child(eq_bar("eq1", 620, 4.0, 12.0, accent))
-                            .child(eq_bar("eq2", 780, 6.0, 14.0, accent))
-                            .child(eq_bar("eq3", 700, 3.0, 10.0, accent))
-                            .into_any_element()
-                    } else {
-                        div().into_any_element()
-                    }),
-            )
-            .child(
-                // Transport
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(gpui::px(6.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(gpui::px(14.0))
-                            .child(
-                                div()
-                                    .w(gpui::px(30.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .cursor_pointer()
-                                    .id("seek-back")
-                                    .aria_label("Seek back 10 seconds")
-                                    .track_focus(&f_seek_back)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_seek_back,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .debug_selector(|| "seek-back".to_string())
-                                    .on_click(cx.listener(move |this, _event, _window, _cx| {
-                                        let back = position
-                                            .saturating_sub(std::time::Duration::from_secs(10));
-                                        this.player_handle.tx.send(PlayerCommand::Seek(back)).ok();
-                                    }))
-                                    .child("−10"),
-                            )
-                            .child(
-                                div()
-                                    .w(gpui::px(24.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(t.clay_ink)
-                                    .cursor_pointer()
-                                    .id("prev-btn")
-                                    .track_focus(&f_prev)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_prev,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label("Previous track")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.play_previous(cx);
-                                    }))
-                                    .child("⏮"),
-                            )
-                            .child(
-                                div()
-                                    .w(gpui::px(44.0))
-                                    .h(gpui::px(44.0))
-                                    .rounded(gpui::px(999.0))
-                                    .bg(gpui::linear_gradient(
-                                        145.0,
-                                        gpui::linear_color_stop(t.gold_light, 0.0),
-                                        gpui::linear_color_stop(t.gold, 1.0),
-                                    ))
-                                    .shadow(vec![
-                                        gpui::BoxShadow {
-                                            color: gpui::rgba(0xFFFFFFB3).into(),
-                                            offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
-                                            blur_radius: gpui::px(3.0),
-                                            spread_radius: gpui::px(0.0),
-                                            inset: true,
-                                        },
-                                        gpui::BoxShadow {
-                                            color: t.shadow_warm.into(),
-                                            offset: gpui::point(gpui::px(-2.5), gpui::px(-2.5)),
-                                            blur_radius: gpui::px(6.0),
-                                            spread_radius: gpui::px(0.0),
-                                            inset: true,
-                                        },
-                                    ])
-                                    .text_color(t.clay_ink)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(16.0))
-                                    .cursor_pointer()
-                                    .id("play-btn")
-                                    .track_focus(&f_play)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_play,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label(if is_playing { "Pause" } else { "Play" })
-                                    .debug_selector(|| "play-btn".to_string())
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.player_state.update(cx, |ps, _cx| ps.toggle());
-                                        this.player_handle.tx.send(PlayerCommand::Toggle).ok();
-                                    }))
-                                    .child(if is_playing { "⏸" } else { "▶" }),
-                            )
-                            .child(
-                                div()
-                                    .w(gpui::px(24.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(t.clay_ink)
-                                    .cursor_pointer()
-                                    .id("next-btn")
-                                    .track_focus(&f_next)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_next,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label("Next track")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.play_next(cx);
-                                    }))
-                                    .child("⏭"),
-                            )
-                            // Shuffle and repeat had no reachable control at all
-                            // (only Ctrl+S / Ctrl+R), so the feature was invisible.
-                            .child({
-                                let on = self.shuffle_on(cx);
-                                div()
-                                    .w(gpui::px(24.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(12.0))
-                                    .text_color(if on { t.gold_deep } else { t.clay_ink })
-                                    .opacity(if on { 1.0 } else { 0.55 })
-                                    .cursor_pointer()
-                                    .id("shuffle-btn")
-                                    .debug_selector(|| "shuffle-btn".to_string())
-                                    .track_focus(&f_shuffle)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_shuffle,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label(if on { "Shuffle on" } else { "Shuffle off" })
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.toggle_shuffle(cx);
-                                    }))
-                                    .child("⇄")
-                            })
-                            .child({
-                                let repeat = self.repeat_label(cx);
-                                let active = repeat != "Repeat: off";
-                                div()
-                                    .w(gpui::px(24.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(12.0))
-                                    .text_color(if active { t.gold_deep } else { t.clay_ink })
-                                    .opacity(if active { 1.0 } else { 0.55 })
-                                    .cursor_pointer()
-                                    .id("repeat-btn")
-                                    .debug_selector(|| "repeat-btn".to_string())
-                                    .track_focus(&f_repeat)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_repeat,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label(repeat)
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.toggle_repeat(cx);
-                                    }))
-                                    .child(if repeat == "Repeat: one" {
-                                        "↻1"
-                                    } else {
-                                        "↻"
-                                    })
-                            })
-                            .child(
-                                div()
-                                    .w(gpui::px(30.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(12.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .cursor_pointer()
-                                    .id("queue-btn")
-                                    .debug_selector(|| "queue-btn".to_string())
-                                    .track_focus(&f_queue)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_queue,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .aria_label(if self.queue_panel_open {
-                                        "Close queue"
-                                    } else {
-                                        "Open queue"
-                                    })
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.dispatch(
-                                            AppAction::Queue(QueueAction::TogglePanel),
-                                            cx,
-                                        );
-                                    }))
-                                    .child("☰"),
-                            )
-                            .child(
-                                div()
-                                    .w(gpui::px(30.0))
-                                    .h(gpui::px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .cursor_pointer()
-                                    .id("seek-fwd")
-                                    .aria_label("Seek forward 10 seconds")
-                                    .track_focus(&f_seek_fwd)
-                                    .tab_index(Self::TAB_PLAYER)
-                                    .role(gpui::Role::Button)
-                                    .border_2()
-                                    .border_color(self.focus_border(
-                                        &f_seek_fwd,
-                                        window,
-                                        gpui::rgba(0x00000000),
-                                        t,
-                                    ))
-                                    .debug_selector(|| "seek-fwd".to_string())
-                                    .on_click(cx.listener(move |this, _event, _window, _cx| {
-                                        let fwd = position
-                                            .saturating_add(std::time::Duration::from_secs(10));
-                                        this.player_handle.tx.send(PlayerCommand::Seek(fwd)).ok();
-                                    }))
-                                    .child("+10"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(gpui::px(8.0))
-                            .w(gpui::px(320.0))
-                            .child(
-                                div()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .child(format_time(position.as_secs_f64())),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(gpui::px(6.0))
-                                    .rounded(gpui::px(999.0))
-                                    .bg(t.clay_shade)
-                                    .child(
-                                        div()
-                                            .w(gpui::px(progress_pct as f32 * 3.2))
-                                            .h_full()
-                                            .rounded(gpui::px(999.0))
-                                            .bg(accent),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(gpui::px(10.0))
-                                    .text_color(t.clay_ink)
-                                    .opacity(0.7)
-                                    .child(format_time(duration.as_secs_f64())),
-                            ),
-                    ),
-            )
-            .child(
-                // Right controls
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(gpui::px(12.0))
-                    .w(gpui::px(180.0))
-                    .child(
-                        div()
-                            .text_size(gpui::px(9.0))
-                            .text_color(t.clay_ink)
-                            .child("VOL"),
-                    )
-                    .child(
-                        div()
-                            .id("vol-down")
-                            .track_focus(&f_vol_down)
-                            .tab_index(Self::TAB_PLAYER)
-                            .role(gpui::Role::Button)
-                            .aria_label("Volume down")
-                            .border_2()
-                            .border_color(self.focus_border(
-                                &f_vol_down,
-                                window,
-                                gpui::rgba(0x00000000),
-                                t,
-                            ))
-                            .debug_selector(|| "vol-down".to_string())
-                            .cursor_pointer()
-                            .px(gpui::px(4.0))
-                            .text_size(gpui::px(11.0))
-                            .text_color(t.clay_ink)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                let v = (this.player_state.read(cx).volume - 0.05).clamp(0.0, 1.0);
-                                this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
-                                this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
-                                if let Some(mh) = &this.mpris_handle {
-                                    mh.update_volume(v);
-                                }
-                            }))
-                            .child("−"),
-                    )
-                    .child(
-                        div()
-                            .w(gpui::px(60.0))
-                            .h(gpui::px(5.0))
-                            .rounded(gpui::px(999.0))
-                            .bg(t.clay_shade)
-                            .child(
-                                div()
-                                    .w(gpui::px(self.player_state.read(cx).volume * 60.0))
-                                    .h_full()
-                                    .rounded(gpui::px(999.0))
-                                    .bg(t.gold),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("vol-up")
-                            .track_focus(&f_vol_up)
-                            .tab_index(Self::TAB_PLAYER)
-                            .role(gpui::Role::Button)
-                            .aria_label("Volume up")
-                            .border_2()
-                            .border_color(self.focus_border(
-                                &f_vol_up,
-                                window,
-                                gpui::rgba(0x00000000),
-                                t,
-                            ))
-                            .debug_selector(|| "vol-up".to_string())
-                            .cursor_pointer()
-                            .px(gpui::px(4.0))
-                            .text_size(gpui::px(11.0))
-                            .text_color(t.clay_ink)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                let v = (this.player_state.read(cx).volume + 0.05).clamp(0.0, 1.0);
-                                this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
-                                this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
-                                if let Some(mh) = &this.mpris_handle {
-                                    mh.update_volume(v);
-                                }
-                            }))
-                            .child("+"),
-                    )
-                    .child(
-                        div()
-                            .px(gpui::px(10.0))
-                            .py(gpui::px(6.0))
-                            .rounded(gpui::px(999.0))
-                            .bg(gpui::linear_gradient(
-                                145.0,
-                                gpui::linear_color_stop(t.clay_dark, 0.0),
-                                gpui::linear_color_stop(t.clay_dark_2, 1.0),
-                            ))
-                            .shadow(vec![
-                                gpui::BoxShadow {
-                                    color: t.glass_highlight_strong.into(),
-                                    offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
-                                    blur_radius: gpui::px(3.0),
-                                    spread_radius: gpui::px(0.0),
-                                    inset: true,
-                                },
-                                gpui::BoxShadow {
-                                    color: t.scrim.into(),
-                                    offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
-                                    blur_radius: gpui::px(7.0),
-                                    spread_radius: gpui::px(0.0),
-                                    inset: true,
-                                },
-                            ])
-                            .text_color(t.gold_light)
-                            .text_size(gpui::px(10.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .cursor_pointer()
-                            .id("pin-btn")
-                            .track_focus(&f_pin)
-                            .tab_index(Self::TAB_PLAYER)
-                            .role(gpui::Role::Button)
-                            .aria_label("Pin or unpin the lyrics overlay")
-                            .border_2()
-                            .border_color(self.focus_border(
-                                &f_pin,
-                                window,
-                                gpui::rgba(0x00000000),
-                                t,
-                            ))
-                            .active(|style| style.opacity(0.9))
-                            .on_click(cx.listener(|this, _event, _window, _cx| {
-                                if this.overlay_handle.is_some() {
-                                    this.close_overlay(_cx);
+        let player = crate::theme::glass_surface(
+            div()
+                .absolute()
+                .left(shadow_size + gpui::px(18.0))
+                .right(shadow_size + gpui::px(18.0))
+                .bottom(shadow_size + gpui::px(18.0))
+                .h(gpui::px(64.0))
+                .rounded(gpui::px(32.0)),
+            t,
+            32.0,
+        )
+        .bg(gpui::linear_gradient(
+            145.0,
+            gpui::linear_color_stop(t.glass_gradient_start, 0.0),
+            gpui::linear_color_stop(t.glass_gradient_end, 1.0),
+        ))
+        .border_color(t.glass_border)
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0.0, 0.0, 0.0, 0.45),
+                offset: gpui::point(gpui::px(0.0), gpui::px(24.0)),
+                blur_radius: gpui::px(52.0),
+                spread_radius: gpui::px(0.0),
+                inset: false,
+            },
+            gpui::BoxShadow {
+                color: gpui::rgba(0xFFFFFFCC).into(),
+                offset: gpui::point(gpui::px(2.0), gpui::px(2.0)),
+                blur_radius: gpui::px(5.0),
+                spread_radius: gpui::px(0.0),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: t.shadow_deep.into(),
+                offset: gpui::point(gpui::px(-4.0), gpui::px(-4.0)),
+                blur_radius: gpui::px(10.0),
+                spread_radius: gpui::px(0.0),
+                inset: true,
+            },
+        ])
+        .flex()
+        .items_center()
+        .gap(gpui::px(16.0))
+        .px(gpui::px(20.0))
+        .child(
+            // Now playing info
+            div()
+                .flex()
+                .items_center()
+                .gap(gpui::px(12.0))
+                .w(gpui::px(260.0))
+                .cursor_pointer()
+                .id("np-open")
+                .track_focus(&f_np_open)
+                .tab_index(Self::TAB_PLAYER)
+                .role(gpui::Role::Button)
+                .aria_label("Open Now Playing")
+                .border_2()
+                .border_color(self.focus_border(&f_np_open, window, gpui::rgba(0x00000000), t))
+                .debug_selector(|| "np-open".to_string())
+                .on_click(cx.listener(|this, _event, _window, _cx| {
+                    this.route = Route::NowPlaying;
+                    this.album_detail = None;
+                    this.selected_album = None;
+                }))
+                .child(
+                    div()
+                        .w(gpui::px(52.0))
+                        .h(gpui::px(52.0))
+                        .rounded(gpui::px(14.0))
+                        .bg(t.glass_tint)
+                        .border_1()
+                        .border_color(t.glass_border)
+                        .overflow_hidden()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(if let Some(image) = current_cover.clone() {
+                            gpui::img(gpui::ImageSource::Image(image))
+                                .w(gpui::px(48.0))
+                                .h(gpui::px(48.0))
+                                .rounded(gpui::px(14.0))
+                                .object_fit(gpui::ObjectFit::Cover)
+                                .into_any_element()
+                        } else {
+                            gpui::div()
+                                .text_size(gpui::px(18.0))
+                                .text_color(t.clay_ink)
+                                .child("♪")
+                                .into_any_element()
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(gpui::px(2.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(gpui::px(6.0))
+                                .child(
+                                    div()
+                                        .text_size(gpui::px(13.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t.clay_ink)
+                                        // A long title used to wrap to three
+                                        // lines inside the 88 px player bar
+                                        // and push the artist out of it.
+                                        .line_clamp(1)
+                                        .text_ellipsis()
+                                        .child(if current_title.is_empty() {
+                                            "Nothing playing".to_string()
+                                        } else {
+                                            current_title.clone()
+                                        }),
+                                )
+                                .child(match current_source {
+                                    Some(TrackSource::YouTube) => div()
+                                        .px(gpui::px(5.0))
+                                        .py(gpui::px(1.0))
+                                        .rounded(gpui::px(999.0))
+                                        .bg(t.gold_tint)
+                                        .border_1()
+                                        .border_color(t.gold_tint_border)
+                                        .text_size(gpui::px(8.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t.clay_ink)
+                                        .child("YouTube")
+                                        .into_any_element(),
+                                    Some(TrackSource::Navidrome) => div()
+                                        .px(gpui::px(5.0))
+                                        .py(gpui::px(1.0))
+                                        .rounded(gpui::px(999.0))
+                                        .bg(t.glass_highlight_soft)
+                                        .border_1()
+                                        .border_color(t.glass_border)
+                                        .text_size(gpui::px(8.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t.text_secondary)
+                                        .child("Library")
+                                        .into_any_element(),
+                                    None => div().into_any_element(),
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(gpui::px(10.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .line_clamp(1)
+                                .text_ellipsis()
+                                .child(current_artist.clone()),
+                        ),
+                )
+                .child(if is_playing {
+                    div()
+                        .flex()
+                        .items_end()
+                        .gap(gpui::px(2.0))
+                        .h(gpui::px(14.0))
+                        .child(eq_bar("eq1", 620, 4.0, 12.0, accent))
+                        .child(eq_bar("eq2", 780, 6.0, 14.0, accent))
+                        .child(eq_bar("eq3", 700, 3.0, 10.0, accent))
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }),
+        )
+        .child(
+            // Transport
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(gpui::px(6.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(gpui::px(14.0))
+                        .child(
+                            div()
+                                .w(gpui::px(30.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(10.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .cursor_pointer()
+                                .id("seek-back")
+                                .aria_label("Seek back 10 seconds")
+                                .track_focus(&f_seek_back)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_seek_back,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .debug_selector(|| "seek-back".to_string())
+                                .on_click(cx.listener(move |this, _event, _window, _cx| {
+                                    let back =
+                                        position.saturating_sub(std::time::Duration::from_secs(10));
+                                    this.player_handle.tx.send(PlayerCommand::Seek(back)).ok();
+                                }))
+                                .child("−10"),
+                        )
+                        .child(
+                            div()
+                                .w(gpui::px(24.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(t.clay_ink)
+                                .cursor_pointer()
+                                .id("prev-btn")
+                                .track_focus(&f_prev)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_prev,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label("Previous track")
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.play_previous(cx);
+                                }))
+                                .child("⏮"),
+                        )
+                        .child(
+                            div()
+                                .w(gpui::px(44.0))
+                                .h(gpui::px(44.0))
+                                .rounded(gpui::px(999.0))
+                                .bg(gpui::linear_gradient(
+                                    145.0,
+                                    gpui::linear_color_stop(t.gold_light, 0.0),
+                                    gpui::linear_color_stop(t.gold, 1.0),
+                                ))
+                                .shadow(vec![
+                                    gpui::BoxShadow {
+                                        color: gpui::rgba(0xFFFFFFB3).into(),
+                                        offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                        blur_radius: gpui::px(3.0),
+                                        spread_radius: gpui::px(0.0),
+                                        inset: true,
+                                    },
+                                    gpui::BoxShadow {
+                                        color: t.shadow_warm.into(),
+                                        offset: gpui::point(gpui::px(-2.5), gpui::px(-2.5)),
+                                        blur_radius: gpui::px(6.0),
+                                        spread_radius: gpui::px(0.0),
+                                        inset: true,
+                                    },
+                                ])
+                                .text_color(t.clay_ink)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(16.0))
+                                .cursor_pointer()
+                                .id("play-btn")
+                                .track_focus(&f_play)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_play,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label(if is_playing { "Pause" } else { "Play" })
+                                .debug_selector(|| "play-btn".to_string())
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.player_state.update(cx, |ps, _cx| ps.toggle());
+                                    this.player_handle.tx.send(PlayerCommand::Toggle).ok();
+                                }))
+                                .child(if is_playing { "⏸" } else { "▶" }),
+                        )
+                        .child(
+                            div()
+                                .w(gpui::px(24.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(t.clay_ink)
+                                .cursor_pointer()
+                                .id("next-btn")
+                                .track_focus(&f_next)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_next,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label("Next track")
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.play_next(cx);
+                                }))
+                                .child("⏭"),
+                        )
+                        // Shuffle and repeat had no reachable control at all
+                        // (only Ctrl+S / Ctrl+R), so the feature was invisible.
+                        .child({
+                            let on = self.shuffle_on(cx);
+                            div()
+                                .w(gpui::px(24.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(12.0))
+                                .text_color(if on { t.gold_deep } else { t.clay_ink })
+                                .opacity(if on { 1.0 } else { 0.55 })
+                                .cursor_pointer()
+                                .id("shuffle-btn")
+                                .debug_selector(|| "shuffle-btn".to_string())
+                                .track_focus(&f_shuffle)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_shuffle,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label(if on { "Shuffle on" } else { "Shuffle off" })
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.toggle_shuffle(cx);
+                                }))
+                                .child("⇄")
+                        })
+                        .child({
+                            let repeat = self.repeat_label(cx);
+                            let active = repeat != "Repeat: off";
+                            div()
+                                .w(gpui::px(24.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(12.0))
+                                .text_color(if active { t.gold_deep } else { t.clay_ink })
+                                .opacity(if active { 1.0 } else { 0.55 })
+                                .cursor_pointer()
+                                .id("repeat-btn")
+                                .debug_selector(|| "repeat-btn".to_string())
+                                .track_focus(&f_repeat)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_repeat,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label(repeat)
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.toggle_repeat(cx);
+                                }))
+                                .child(if repeat == "Repeat: one" {
+                                    "↻1"
                                 } else {
-                                    this.open_overlay(_cx);
-                                }
-                            }))
-                            .child("Pin lyrics"),
-                    ),
-            );
+                                    "↻"
+                                })
+                        })
+                        .child(
+                            div()
+                                .w(gpui::px(30.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(12.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .cursor_pointer()
+                                .id("queue-btn")
+                                .debug_selector(|| "queue-btn".to_string())
+                                .track_focus(&f_queue)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_queue,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .aria_label(if self.queue_panel_open {
+                                    "Close queue"
+                                } else {
+                                    "Open queue"
+                                })
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.dispatch(AppAction::Queue(QueueAction::TogglePanel), cx);
+                                }))
+                                .child("☰"),
+                        )
+                        .child(
+                            div()
+                                .w(gpui::px(30.0))
+                                .h(gpui::px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(gpui::px(10.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .cursor_pointer()
+                                .id("seek-fwd")
+                                .aria_label("Seek forward 10 seconds")
+                                .track_focus(&f_seek_fwd)
+                                .tab_index(Self::TAB_PLAYER)
+                                .role(gpui::Role::Button)
+                                .border_2()
+                                .border_color(self.focus_border(
+                                    &f_seek_fwd,
+                                    window,
+                                    gpui::rgba(0x00000000),
+                                    t,
+                                ))
+                                .debug_selector(|| "seek-fwd".to_string())
+                                .on_click(cx.listener(move |this, _event, _window, _cx| {
+                                    let fwd =
+                                        position.saturating_add(std::time::Duration::from_secs(10));
+                                    this.player_handle.tx.send(PlayerCommand::Seek(fwd)).ok();
+                                }))
+                                .child("+10"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(gpui::px(8.0))
+                        .w(gpui::px(320.0))
+                        .child(
+                            div()
+                                .text_size(gpui::px(10.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .child(format_time(position.as_secs_f64())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(gpui::px(6.0))
+                                .rounded(gpui::px(999.0))
+                                .bg(t.clay_shade)
+                                .child(
+                                    div()
+                                        .w(gpui::px(progress_pct as f32 * 3.2))
+                                        .h_full()
+                                        .rounded(gpui::px(999.0))
+                                        .bg(accent),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(gpui::px(10.0))
+                                .text_color(t.clay_ink)
+                                .opacity(0.7)
+                                .child(format_time(duration.as_secs_f64())),
+                        ),
+                ),
+        )
+        .child(
+            // Right controls
+            div()
+                .flex()
+                .items_center()
+                .gap(gpui::px(12.0))
+                .w(gpui::px(180.0))
+                .child(
+                    div()
+                        .text_size(gpui::px(9.0))
+                        .text_color(t.clay_ink)
+                        .child("VOL"),
+                )
+                .child(
+                    div()
+                        .id("vol-down")
+                        .track_focus(&f_vol_down)
+                        .tab_index(Self::TAB_PLAYER)
+                        .role(gpui::Role::Button)
+                        .aria_label("Volume down")
+                        .border_2()
+                        .border_color(self.focus_border(
+                            &f_vol_down,
+                            window,
+                            gpui::rgba(0x00000000),
+                            t,
+                        ))
+                        .debug_selector(|| "vol-down".to_string())
+                        .cursor_pointer()
+                        .px(gpui::px(4.0))
+                        .text_size(gpui::px(11.0))
+                        .text_color(t.clay_ink)
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            let v = (this.player_state.read(cx).volume - 0.05).clamp(0.0, 1.0);
+                            this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                            this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                            if let Some(mh) = &this.mpris_handle {
+                                mh.update_volume(v);
+                            }
+                        }))
+                        .child("−"),
+                )
+                .child(
+                    div()
+                        .w(gpui::px(60.0))
+                        .h(gpui::px(5.0))
+                        .rounded(gpui::px(999.0))
+                        .bg(t.clay_shade)
+                        .child(
+                            div()
+                                .w(gpui::px(self.player_state.read(cx).volume * 60.0))
+                                .h_full()
+                                .rounded(gpui::px(999.0))
+                                .bg(t.gold),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("vol-up")
+                        .track_focus(&f_vol_up)
+                        .tab_index(Self::TAB_PLAYER)
+                        .role(gpui::Role::Button)
+                        .aria_label("Volume up")
+                        .border_2()
+                        .border_color(self.focus_border(
+                            &f_vol_up,
+                            window,
+                            gpui::rgba(0x00000000),
+                            t,
+                        ))
+                        .debug_selector(|| "vol-up".to_string())
+                        .cursor_pointer()
+                        .px(gpui::px(4.0))
+                        .text_size(gpui::px(11.0))
+                        .text_color(t.clay_ink)
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            let v = (this.player_state.read(cx).volume + 0.05).clamp(0.0, 1.0);
+                            this.player_state.update(cx, |ps, _cx| ps.set_volume(v));
+                            this.player_handle.tx.send(PlayerCommand::SetVolume(v)).ok();
+                            if let Some(mh) = &this.mpris_handle {
+                                mh.update_volume(v);
+                            }
+                        }))
+                        .child("+"),
+                )
+                .child(
+                    div()
+                        .px(gpui::px(10.0))
+                        .py(gpui::px(6.0))
+                        .rounded(gpui::px(999.0))
+                        .bg(gpui::linear_gradient(
+                            145.0,
+                            gpui::linear_color_stop(t.clay_dark, 0.0),
+                            gpui::linear_color_stop(t.clay_dark_2, 1.0),
+                        ))
+                        .shadow(vec![
+                            gpui::BoxShadow {
+                                color: t.glass_highlight_strong.into(),
+                                offset: gpui::point(gpui::px(1.5), gpui::px(1.5)),
+                                blur_radius: gpui::px(3.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: true,
+                            },
+                            gpui::BoxShadow {
+                                color: t.scrim.into(),
+                                offset: gpui::point(gpui::px(-3.0), gpui::px(-3.0)),
+                                blur_radius: gpui::px(7.0),
+                                spread_radius: gpui::px(0.0),
+                                inset: true,
+                            },
+                        ])
+                        .text_color(t.gold_light)
+                        .text_size(gpui::px(10.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .cursor_pointer()
+                        .id("pin-btn")
+                        .track_focus(&f_pin)
+                        .tab_index(Self::TAB_PLAYER)
+                        .role(gpui::Role::Button)
+                        .aria_label("Pin or unpin the lyrics overlay")
+                        .border_2()
+                        .border_color(self.focus_border(&f_pin, window, gpui::rgba(0x00000000), t))
+                        .active(|style| style.opacity(0.9))
+                        .on_click(cx.listener(|this, _event, _window, _cx| {
+                            if this.overlay_handle.is_some() {
+                                this.close_overlay(_cx);
+                            } else {
+                                this.open_overlay(_cx);
+                            }
+                        }))
+                        .child("Pin lyrics"),
+                ),
+        );
 
         self.prune_overlay_handle(cx);
         if !self.root_focus_requested {
@@ -5125,7 +5120,9 @@ impl Render for Shell {
                             .px(gpui::px(16.0))
                             .pt(gpui::px(18.0))
                             .pb(gpui::px(92.0))
-                            .bg(t.glass_inner)
+                            .bg(t.glass_tint)
+                            .border_r_1()
+                            .border_color(t.glass_border)
                             .shadow(vec![gpui::BoxShadow {
                                 color: t.glass_highlight_soft.into(),
                                 offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),

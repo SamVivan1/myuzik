@@ -84,7 +84,9 @@ Last updated: 2026-11-10
   queue/player stay global; last choice persisted with fallbacks.
 - [x] Phase 1 — Liquid Glass tokens: deep ink base, translucent glass surfaces,
   cool indigo accent, Inter typography, rounded-20 radii, dynamic accent from cover art.
-- [ ] Next: Phase 2 — shell/sidebar/player-bar layout, Phase 3 — cards/shelves.
+- [x] Phase 2 — Liquid Glass layout: glass player bar (64 px capsule), glass sidebar
+  (220 px), icon+text nav, dynamic accent from cover art, glass surfaces.
+- [ ] Next: Phase 3 — cards/shelves with fade/arrow, detail header breadcrumb.
 
 ## Post-0.1.0 — YouTube Music (optional)
 - [x] M1: optional YouTube Music search and playback behind `youtube_enabled` (off by default).

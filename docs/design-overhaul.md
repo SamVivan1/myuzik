@@ -12,6 +12,12 @@ at 12/14/16/20/28/36. Radii are 20/20/24/999/999. Sidebar is 220 px, player bar
 is 64 px, nav items have icon+text, and the accent is extracted from the currently
 playing cover.
 
+## Phase 2 — Done
+
+Glass surfaces are applied to the player bar (64 px capsule) and sidebar (220 px).
+Nav items now have icon+text. The accent is dynamic from cover art. Layout
+numbers updated: sidebar 220, player bar 64, cover 48, bottom padding 86/92.
+
 ## What is solid now
 
 - One playback engine and queue for both sources; queue edits stay in sync with

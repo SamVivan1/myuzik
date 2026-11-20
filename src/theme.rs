@@ -6,6 +6,7 @@
 //! `MIDNIGHT_BRASS` (the function name is retained for compatibility; the
 //! palette is Liquid Glass). No raw colors in view code.
 
+use gpui::prelude::*;
 use gpui::{Rgba, rgb, rgba};
 
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +191,32 @@ pub fn accent_from_bytes(bytes: &[u8]) -> Option<Rgba> {
     Some(rgb(((r * 255.0) as u32) << 16
         | ((g * 255.0) as u32) << 8
         | ((b * 255.0) as u32)))
+}
+
+/// Apply a Liquid Glass surface to a div: translucent background, subtle
+/// border highlight, rounded corners, and a soft shadow. Returns the div so
+/// callers can chain further styling.
+pub fn glass_surface(div: gpui::Div, t: &Colors, radius: f32) -> gpui::Div {
+    div.bg(t.glass_tint)
+        .border_1()
+        .border_color(t.glass_border)
+        .rounded(gpui::px(radius))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: t.glass_highlight_soft.into(),
+                offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+                blur_radius: gpui::px(0.0),
+                spread_radius: gpui::px(0.0),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: t.shadow_deep.into(),
+                offset: gpui::point(gpui::px(0.0), gpui::px(8.0)),
+                blur_radius: gpui::px(24.0),
+                spread_radius: gpui::px(0.0),
+                inset: false,
+            },
+        ])
 }
 
 /// Glass surface color over a given base, simulating the dark glass tint.
