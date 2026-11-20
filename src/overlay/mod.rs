@@ -205,6 +205,16 @@ impl OverlayState {
         self.duration = None;
     }
 
+    /// Relabel the pinned window without disturbing what is already on screen.
+    ///
+    /// [`OverlayState::begin`] is for a *new* track: it clears the artwork and
+    /// the progress. Calling it again when the lyrics request resolves wiped the
+    /// cover that had just been painted, so the label update has its own path.
+    pub fn set_track(&mut self, title: String, artist: String) {
+        self.title = title;
+        self.artist = artist;
+    }
+
     /// Show a resolved lyrics status.
     pub fn set_status(&mut self, status: &crate::lyrics::model::LyricsStatus) {
         use crate::lyrics::model::LyricsStatus;
@@ -424,7 +434,68 @@ pub fn plain_index(
 /// parent does not clip its children, so `rounded()` on either of them leaves the
 /// artwork square. Painting the transparency into the pixels is the only way that
 /// holds on every backend.
+/// How many rounded covers are memoised at once.
+const ROUNDED_COVER_CACHE_CAP: usize = 32;
+
+/// Rounded covers, keyed by the source image id.
+///
+/// Masking is CPU work: a 512 px cover is decoded, walked per pixel and
+/// re-encoded as PNG. It is the same cover for every track of an album, so the
+/// work is done once per source image instead of once per track change.
+#[derive(Default)]
+struct RoundedCoverCache {
+    entries: std::collections::HashMap<u64, std::sync::Arc<gpui::Image>>,
+    order: std::collections::VecDeque<u64>,
+}
+
+impl RoundedCoverCache {
+    fn insert(&mut self, key: u64, image: std::sync::Arc<gpui::Image>) {
+        if self.entries.insert(key, image).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > ROUNDED_COVER_CACHE_CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.entries.remove(&old);
+            }
+        }
+    }
+}
+
+fn with_rounded_cover_cache<R>(f: impl FnOnce(&mut RoundedCoverCache) -> R) -> R {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<RoundedCoverCache>> =
+        std::sync::OnceLock::new();
+    let mutex = CACHE.get_or_init(|| std::sync::Mutex::new(RoundedCoverCache::default()));
+    let mut guard = mutex.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut guard)
+}
+
+/// How many rounded covers are memoised right now (diagnostics and tests).
+pub fn rounded_cover_cache_len() -> usize {
+    with_rounded_cover_cache(|cache| cache.entries.len())
+}
+
+/// How many cover images have been decoded in this process (tests).
+#[cfg(test)]
+fn rounded_cover_decodes() -> usize {
+    ROUNDED_COVER_DECODES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static ROUNDED_COVER_DECODES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub fn rounded_cover(image: &std::sync::Arc<gpui::Image>) -> std::sync::Arc<gpui::Image> {
+    if let Some(cached) = with_rounded_cover_cache(|cache| cache.entries.get(&image.id).cloned()) {
+        return cached;
+    }
+    // A cover that fails to decode comes back untouched; it is memoised too, so
+    // the next track of the same album does not retry the same failing work.
+    let rounded = mask_and_encode(image);
+    with_rounded_cover_cache(|cache| cache.insert(image.id, rounded.clone()));
+    rounded
+}
+
+fn mask_and_encode(image: &std::sync::Arc<gpui::Image>) -> std::sync::Arc<gpui::Image> {
+    ROUNDED_COVER_DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let Ok(decoded) = image::load_from_memory(&image.bytes) else {
         return image.clone();
     };
@@ -981,6 +1052,14 @@ pub fn open_overlay(
     geometry: std::sync::Arc<std::sync::Mutex<OverlayGeometry>>,
     bounds: gpui::Bounds<gpui::Pixels>,
 ) -> gpui::WindowHandle<PinnedLyricsView> {
+    let icon = {
+        let bytes = include_bytes!(
+            "../../packaging/icons/hicolor/128x128/apps/io.github.samvivan1.Myuzik.png"
+        );
+        image::load_from_memory(bytes)
+            .ok()
+            .map(|image| std::sync::Arc::new(image.to_rgba8()))
+    };
     let opts = WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
         // The layout needs this much room; without a floor the window could be
@@ -994,6 +1073,7 @@ pub fn open_overlay(
         focus: false,
         show: true,
         app_id: Some(APP_ID.to_string()),
+        icon,
         titlebar: None,
         ..Default::default()
     };
@@ -1280,5 +1360,99 @@ mod band_tests {
         assert_eq!(state.cover, None);
         assert_eq!(state.progress_fraction(), 0.0);
         assert_eq!(state.line_count(), 0);
+    }
+
+    /// The lyrics fetch resolving must not wipe the artwork already on screen:
+    /// only the label changes.
+    #[test]
+    fn set_track_keeps_the_cover_and_the_progress() {
+        let mut state = OverlayState::default();
+        let cover = std::sync::Arc::new(gpui::Image {
+            format: gpui::ImageFormat::Png,
+            bytes: Vec::new(),
+            id: 7,
+        });
+        state.set_cover(Some(cover.clone()));
+        state.sync_position(Duration::from_secs(30), 0, Some(Duration::from_secs(120)));
+        state.set_status(&LyricsStatus::Synced(synced(4)));
+
+        state.set_track("Next".to_string(), "Someone".to_string());
+
+        assert_eq!(state.title, "Next");
+        assert_eq!(state.artist, "Someone");
+        let kept = state.cover.as_ref().expect("the artwork must survive");
+        assert!(std::sync::Arc::ptr_eq(kept, &cover));
+        assert_eq!(
+            state.position,
+            Duration::from_secs(30),
+            "progress untouched"
+        );
+        assert_eq!(state.line_count(), 4, "lyrics untouched");
+    }
+
+    /// A real 32x32 PNG, so the cover path decodes and re-encodes for real.
+    fn tiny_png() -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let rgba = image::RgbaImage::from_pixel(32, 32, image::Rgba([10, 120, 200, 255]));
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(&rgba, 32, 32, image::ExtendedColorType::Rgba8)
+            .expect("encode test png");
+        bytes
+    }
+
+    fn test_image(id: u64) -> std::sync::Arc<gpui::Image> {
+        std::sync::Arc::new(gpui::Image {
+            format: gpui::ImageFormat::Png,
+            bytes: tiny_png(),
+            id,
+        })
+    }
+
+    /// The memo is process-wide, so these two tests take turns.
+    fn cover_cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn rounded_cover_does_the_work_once_per_source_image() {
+        let _guard = cover_cache_test_lock();
+        let image = test_image(0xA11CE);
+        let before = rounded_cover_decodes();
+
+        let first = rounded_cover(&image);
+        assert_eq!(
+            rounded_cover_decodes() - before,
+            1,
+            "the first rounded cover decodes exactly once"
+        );
+        assert_ne!(first.id, image.id, "the rounded image needs its own id");
+        assert!(!first.bytes.is_empty());
+
+        let second = rounded_cover(&image);
+        assert_eq!(
+            rounded_cover_decodes() - before,
+            1,
+            "asking again for the same cover must not decode again"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "the memoised image is handed back as-is"
+        );
+    }
+
+    #[test]
+    fn rounded_cover_cache_stays_bounded() {
+        let _guard = cover_cache_test_lock();
+        for i in 0..(ROUNDED_COVER_CACHE_CAP as u64 + 8) {
+            let _ = rounded_cover(&test_image(0xB0B0 + i));
+        }
+        assert!(
+            rounded_cover_cache_len() <= ROUNDED_COVER_CACHE_CAP,
+            "cache holds {} entries, cap is {}",
+            rounded_cover_cache_len(),
+            ROUNDED_COVER_CACHE_CAP
+        );
     }
 }

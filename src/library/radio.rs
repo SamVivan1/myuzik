@@ -92,17 +92,16 @@ impl Radio {
         self.last_seed = None;
     }
 
-    /// Fetch what should follow `seed`, excluding ids the caller already has.
+    /// Capture what a batch needs, under a short lock.
     ///
-    /// Returns `Ok(vec![])` when the server answered but nothing fresh was
-    /// available, and `Err` only when every source failed — the caller can then
-    /// report it once instead of silently stopping.
-    pub fn next_batch(
-        &mut self,
-        client: &NavidromeClient,
-        seed: &Track,
-        exclude: &HashSet<String>,
-    ) -> Result<Vec<Track>, NavidromeError> {
+    /// Holding the lock across the HTTP calls is what froze the UI for as long
+    /// as a batch took; the plan lets the caller release it and fetch without
+    /// touching the radio at all.
+    ///
+    /// Returns `None` when this seed is stalled: the seed-change reset above has
+    /// already run, so a *different* seed always gets a plan and autoplay can
+    /// recover instead of dead-ending for the rest of the session.
+    pub fn begin(&mut self, seed: &Track, exclude: &HashSet<String>) -> Option<RadioPlan> {
         // A different track means a different genre page, so start over.
         if self.last_seed.as_deref() != Some(seed.id.as_str()) {
             self.last_seed = Some(seed.id.clone());
@@ -110,108 +109,218 @@ impl Radio {
             self.empty_batches = 0;
         }
         if self.is_stalled() {
-            return Ok(Vec::new());
+            return None;
         }
 
         let mut seen: HashSet<String> = exclude.clone();
         seen.insert(seed.id.clone());
         seen.extend(self.recent.iter().cloned());
 
-        let mut out: Vec<Track> = Vec::new();
-        let mut any_ok = false;
-        let mut last_err: Option<NavidromeError> = None;
+        Some(RadioPlan {
+            seed: seed.clone(),
+            seen,
+            genre_offset: self.genre_offset,
+        })
+    }
 
-        // 1. Similar to this very song.
-        match client.similar_songs_for_song(&seed.id, GENRE_PAGE) {
-            Ok(tracks) => {
-                any_ok = true;
-                absorb(tracks, &mut seen, &mut out);
-            }
-            Err(e) => {
-                tracing::debug!("radio: similar-songs failed: {e:?}");
-                last_err = Some(e);
-            }
+    /// Apply a fetched batch to the radio state, under a short lock.
+    ///
+    /// Discards the batch when a different track has seeded the radio since the
+    /// plan was made, so a result that belongs to the previous queue can never
+    /// land in the new one.
+    pub fn commit(
+        &mut self,
+        plan: &RadioPlan,
+        outcome: BatchOutcome,
+    ) -> Result<Vec<Track>, NavidromeError> {
+        if self.last_seed.as_deref() != Some(plan.seed.id.as_str()) {
+            return Ok(Vec::new());
         }
 
-        // 2. Similar to the artist.
-        if out.len() < BATCH
-            && let Some(artist_id) = seed.artist_id.as_deref()
-        {
-            match client.similar_songs(artist_id, GENRE_PAGE) {
-                Ok(tracks) => {
-                    any_ok = true;
-                    absorb(tracks, &mut seen, &mut out);
-                }
-                Err(e) => {
-                    tracing::debug!("radio: similar-songs2 failed: {e:?}");
-                    last_err = Some(e);
-                }
-            }
-        }
+        self.genre_offset = outcome.genre_offset;
 
-        // 3. Same genre, paged, so a big genre keeps yielding new songs and a
-        //    small one cycles instead of returning the same page forever.
-        if out.len() < BATCH
-            && let Some(genre) = seed.genre.as_deref()
-        {
-            for _ in 0..MAX_GENRE_PAGES {
-                if out.len() >= BATCH {
-                    break;
-                }
-                let offset = self.genre_offset;
-                match client.songs_by_genre(genre, GENRE_PAGE, offset) {
-                    Ok(tracks) => {
-                        any_ok = true;
-                        let full_page = tracks.len() as u32 >= GENRE_PAGE;
-                        absorb(tracks, &mut seen, &mut out);
-                        if full_page {
-                            self.genre_offset = self.genre_offset.saturating_add(GENRE_PAGE);
-                        } else {
-                            // End of the genre: wrap so the pool cycles.
-                            self.genre_offset = 0;
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("radio: songs-by-genre failed: {e:?}");
-                        last_err = Some(e);
-                        break;
-                    }
-                }
-            }
-        }
+        // The plan deduplicated against the history as it was *before* the
+        // request; the user may have played something since, so filter again
+        // rather than queueing a track that just started.
+        let recent: HashSet<&str> = self.recent.iter().map(String::as_str).collect();
+        let tracks: Vec<Track> = outcome
+            .tracks
+            .into_iter()
+            .filter(|t| !recent.contains(t.id.as_str()))
+            .collect();
 
-        // 4. Backstop: anything at all.
-        let mut draws = 0;
-        while out.len() < BATCH && draws < MAX_RANDOM_DRAWS {
-            draws += 1;
-            match client.random_songs(BATCH as u32) {
-                Ok(tracks) => {
-                    any_ok = true;
-                    let before = out.len();
-                    absorb(tracks, &mut seen, &mut out);
-                    if out.len() == before {
-                        // Nothing new came back; another identical draw will not help.
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("radio: random-songs failed: {e:?}");
-                    last_err = Some(e);
-                    break;
-                }
-            }
-        }
-
-        if out.is_empty() {
+        if tracks.is_empty() {
             self.empty_batches = self.empty_batches.saturating_add(1);
-            if !any_ok && let Some(err) = last_err {
+            if !outcome.any_ok
+                && let Some(err) = outcome.error
+            {
                 return Err(err);
             }
         } else {
             self.empty_batches = 0;
         }
-        Ok(out)
+        Ok(tracks)
+    }
+
+    /// Fetch what should follow `seed`, excluding ids the caller already has.
+    ///
+    /// Returns `Ok(vec![])` when the server answered but nothing fresh was
+    /// available, and `Err` only when every source failed — the caller can then
+    /// report it once instead of silently stopping.
+    ///
+    /// Callers that must not hold a lock during I/O use [`Radio::begin`],
+    /// [`fetch`] and [`Radio::commit`] directly instead of this convenience
+    /// wrapper.
+    pub fn next_batch(
+        &mut self,
+        client: &NavidromeClient,
+        seed: &Track,
+        exclude: &HashSet<String>,
+    ) -> Result<Vec<Track>, NavidromeError> {
+        let Some(plan) = self.begin(seed, exclude) else {
+            return Ok(Vec::new());
+        };
+        let outcome = fetch(client, &plan);
+        self.commit(&plan, outcome)
+    }
+}
+
+/// One batch's worth of radio state, captured under a short lock.
+#[derive(Debug)]
+pub struct RadioPlan {
+    seed: Track,
+    seen: HashSet<String>,
+    genre_offset: u32,
+}
+
+impl RadioPlan {
+    /// The genre paging offset this batch starts from (exposed for tests).
+    pub fn genre_offset(&self) -> u32 {
+        self.genre_offset
+    }
+}
+
+/// What one fetch produced, before it is committed to the radio state.
+#[derive(Debug)]
+pub struct BatchOutcome {
+    /// Fresh tracks, already deduplicated against the plan.
+    pub tracks: Vec<Track>,
+    /// The genre offset the next batch should start from.
+    pub genre_offset: u32,
+    /// Whether at least one source answered, so an empty batch is not an error.
+    pub any_ok: bool,
+    /// The last error, when every source failed.
+    pub error: Option<NavidromeError>,
+}
+
+impl BatchOutcome {
+    /// An outcome that produced nothing (tests, and the stalled path).
+    pub fn empty(genre_offset: u32) -> Self {
+        Self {
+            tracks: Vec::new(),
+            genre_offset,
+            any_ok: true,
+            error: None,
+        }
+    }
+}
+
+/// Run the four sources for one plan. Performs all the HTTP and borrows no
+/// radio state, so the caller may hold no lock while this runs.
+pub fn fetch(client: &NavidromeClient, plan: &RadioPlan) -> BatchOutcome {
+    let seed = &plan.seed;
+    let mut seen = plan.seen.clone();
+    let mut genre_offset = plan.genre_offset;
+    let mut out: Vec<Track> = Vec::new();
+    let mut any_ok = false;
+    let mut last_err: Option<NavidromeError> = None;
+
+    // 1. Similar to this very song.
+    match client.similar_songs_for_song(&seed.id, GENRE_PAGE) {
+        Ok(tracks) => {
+            any_ok = true;
+            absorb(tracks, &mut seen, &mut out);
+        }
+        Err(e) => {
+            tracing::debug!("radio: similar-songs failed: {e:?}");
+            last_err = Some(e);
+        }
+    }
+
+    // 2. Similar to the artist.
+    if out.len() < BATCH
+        && let Some(artist_id) = seed.artist_id.as_deref()
+    {
+        match client.similar_songs(artist_id, GENRE_PAGE) {
+            Ok(tracks) => {
+                any_ok = true;
+                absorb(tracks, &mut seen, &mut out);
+            }
+            Err(e) => {
+                tracing::debug!("radio: similar-songs2 failed: {e:?}");
+                last_err = Some(e);
+            }
+        }
+    }
+
+    // 3. Same genre, paged, so a big genre keeps yielding new songs and a
+    //    small one cycles instead of returning the same page forever.
+    if out.len() < BATCH
+        && let Some(genre) = seed.genre.as_deref()
+    {
+        for _ in 0..MAX_GENRE_PAGES {
+            if out.len() >= BATCH {
+                break;
+            }
+            match client.songs_by_genre(genre, GENRE_PAGE, genre_offset) {
+                Ok(tracks) => {
+                    any_ok = true;
+                    let full_page = tracks.len() as u32 >= GENRE_PAGE;
+                    absorb(tracks, &mut seen, &mut out);
+                    if full_page {
+                        genre_offset = genre_offset.saturating_add(GENRE_PAGE);
+                    } else {
+                        // End of the genre: wrap so the pool cycles.
+                        genre_offset = 0;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("radio: songs-by-genre failed: {e:?}");
+                    last_err = Some(e);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 4. Backstop: anything at all.
+    let mut draws = 0;
+    while out.len() < BATCH && draws < MAX_RANDOM_DRAWS {
+        draws += 1;
+        match client.random_songs(BATCH as u32) {
+            Ok(tracks) => {
+                any_ok = true;
+                let before = out.len();
+                absorb(tracks, &mut seen, &mut out);
+                if out.len() == before {
+                    // Nothing new came back; another identical draw will not help.
+                    break;
+                }
+            }
+            Err(e) => {
+                tracing::debug!("radio: random-songs failed: {e:?}");
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+
+    BatchOutcome {
+        tracks: out,
+        genre_offset,
+        any_ok,
+        error: last_err,
     }
 }
 
@@ -246,6 +355,8 @@ mod tests {
             year: None,
             starred: false,
             genre: Some("Rock".to_string()),
+            source: Default::default(),
+            cover_url: None,
         }
     }
 

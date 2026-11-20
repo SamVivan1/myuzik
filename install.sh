@@ -9,6 +9,7 @@
 #   ./install.sh                 install (builds first)
 #   ./install.sh --no-extension  skip the GNOME pin extension
 #   ./install.sh --skip-build    reuse target/release/myuzik
+#   ./install.sh --with-youtube  also install the optional YouTube helper
 #   ./install.sh --prefix DIR    install somewhere other than ~/.local
 #   ./install.sh --help
 #
@@ -47,9 +48,10 @@ ICON_SIZES="16 24 32 48 64 128 256 512"
 
 BUILD=1
 EXTENSION=1
+YOUTUBE=0
 
 usage() {
-  sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
   echo
   echo "Environment: PREFIX (default ~/.local), XDG_DATA_HOME (default ~/.local/share)"
   echo "Extension-only controls: scripts/install-extension.sh --help"
@@ -59,6 +61,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-extension) EXTENSION=0 ;;
     --skip-build) BUILD=0 ;;
+    --with-youtube) YOUTUBE=1 ;;
     --prefix=*) PREFIX="${arg#*=}"; BIN_DIR="$PREFIX/bin" ;;
     --prefix) echo "Use --prefix=DIR" >&2; exit 1 ;;
     -h|--help) usage; exit 0 ;;
@@ -94,6 +97,16 @@ BINARY="target/release/myuzik"
 step "Installing binary"
 install -Dm755 "$BINARY" "$BIN_DIR/myuzik"
 say "$BIN_DIR/myuzik"
+
+if [ "$YOUTUBE" = 1 ]; then
+  step "Installing optional YouTube Music support"
+  if ! bash scripts/setup-youtube.sh --prefix="$PREFIX"; then
+    warn "YouTube setup failed; the core player is still installed."
+    warn "Run ./scripts/setup-youtube.sh after fixing the reason above."
+  fi
+else
+  say "YouTube Music support (optional): ./scripts/setup-youtube.sh"
+fi
 
 step "Installing desktop entry"
 mkdir -p "$APPS_DIR"

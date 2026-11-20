@@ -29,6 +29,12 @@ thread_local! {
 const LYRICS_LINES: usize = 70;
 const LINE_SPACING_SECS: u64 = 5;
 
+const PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
+    0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0, 3, 1,
+    1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
 fn temp_paths(tag: &str) -> Paths {
     let base = std::env::temp_dir().join(format!("myuzik-lyr-{}-{}", std::process::id(), tag));
     Paths {
@@ -75,6 +81,8 @@ fn seed_track() -> Track {
         year: Some(2026),
         starred: false,
         genre: None,
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -160,6 +168,47 @@ fn play_with_lyrics(
     let loaded = wait_until(&mut vcx, &shell, |s, cx| s.overlay_line_count(cx) > 0);
     assert!(loaded, "the overlay never received lyrics");
     (shell, vcx)
+}
+
+#[gpui::test]
+fn lyrics_resolution_does_not_clear_the_overlay_cover(cx: &mut TestAppContext) {
+    let server = MockServer::start();
+    // The cover arrives quickly; the lyrics take long enough that the cover is
+    // already painted when the lyrics completion runs. That is the race that
+    // used to call `OverlayState::begin` and wipe the artwork.
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/rest/getCoverArt.view")
+            .query_param("id", "cov1");
+        then.status(200)
+            .header("content-type", "image/png")
+            .body(PNG);
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/rest/getLyricsBySongId.view");
+        then.delay(Duration::from_secs(2))
+            .status(200)
+            .header("content-type", "application/json")
+            .body(open_subsonic_synced(3));
+    });
+
+    let (shell, mut vcx) = shell_with(&server, "cover-retained", cx);
+    let mut track = seed_track();
+    track.cover_art_id = Some("cov1".to_string());
+    shell.update(&mut vcx, |s, cx| s.play_track(track, cx));
+
+    assert!(
+        wait_until(&mut vcx, &shell, |s, cx| s.overlay_line_count(cx) > 0),
+        "the lyrics never reached the overlay"
+    );
+    assert!(
+        wait_until(&mut vcx, &shell, |s, cx| s.overlay_cover_present(cx)),
+        "the cover never reached the overlay"
+    );
+    assert!(
+        shell.read_with(&vcx, |s, cx| s.overlay_cover_present(cx)),
+        "resolving lyrics cleared the overlay artwork"
+    );
 }
 
 #[gpui::test]

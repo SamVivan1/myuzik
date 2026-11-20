@@ -74,6 +74,7 @@ fn capture_ui() {
         return;
     };
     // Prime the client so the first frame already has a Home route.
+    let youtube_enabled = config.youtube_enabled;
     let client = NavidromeClient::new(&config.server_url, &config.username, &pw);
     if client.is_err() {
         eprintln!("skipped: invalid client");
@@ -101,12 +102,54 @@ fn capture_ui() {
     wait(&mut cx, &shell, |app| {
         shell.read(app).loaded_cover_count(app) > 0
     });
+    // Covers arrive in parallel; give the first grid a moment to paint instead
+    // of capturing whichever handful won the race.
+    std::thread::sleep(Duration::from_secs(3));
+    if youtube_enabled
+        && cx.update(|app| shell.read(app).active_source()) == myuzik::library::TrackSource::YouTube
+    {
+        wait(&mut cx, &shell, |app| shell.read(app).youtube_home_loaded());
+    }
     eprintln!(
         "albums at capture: {}, covers: {}",
         cx.update(|app| shell.read(app).loaded_album_count(app)),
         cx.update(|app| shell.read(app).loaded_cover_count(app))
     );
+    let initial_source = cx.update(|app| shell.read(app).active_source());
     save(&mut cx, any, "home");
+    save(
+        &mut cx,
+        any,
+        if initial_source == myuzik::library::TrackSource::YouTube {
+            "home-youtube"
+        } else {
+            "home-library"
+        },
+    );
+    if youtube_enabled {
+        let current = initial_source;
+        let other = if current == myuzik::library::TrackSource::YouTube {
+            myuzik::library::TrackSource::Navidrome
+        } else {
+            myuzik::library::TrackSource::YouTube
+        };
+        let switched = cx.update(|app| shell.update(app, |s, cx| s.set_active_source(other, cx)));
+        if switched {
+            wait(&mut cx, &shell, |app| {
+                shell.read(app).active_source() == other
+            });
+            if other == myuzik::library::TrackSource::YouTube {
+                wait(&mut cx, &shell, |app| shell.read(app).youtube_home_loaded());
+                save(&mut cx, any, "home-youtube");
+            } else {
+                save(&mut cx, any, "home-library");
+            }
+            cx.update(|app| {
+                let _ = shell.update(app, |s, cx| s.set_active_source(current, cx));
+            });
+            cx.run_until_parked();
+        }
+    }
 
     // Album detail: click the first card if a selector exists.
     // (Album card ids derive from the server, so we only capture Home/Settings/Now Playing.)

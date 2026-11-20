@@ -13,6 +13,7 @@ pub struct Colors {
     pub bg_raised: Rgba,
     pub glass_tint: Rgba,
     pub glass_border: Rgba,
+    pub glass_border_on_clay: Rgba,
     pub text_primary: Rgba,
     pub text_secondary: Rgba,
     pub text_tertiary: Rgba,
@@ -44,7 +45,9 @@ pub struct Colors {
     pub clay_gradient_end: Rgba,
     pub ambient_gold: Rgba,
     pub ambient_teal: Rgba,
+    pub ambient_teal_deep: Rgba,
     pub ambient_rose: Rgba,
+    pub ambient_rose_deep: Rgba,
     pub bg_gradient_start: Rgba,
     pub bg_gradient_end: Rgba,
     pub glass_gradient_start: Rgba,
@@ -75,16 +78,20 @@ pub fn midnight_brass() -> Theme {
             bg_raised: rgb(0x121218),
             glass_tint: rgba(0x0C0C10B8), // ~72% opacity
             glass_border: rgba(0xE8D3A328),
+            glass_border_on_clay: rgba(0xFFFFFFFF),
             text_primary: rgb(0xF5EFE4),
             text_secondary: rgb(0xB8B0A2),
-            text_tertiary: rgb(0x7C756A),
+            text_tertiary: rgb(0x847C70),
             gold: rgb(0xC9A86A),
             gold_light: rgb(0xE8D3A3),
             gold_deep: rgb(0x8C6D3F),
             clay_surface: rgb(0xF4EBDD),
             clay_shade: rgb(0xE7D8C2),
             clay_ink: rgb(0x2A241C),
-            os_accent: rgb(0x3584E4),
+            // Follows the desktop's accent when `follow_os_accent` is on; the
+            // Midnight Brass blue otherwise. `platform::accent` caches the choice
+            // so a render never shells out to gsettings.
+            os_accent: crate::platform::accent::current_accent(),
             danger: rgb(0xD96C6C),
             shadow_warm: rgba(0x5A411E55),
             glass_highlight: rgba(0xFFFFFF0D),
@@ -106,7 +113,9 @@ pub fn midnight_brass() -> Theme {
             clay_gradient_end: rgb(0xEADCC4),
             ambient_gold: rgba(0xC9A86A3A),
             ambient_teal: rgba(0x2F6B6330),
+            ambient_teal_deep: rgba(0x2F6B6348),
             ambient_rose: rgba(0x7A4A5528),
+            ambient_rose_deep: rgba(0x7A4A5540),
             bg_gradient_start: rgba(0x1C140BFF),
             bg_gradient_end: rgba(0x0B0B0EFF),
             glass_gradient_start: rgba(0x0A0A0DA8),
@@ -196,5 +205,23 @@ mod tests {
     fn gold_is_not_used_as_large_surface() {
         // Structural guard: no color token is named "gold_background".
         // (Manual review enforces the 5–10% rule.)
+    }
+
+    /// `text_tertiary` is real caption text (track numbers, durations, album
+    /// metadata, footer lines) at 9–11 px, so the 4.5:1 normal-text threshold
+    /// applies. It used to sit at 4.29:1 and no test covered it.
+    #[test]
+    fn tertiary_caption_text_on_glass_passes_aa() {
+        let glass = glass_over(midnight_brass().colors.bg_base);
+        let ratio = contrast_ratio(midnight_brass().colors.text_tertiary, glass);
+        assert!(ratio >= 4.5, "tertiary text contrast {ratio:.2} < 4.5");
+    }
+
+    /// `danger` is the error/toast colour and had no coverage either.
+    #[test]
+    fn danger_text_on_glass_passes_aa() {
+        let glass = glass_over(midnight_brass().colors.bg_base);
+        let ratio = contrast_ratio(midnight_brass().colors.danger, glass);
+        assert!(ratio >= 4.5, "danger text contrast {ratio:.2} < 4.5");
     }
 }

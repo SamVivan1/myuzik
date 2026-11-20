@@ -6,5 +6,7 @@ pub mod navidrome;
 pub mod overlay;
 pub mod platform;
 pub mod player;
+pub mod provider;
+pub mod services;
 pub mod theme;
 pub mod ui;

@@ -3,7 +3,7 @@
 
 use httpmock::prelude::*;
 use myuzik::library::Track;
-use myuzik::library::radio::{BATCH, GENRE_PAGE, Radio};
+use myuzik::library::radio::{BATCH, BatchOutcome, GENRE_PAGE, Radio};
 use myuzik::navidrome::client::NavidromeClient;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -60,6 +60,8 @@ fn seed() -> Track {
         year: None,
         starred: false,
         genre: Some("Rock".to_string()),
+        source: Default::default(),
+        cover_url: None,
     }
 }
 
@@ -435,4 +437,75 @@ fn the_radio_stalls_after_repeated_empty_batches_and_recovers_on_a_new_seed() {
         .next_batch(&c, &other, &HashSet::new())
         .expect("batch");
     assert!(!radio.is_stalled(), "a new seed clears the stall");
+}
+
+// --- the plan / fetch / commit split ---------------------------------------
+//
+// The split exists so the HTTP part never runs while the radio state is locked.
+// `fetch` borrows only the plan, never the `Radio`, which is what keeps the UI
+// thread from waiting on up to seven blocking requests.
+
+#[test]
+fn a_batch_can_be_fetched_while_the_radio_state_stays_mutable() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/rest/getSimilarSongs.view");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(similar_song(&["s1", "s2"]));
+    });
+    stub_other_sources(&server);
+    let client = client(&server);
+
+    let mut radio = Radio::new();
+    let plan = radio
+        .begin(&seed(), &HashSet::new())
+        .expect("a fresh seed must produce a plan");
+
+    // The radio stays usable while the request is in flight: nothing here is
+    // borrowed by the fetch.
+    radio.note_played("s1");
+
+    let outcome = myuzik::library::radio::fetch(&client, &plan);
+    let tracks = radio.commit(&plan, outcome).expect("commit");
+
+    assert_eq!(
+        tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec!["s2"],
+        "a track played while the batch was in flight must not be queued again"
+    );
+}
+
+#[test]
+fn begin_refuses_a_stalled_seed_and_accepts_a_fresh_one() {
+    let mut radio = Radio::new();
+    let exclude = HashSet::new();
+    let seed = seed();
+
+    // Three batches in a row that yield nothing fresh stall the radio.
+    for _ in 0..3 {
+        let plan = radio.begin(&seed, &exclude).expect("plan");
+        let offset = plan.genre_offset();
+        radio
+            .commit(&plan, BatchOutcome::empty(offset))
+            .expect("commit");
+    }
+    assert!(
+        radio.is_stalled(),
+        "three empty batches must stall the radio"
+    );
+
+    assert!(
+        radio.begin(&seed, &exclude).is_none(),
+        "a stalled seed must not start another fetch"
+    );
+
+    // A different seed has to clear the stall, otherwise autoplay dead-ends for
+    // the rest of the session (the shell used to guard before this reset ran).
+    let mut fresh = seed.clone();
+    fresh.id = "other-seed".to_string();
+    assert!(
+        radio.begin(&fresh, &exclude).is_some(),
+        "a new seed must clear the stall so autoplay recovers"
+    );
 }

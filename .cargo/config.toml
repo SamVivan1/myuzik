@@ -1,0 +1,6 @@
+# The rendered element tree is deep enough that the default 2 MiB stack of a
+# Rust test thread is not enough: adding one more control to a page could abort
+# a `cargo test` run with "has overflowed its stack". The app itself runs on the
+# main thread, which is fine; this only affects the headless test harness.
+[env]
+RUST_MIN_STACK = "33554432"

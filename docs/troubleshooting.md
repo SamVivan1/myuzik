@@ -58,6 +58,38 @@ the entry is listed. Installing the binary somewhere already on the session PATH
 If the entry is listed but you still see nothing, log out and back in once so the
 shell rebuilds its app list.
 
+## Dock icon is missing or shows another app
+
+Myuzik's integration is standard: desktop entry `io.github.samvivan1.Myuzik.desktop`,
+`Icon=io.github.samvivan1.Myuzik`, `StartupWMClass=io.github.samvivan1.Myuzik`, and a
+hicolor icon set in `~/.local/share/icons/hicolor`. The Wayland surface reports the same
+app id, and both St and GTK resolve the icon name, so a wrong dock icon is usually the
+dock extension, not the app.
+
+Check the active dock:
+
+```bash
+scripts/fix-gnome-dock.sh
+```
+
+On GNOME 51, the installed Dash2Dock Animated build may list only Shell 45–50 in its
+`metadata.json` while still being forced active (version validation disabled). Its icon
+code reads Shell internals and can show a missing or another app's icon. Ubuntu Dock is
+shipped for the running Shell and is the safe fallback:
+
+```bash
+scripts/fix-gnome-dock.sh --use-ubuntu-dock
+```
+
+Restore the animated dock later with:
+
+```bash
+scripts/fix-gnome-dock.sh --restore-dash2dock
+```
+
+If the issue remains on Ubuntu Dock, log out and back in once so GNOME Shell rescans
+`~/.local/share/applications` and the icon theme.
+
 ## Overlay is not above other windows
 
 - Install and enable the GNOME extension (`scripts/install-extension.sh`), then log out/in.
@@ -81,9 +113,17 @@ Use the error toast/`RUST_LOG=debug` to see the pipeline message.
 
 ## Credentials
 
-- Preferred: Secret Service (`org.freedesktop.secrets`).
-- Fallback: `~/.config/myuzik/credentials` (mode 0600).
-- To reset: delete that file and run the app; the setup form appears again.
+- Default: the Secret Service (`org.freedesktop.secrets`), filed under
+  `io.github.samvivan1.Myuzik` / `navidrome`.
+- Fallback when no keyring answers: `~/.config/myuzik/credentials`, created with mode `0600`
+  from the first byte. `MYUZIK_KEYRING=0` forces this file-only path.
+- The setup form says which store was used, and a failed save is reported instead of being
+  ignored.
+- Keyring calls are bounded to 1.5 s, so a wedged keyring daemon costs a short delay rather
+  than a hang.
+- To reset: delete the file and the `myuzik` entry in your keyring (or run
+  `secret-tool clear service io.github.samvivan1.Myuzik`), then start the app; the setup form
+  appears again.
 
 ## MPRIS
 

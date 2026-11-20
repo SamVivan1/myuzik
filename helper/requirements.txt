@@ -1,0 +1,10 @@
+# Python runtime for Myuzik's optional YouTube Music helper.
+#
+# Both versions are pinned because upstream changes are the main breakage risk.
+# Update with:
+#   ~/.local/lib/myuzik/runtime/bin/python -m pip install --upgrade -r requirements.txt
+#
+# ytmusicapi: MIT
+# yt-dlp:     Unlicense
+ytmusicapi==1.12.3
+yt-dlp[default]==2026.8.19

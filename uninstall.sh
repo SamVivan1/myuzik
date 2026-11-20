@@ -72,6 +72,7 @@ REMOVED=0
 
 step "Removing Myuzik"
 remove_path "$BIN_DIR/myuzik" "binary" && REMOVED=1
+remove_path "$PREFIX/lib/myuzik" "YouTube helper runtime" && REMOVED=1
 remove_path "$APPS_DIR/$APP_ID.desktop" "desktop entry" && REMOVED=1
 remove_path "$ICON_ROOT/scalable/apps/$APP_ID.svg" "icon (scalable)" && REMOVED=1
 remove_path "$ICON_ROOT/symbolic/apps/$APP_ID-symbolic.svg" "icon (symbolic)" && REMOVED=1

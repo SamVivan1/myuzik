@@ -3,6 +3,32 @@
 ## Unreleased
 
 ### Added
+- **Sidebar source switch**: when both Navidrome and YouTube are configured, a **Library /
+  YouTube** segmented control chooses what Home, the navigation menu and Search browse. The
+  choice is persisted as `active_source`; the queue and player stay global so cross-source
+  playback continues. YouTube-only installs fall back to YouTube, and a saved source that is no
+  longer configured falls back to the other one.
+- **YouTube Music browsing**: Home shelves, album/artist/playlist pages, and moods/genres,
+  all sourced through the `MusicService` contract. With YouTube enabled, Home is the YouTube
+  front page and Navidrome stays under Albums/Artists/Playlists/Favorites.
+- **Queue drawer and queue actions** (`QueueAction`/`AppAction`): open the queue from the player bar,
+  jump to a track, remove/reorder upcoming items, clear upcoming, and add a whole album with
+  `Add to queue`. All mutations sync MPRIS; the queue stays bounded at 500 tracks.
+- **Backend service contract** (`src/services/`): `MusicService`, `SourceRegistry`,
+  `PlaybackSource` and `CoverSource` separate the UI from Navidrome/YouTube clients. Playback,
+  album/artist/playlist details, covers and favorites now go through the registry.
+- **Optional YouTube Music source** (`src/provider/`, `helper/ytmusic.py`): search from the
+  Search page, buffer the chosen track through a one-shot Python helper (`ytmusicapi` + `yt-dlp`)
+  to `~/.cache/myuzik/streams`, then play the local file through the existing GStreamer engine.
+  Cover art, LRCLIB lyrics, the overlay, MPRIS and the queue work for YouTube tracks; scrobbling
+  and Navidrome radio are skipped. Off by default (`youtube_enabled`); install with
+  `./install.sh --with-youtube` or `./scripts/setup-youtube.sh`. Unofficial, no download/export
+  surface, and no signed URL reaches the player or logs.
+
+- **YouTube search results start the song's radio**, not the search page. Clicking a result
+  queues YouTube Music's watch playlist/radio around that song, matching AudioTube's
+  `get_watch_playlist` and Sung's `radio` op; the queue continues with another radio batch when
+  it runs out.
 - **System tray** (`src/platform/tray.rs`): a StatusNotifierItem plus DBusMenu on the session bus,
   with Show/Hide, Play/Pause, Previous, Next, Pin lyrics and Quit. The menu labels follow the
   current track and play state. Without a session bus the app runs normally, just without a tray.
@@ -41,6 +67,15 @@
   and reduced motion is honoured automatically.
 
 ### Fixed
+- **Dock icon on Linux.** The window now carries the bundled icon for X11/XWayland as well as the
+  Wayland app id, and `scripts/fix-gnome-dock.sh` diagnoses the common GNOME 51 case where an
+  outdated Dash2Dock build (metadata only up to Shell 50) is forced active and renders missing or
+  wrong app icons. On this machine the script switched to the Shell-matched Ubuntu Dock.
+- **Resolving lyrics no longer wipes the pinned overlay's artwork.** The lyric completion called
+  `OverlayState::begin`, which is the new-track path and clears the cover; when the cover fetch
+  finished first, the overlay lost it while Now Playing kept it. The late label update now uses
+  `set_track`, which keeps the cover and progress. Covered by
+  `tests/overlay_lyrics.rs::lyrics_resolution_does_not_clear_the_overlay_cover`.
 - **The pinned lyric overlay is now readable.** It used to render *every* line of the song into a
   392×180 window — a 70-line lyric sheet collapsed into an unreadable pile — with the whole text
   wrapping at 11 px. It now draws a karaoke band of at most six lines (two before the active line,

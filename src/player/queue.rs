@@ -86,6 +86,9 @@ impl Queue {
             self.items.push_front(track);
             self.current = Some(0);
         }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -139,6 +142,15 @@ impl Queue {
                 self.current = Some(idx);
                 return Some(self.items[idx].clone());
             }
+            if self.current.is_none() {
+                // The shuffle round ended (no current track); restart it on the
+                // last track of the order instead of staying dead.
+                let last = self.shuffle_order.len().checked_sub(1)?;
+                let idx = self.shuffle_order[last];
+                self.shuffle_pos = last;
+                self.current = Some(idx);
+                return Some(self.items[idx].clone());
+            }
             return self.current.map(|i| self.items[i].clone());
         }
         if let Some(i) = self.current {
@@ -150,8 +162,13 @@ impl Queue {
                 self.current = Some(self.items.len() - 1);
                 return Some(self.items[self.items.len() - 1].clone());
             }
+            return Some(self.items[i].clone());
         }
-        self.current.map(|i| self.items[i].clone())
+        // The queue ran to its end and cleared its position; Previous is the
+        // most natural thing to press there, so restart on the last track.
+        let last = self.items.len() - 1;
+        self.current = Some(last);
+        Some(self.items[last].clone())
     }
 
     pub fn set_repeat(&mut self, mode: RepeatMode) {
@@ -197,6 +214,83 @@ impl Queue {
         self.items.iter().cloned().collect()
     }
 
+    /// Index of the track currently playing, if any.
+    pub fn current_index(&self) -> Option<usize> {
+        self.current
+    }
+
+    /// Jump to an existing queue item. Keeps shuffle valid by rebuilding its
+    /// order around the new current track.
+    pub fn set_current(&mut self, index: usize) -> Option<Track> {
+        if index >= self.items.len() {
+            return None;
+        }
+        self.current = Some(index);
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        self.items.get(index).cloned()
+    }
+
+    /// Remove a future or past item. Removing the current track is refused so
+    /// the caller can decide whether to skip first; `None` also covers an
+    /// out-of-range index.
+    pub fn remove(&mut self, index: usize) -> Option<Track> {
+        if index >= self.items.len() || self.current == Some(index) {
+            return None;
+        }
+        let removed = self.items.remove(index)?;
+        if let Some(current) = self.current
+            && index < current
+        {
+            self.current = Some(current - 1);
+        }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        Some(removed)
+    }
+
+    /// Move an item within the queue. The current track follows its item if it
+    /// is the one being moved.
+    pub fn move_item(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.items.len() || to >= self.items.len() || from == to {
+            return false;
+        }
+        let Some(item) = self.items.remove(from) else {
+            return false;
+        };
+        self.items.insert(to, item);
+        if let Some(current) = self.current {
+            self.current = Some(if current == from {
+                to
+            } else if from < current && to >= current {
+                current - 1
+            } else if from > current && to <= current {
+                current + 1
+            } else {
+                current
+            });
+        }
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        true
+    }
+
+    /// Drop everything after the current track. Playback and history stay.
+    pub fn clear_upcoming(&mut self) -> usize {
+        let Some(current) = self.current else {
+            return 0;
+        };
+        let removed = self.items.len().saturating_sub(current + 1);
+        self.items.truncate(current + 1);
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        removed
+    }
+
     /// How many tracks would play before the queue runs out. Zero when the
     /// queue is empty or already exhausted (no current position).
     pub fn remaining(&self) -> usize {
@@ -204,6 +298,44 @@ impl Queue {
             Some(i) => self.items.len().saturating_sub(i + 1),
             None => 0,
         }
+    }
+
+    /// Whether a `next()` would produce another track instead of running out.
+    /// Mirrors the branches of [`Queue::next`], including shuffle and repeat.
+    pub fn can_go_next(&self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        if self.repeat == RepeatMode::One {
+            return self.current.is_some();
+        }
+        if self.shuffle {
+            if self.shuffle_order.is_empty() {
+                return false;
+            }
+            return self.shuffle_pos + 1 < self.shuffle_order.len()
+                || self.repeat == RepeatMode::All;
+        }
+        match self.current {
+            Some(i) => i + 1 < self.items.len() || self.repeat == RepeatMode::All,
+            // `next()` gives up once the position was cleared; autoplay, not
+            // the queue, is what resumes playback there.
+            None => false,
+        }
+    }
+
+    /// Whether a `previous()` would produce a track. True for any non-empty
+    /// queue: once the queue has run out, `previous` restarts the last track.
+    pub fn can_go_previous(&self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        if self.shuffle {
+            // The shuffle order is the way back; without one there is only the
+            // current track to repeat.
+            return self.current.is_some() || !self.shuffle_order.is_empty();
+        }
+        true
     }
 
     /// Ids currently in the queue, for deduplicating what autoplay adds.

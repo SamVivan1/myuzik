@@ -22,8 +22,29 @@ The setup form asks for:
 - **Password**
 
 Tab moves between fields; Enter or **Connect** tests the server (`ping`) and saves on success.
-The password is stored through the Secret Service (`keyring`), with a `0600` file fallback at
-`~/.config/myuzik/credentials`.
+Ctrl+V pastes into the focused field.
+
+The password is kept in the Secret Service (`org.freedesktop.secrets`: GNOME Keyring, KWallet)
+and, when no keyring answers, in a `0600` file at `~/.config/myuzik/credentials`. The setup
+form tells you which one was used.
+
+The keyring is the default store. Both the read during startup and the write when the form
+connects are bounded to 1.5 s, so a hung keyring daemon delays the app instead of freezing
+it — past that deadline the private file is used. `MYUZIK_KEYRING=0` forces the file-only
+path, for a desktop with no keyring daemon at all.
+
+## 2a. YouTube Music (optional)
+
+```bash
+./scripts/setup-youtube.sh
+# or: ./install.sh --with-youtube
+```
+
+This creates a private Python environment at `~/.local/lib/myuzik/runtime` and installs the
+pinned `ytmusicapi` + `yt-dlp`. Node.js 20+ is required by `yt-dlp`; `ffmpeg` is recommended.
+Choose **Use YouTube Music instead** on the setup form (or enable Settings → Sources →
+YouTube Music). The source is off by default, unofficial, and may break when YouTube changes.
+See [youtube.md](youtube.md).
 
 ## 3. GNOME pin extension (optional)
 

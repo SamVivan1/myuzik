@@ -114,6 +114,8 @@ fn queue_track(i: usize) -> Track {
         year: None,
         starred: false,
         genre: None,
+        source: Default::default(),
+        cover_url: None,
     }
 }
 

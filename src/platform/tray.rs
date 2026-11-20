@@ -39,8 +39,17 @@ const APP_ID: &str = "Myuzik";
 const ROOT_ID: i32 = 0;
 /// DBusMenu `Version` property.
 const DBUSMENU_VERSION: u32 = 3;
-/// How long `start` waits for the worker to come up before giving up.
-const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the caller waits for the worker to register before giving up.
+///
+/// PF-09: this used to be 10 s and the wait used to happen on the UI thread
+/// right after the first window opened, so a missing or wedged session bus blew
+/// the startup budget. The wait is now a background reporter (see
+/// [`Tray::start_background`]) and the budget is one or two seconds.
+const START_TIMEOUT: Duration = Duration::from_secs(2);
+/// How many times a registration is retried once the watcher appears.
+const WATCHER_MAX_ATTEMPTS: u32 = 5;
+/// The first retry delay; each further attempt doubles it.
+const WATCHER_FIRST_RETRY: Duration = Duration::from_millis(100);
 /// `(width, height, ARGB32 pixels)` as StatusNotifierItem wants it.
 type IconPixmaps = Vec<(i32, i32, Vec<u8>)>;
 /// `(icon name, icon pixmaps, title, subtitle)`.
@@ -70,6 +79,34 @@ pub enum TrayCommand {
     PinLyrics,
     /// Quit the app.
     Quit,
+}
+
+/// What the tray's `Show` command has to do about the main window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShowAction {
+    /// The main window still exists: raise it.
+    Focus,
+    /// The main window was closed and destroyed: build a new one.
+    Reopen,
+}
+
+/// Whether the tray icon should be drawn.
+///
+/// INT-02: this used to be `app.windows().is_empty()`, so with the lyrics
+/// overlay open the icon was `Passive` — invisible — while the main window was
+/// gone, and there was no way back into the app. The icon belongs to the app and
+/// is only pointless while the main window is on screen.
+pub fn tray_visibility(main_window_alive: bool) -> bool {
+    !main_window_alive
+}
+
+/// What `Show` must do, given whether the main window is still alive.
+pub fn show_action(main_window_alive: bool) -> ShowAction {
+    if main_window_alive {
+        ShowAction::Focus
+    } else {
+        ShowAction::Reopen
+    }
 }
 
 /// Why the tray could not be started.
@@ -111,8 +148,17 @@ pub struct Tray {
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// What [`Tray::start_background`] hands back: the live handle, the stream of
+/// user actions, and the pending registration result (to be reported from a
+/// background task).
+pub type TrayStart = (Tray, Receiver<TrayCommand>, Receiver<Result<(), TrayError>>);
+
 impl Tray {
-    /// Register on the session bus.
+    /// Register on the session bus and wait for the result.
+    ///
+    /// Convenience wrapper for callers that can afford to block (tests, tools).
+    /// The UI must use [`Tray::start_background`]: this waits up to
+    /// [`START_TIMEOUT`] and used to hold the first frame on the main thread.
     ///
     /// `icon_rgba` is `size` by `size` RGBA8 pixels; it is converted to the
     /// big-endian ARGB32 pixmaps StatusNotifierItem expects. The returned
@@ -124,6 +170,32 @@ impl Tray {
         icon_rgba: Vec<u8>,
         size: u32,
     ) -> Result<(Tray, Receiver<TrayCommand>), TrayError> {
+        let (tray, commands, ready) = Self::start_background(icon_rgba, size)?;
+        match wait_ready(&ready, START_TIMEOUT) {
+            Ok(()) => Ok((tray, commands)),
+            Err(error) => {
+                // Nothing registered, so do not leave a handle behind; the
+                // worker is detached, not joined (it may still be on the bus).
+                tray.abandon();
+                Err(error)
+            }
+        }
+    }
+
+    /// Spawn the worker and return as soon as the thread exists.
+    ///
+    /// PF-09: nothing here touches the session bus on the caller's thread. The
+    /// third value reports whether registration succeeded (or timed out) and is
+    /// meant to be handed to a background task, e.g.
+    ///
+    /// ```ignore
+    /// let (tray, commands, ready) = Tray::start_background(pixels, 32)?;
+    /// background.spawn(async move { report_registration(ready).await });
+    /// ```
+    ///
+    /// [`Tray`] is usable straight away: updates sent before the worker is
+    /// registered are queued on its control channel.
+    pub fn start_background(icon_rgba: Vec<u8>, size: u32) -> Result<TrayStart, TrayError> {
         let (command_tx, command_rx) = flume::unbounded::<TrayCommand>();
         let (control_tx, control_rx) = flume::unbounded::<ControlMessage>();
         let (ready_tx, ready_rx) = flume::bounded::<Result<(), TrayError>>(1);
@@ -143,26 +215,14 @@ impl Tray {
             })
             .map_err(|error| TrayError::new(format!("cannot spawn the tray thread: {error}")))?;
 
-        match ready_rx.recv_timeout(START_TIMEOUT) {
-            Ok(Ok(())) => Ok((
-                Tray {
-                    control: control_tx,
-                    worker: Mutex::new(Some(worker)),
-                },
-                command_rx,
-            )),
-            Ok(Err(error)) => {
-                let _ = worker.join();
-                Err(error)
-            }
-            Err(error) => {
-                tracing::warn!("tray: worker did not start in time: {error}");
-                let _ = control_tx.send(ControlMessage::Shutdown);
-                Err(TrayError::new(
-                    "the tray worker did not finish registering on the session bus",
-                ))
-            }
-        }
+        Ok((
+            Tray {
+                control: control_tx,
+                worker: Mutex::new(Some(worker)),
+            },
+            command_rx,
+            ready_rx,
+        ))
     }
 
     /// Set the track the tooltip and the `Title` property describe.
@@ -205,6 +265,21 @@ impl Tray {
         {
             tracing::warn!("tray: worker thread panicked");
         }
+    }
+
+    /// Ask the worker to stop without waiting for it.
+    ///
+    /// Used on the failure path of [`Tray::start`]: the worker may be stuck
+    /// inside a D-Bus call, and joining it there would reintroduce the startup
+    /// stall PF-09 is about. Dropping the handle detaches the thread instead.
+    fn abandon(self) {
+        let _ = self.control.send(ControlMessage::Shutdown);
+        let detached = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        drop(detached);
     }
 
     fn send(&self, message: ControlMessage) {
@@ -779,6 +854,10 @@ impl Service {
             // is exported and a host that finds it another way still works.
             tracing::warn!("tray: StatusNotifierWatcher refused the item: {error}");
         }
+        // Keep watching for the watcher from now on: a shell restart or an
+        // AppIndicator extension enabled later must bring the icon back without
+        // restarting the app (INT-05).
+        spawn_watcher_watch(&connection, &own_name);
         tracing::debug!(name = %own_name, "tray registered");
         Ok(Self {
             connection,
@@ -894,6 +973,160 @@ fn register_with_watcher(connection: &Connection, own_name: &str) -> zbus::Resul
     Ok(())
 }
 
+/// Wait for the worker's registration result, at most `timeout`.
+///
+/// Split out from [`Tray::start`] so the bound is testable without a bus: this is
+/// the wait that used to hold the UI thread for up to ten seconds (PF-09).
+fn wait_ready(ready: &Receiver<Result<(), TrayError>>, timeout: Duration) -> Result<(), TrayError> {
+    match ready.recv_timeout(timeout) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(flume::RecvTimeoutError::Timeout) => Err(TrayError::new(
+            "the tray worker did not finish registering on the session bus in time",
+        )),
+        Err(flume::RecvTimeoutError::Disconnected) => Err(TrayError::new(
+            "the tray worker stopped before registering on the session bus",
+        )),
+    }
+}
+
+/// Report a [`Tray::start_background`] result from a background task.
+///
+/// The caller has already continued with its frame; this only decides what to
+/// log, so an absent session bus costs nothing at startup.
+pub fn report_registration(ready: Receiver<Result<(), TrayError>>) {
+    match wait_ready(&ready, START_TIMEOUT) {
+        Ok(()) => tracing::debug!("tray: registered on the session bus"),
+        Err(error) => tracing::warn!("system tray unavailable: {error}"),
+    }
+}
+
+/// How long to wait before the next registration attempt, or `None` when the
+/// retries are used up.
+///
+/// Bounded on purpose (INT-05): the watcher is retried a few times with a
+/// growing delay, then the tray gives up quietly instead of spinning.
+fn watcher_retry_delay(attempt: u32) -> Option<Duration> {
+    if attempt >= WATCHER_MAX_ATTEMPTS {
+        return None;
+    }
+    Some(WATCHER_FIRST_RETRY * 2u32.saturating_pow(attempt))
+}
+
+/// Whether a `NameOwnerChanged` signal means the status notifier watcher just
+/// appeared on the bus.
+///
+/// Only the watcher's own name gaining an owner counts; the watcher going away
+/// and every other name on the bus are noise.
+fn watcher_appeared(name: &str, new_owner_present: bool) -> bool {
+    name == WATCHER_SERVICE && new_owner_present
+}
+
+/// Retry the registration on the worker thread, then keep watching the watcher.
+///
+/// INT-05: registration used to happen exactly once, so a shell or AppIndicator
+/// extension that started after the app left the icon invisible until a restart.
+fn spawn_watcher_watch(connection: &Connection, own_name: &str) {
+    let connection = connection.clone();
+    let own_name = own_name.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("myuzik-tray-watcher".to_owned())
+        .spawn(move || watch_watcher(connection, own_name));
+    if let Err(error) = spawned {
+        tracing::warn!("tray: cannot watch for the status notifier watcher: {error}");
+    }
+}
+
+fn watch_watcher(connection: Connection, own_name: String) {
+    // The watcher may already be there and have refused the first attempt.
+    if watcher_is_present(&connection) {
+        register_when_the_watcher_returns(&connection, &own_name);
+    }
+
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")
+        .and_then(|builder| builder.interface("org.freedesktop.DBus"))
+        .and_then(|builder| builder.member("NameOwnerChanged"))
+        .and_then(|builder| builder.add_arg(WATCHER_SERVICE))
+        .map(|builder| builder.build());
+    let rule = match rule {
+        Ok(rule) => rule,
+        Err(error) => {
+            tracing::warn!("tray: cannot build the watcher match rule: {error}");
+            return;
+        }
+    };
+
+    let signals = match zbus::blocking::MessageIterator::for_match_rule(rule, &connection, Some(4))
+    {
+        Ok(signals) => signals,
+        Err(error) => {
+            tracing::warn!("tray: cannot subscribe to bus name changes: {error}");
+            return;
+        }
+    };
+    // Ends when the connection closes (`Service::stop`), which is what unblocks
+    // the worker's join.
+    for message in signals {
+        let Ok(message) = message else { break };
+        let Some(changed) = zbus::fdo::NameOwnerChanged::from_message(message) else {
+            continue;
+        };
+        let Ok(args) = changed.args() else { continue };
+        if watcher_appeared(args.name().as_str(), args.new_owner().is_some()) {
+            tracing::info!("tray: the status notifier watcher appeared");
+            register_when_the_watcher_returns(&connection, &own_name);
+        }
+    }
+}
+
+fn watcher_is_present(connection: &Connection) -> bool {
+    let reply = match connection.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "NameHasOwner",
+        &(WATCHER_SERVICE,),
+    ) {
+        Ok(reply) => reply,
+        Err(error) => {
+            tracing::debug!("tray: NameHasOwner failed: {error}");
+            return false;
+        }
+    };
+    reply.body().deserialize::<bool>().unwrap_or_else(|error| {
+        tracing::debug!("tray: cannot read NameHasOwner: {error}");
+        false
+    })
+}
+
+/// Register with the watcher, retrying with a growing delay while it is still
+/// starting up. Gives up after [`WATCHER_MAX_ATTEMPTS`] attempts.
+fn register_when_the_watcher_returns(connection: &Connection, own_name: &str) {
+    let mut attempt = 0;
+    loop {
+        match register_with_watcher(connection, own_name) {
+            Ok(()) => {
+                tracing::info!("tray: registered with the status notifier watcher");
+                return;
+            }
+            Err(error) => {
+                let Some(delay) = watcher_retry_delay(attempt) else {
+                    tracing::warn!(
+                        attempts = attempt,
+                        "tray: the status notifier watcher would not take the item: {error}"
+                    );
+                    return;
+                };
+                tracing::debug!(attempt, %error, "tray: watcher not ready, retrying");
+                std::thread::sleep(delay);
+                attempt += 1;
+            }
+        }
+    }
+}
+
 fn run_worker(
     state: Arc<Mutex<TrayState>>,
     icon: Arc<IconPixmaps>,
@@ -997,6 +1230,112 @@ mod tests {
             None
         );
         assert_eq!(command_for_event(999, "clicked"), None);
+    }
+
+    // INT-02: the icon belongs to the app, not to whatever windows happen to be
+    // open. The lyrics overlay is a window too, but it is not the main window.
+    #[test]
+    fn tray_visibility_follows_the_main_window_not_the_window_count() {
+        assert!(
+            !tray_visibility(true),
+            "hidden while the main window is open"
+        );
+        assert!(
+            tray_visibility(false),
+            "shown once the main window is gone, even if the overlay is still up"
+        );
+    }
+
+    #[test]
+    fn show_focuses_an_open_window_and_reopens_a_closed_one() {
+        assert_eq!(show_action(true), ShowAction::Focus);
+        assert_eq!(show_action(false), ShowAction::Reopen);
+    }
+
+    // PF-09: the startup wait must fit in the frame budget of a slow bus.
+    #[test]
+    fn the_startup_wait_is_short() {
+        assert!(
+            START_TIMEOUT <= Duration::from_secs(2),
+            "the main thread used to be held for {START_TIMEOUT:?}"
+        );
+        assert!(
+            START_TIMEOUT >= Duration::from_millis(200),
+            "a wait this short cannot let a healthy worker register: {START_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn waiting_for_registration_is_bounded() {
+        let (_ready_tx, ready_rx) = flume::bounded::<Result<(), TrayError>>(1);
+        let started = std::time::Instant::now();
+        let outcome = wait_ready(&ready_rx, Duration::from_millis(20));
+        assert!(
+            outcome.is_err(),
+            "an unanswered registration must not report success"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the wait overran its timeout: {:?}",
+            started.elapsed()
+        );
+
+        // A registration that does arrive is accepted.
+        let (ready_tx, ready_rx) = flume::bounded::<Result<(), TrayError>>(1);
+        ready_tx.send(Ok(())).expect("send");
+        assert!(wait_ready(&ready_rx, Duration::from_millis(50)).is_ok());
+    }
+
+    #[test]
+    fn a_worker_that_dies_before_registering_is_a_start_failure() {
+        let (ready_tx, ready_rx) = flume::bounded::<Result<(), TrayError>>(1);
+        drop(ready_tx);
+        assert!(
+            wait_ready(&ready_rx, Duration::from_secs(1)).is_err(),
+            "a worker that exited must not look like a successful start"
+        );
+    }
+
+    // INT-05: re-register with the watcher when it appears.
+    #[test]
+    fn watcher_retries_are_bounded_and_back_off() {
+        let delays: Vec<Duration> = (0..WATCHER_MAX_ATTEMPTS)
+            .filter_map(watcher_retry_delay)
+            .collect();
+        assert_eq!(
+            delays.len(),
+            WATCHER_MAX_ATTEMPTS as usize,
+            "every attempt up to the cap must have a delay"
+        );
+        assert!(
+            delays.windows(2).all(|pair| pair[1] > pair[0]),
+            "the delays must grow: {delays:?}"
+        );
+        assert_eq!(
+            watcher_retry_delay(WATCHER_MAX_ATTEMPTS),
+            None,
+            "attempts past the cap must stop"
+        );
+        assert!(
+            delays.iter().sum::<Duration>() <= Duration::from_secs(5),
+            "retrying must not take longer than a few seconds: {delays:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_watcher_appearing_is_a_reason_to_register() {
+        assert!(
+            watcher_appeared(WATCHER_SERVICE, true),
+            "the watcher getting an owner is the signal we wait for"
+        );
+        assert!(
+            !watcher_appeared(WATCHER_SERVICE, false),
+            "the watcher going away is not a reason to register"
+        );
+        assert!(
+            !watcher_appeared("org.kde.StatusNotifierHost-12-1", true),
+            "other names on the bus are noise"
+        );
     }
 
     #[test]

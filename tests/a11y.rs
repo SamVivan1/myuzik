@@ -161,12 +161,15 @@ const NAV_ORDER: [&str; 8] = [
     "nav-settings",
 ];
 
-const PLAYER_ORDER: [&str; 9] = [
+const PLAYER_ORDER: [&str; 12] = [
     "player-now-playing",
     "player-seek-back",
     "player-prev",
     "player-play",
     "player-next",
+    "player-shuffle",
+    "player-repeat",
+    "player-queue",
     "player-seek-forward",
     "player-volume-down",
     "player-volume-up",
@@ -246,19 +249,20 @@ fn tab_order_is_nav_then_content_then_player_bar_then_chrome(cx: &mut TestAppCon
 
     // Sidebar order is the visual order of the navigation list.
     assert_eq!(&order[..8], &NAV_ORDER, "sidebar tab order: {order:?}");
-    // The two content controls on Home, then the album cards.
+    // The three content controls on Home, then the album cards.
     assert_eq!(order[9], "content-search-shortcut");
     assert_eq!(order[10], "content-see-all-albums");
-    assert_eq!(order[11], "album:a1");
-    assert_eq!(order[12], "album:a2");
+    assert_eq!(order[11], "content-sync");
+    assert_eq!(order[12], "album:a1");
+    assert_eq!(order[13], "album:a2");
     // The player bar follows the content.
     assert_eq!(
-        &order[13..22],
+        &order[14..26],
         &PLAYER_ORDER,
         "player bar tab order: {order:?}"
     );
     // Window chrome comes last.
-    assert_eq!(&order[22..25], &CHROME_ORDER, "chrome tab order: {order:?}");
+    assert_eq!(&order[26..29], &CHROME_ORDER, "chrome tab order: {order:?}");
 
     // The sidebar "pin lyrics" button belongs to the navigation group.
     assert_eq!(order[8], "sidebar-pin-lyrics");
@@ -282,6 +286,84 @@ fn shift_tab_reverses_the_focus_order(cx: &mut TestAppContext) {
     assert_eq!(
         back,
         vec!["nav-nowplaying".to_string(), "nav-home".to_string()]
+    );
+}
+
+/// A focused control must be *operable* from the keyboard, not merely
+/// reachable: Enter activates whatever has focus. Without this the whole
+/// focus ring is decoration and WCAG 2.1.1 (Keyboard) fails.
+#[gpui::test]
+fn enter_activates_the_focused_nav_item(cx: &mut TestAppContext) {
+    let (_server, shell, mut vcx) = mock_shell(cx, "enter-nav");
+
+    // The sidebar is the first group in the ring; nav-settings is its 8th stop.
+    for _ in 0..8 {
+        press_tab(&mut vcx);
+    }
+    assert_eq!(
+        focused_control(&mut vcx, &shell).as_deref(),
+        Some("nav-settings"),
+        "focus did not land on the Settings nav item"
+    );
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.route()),
+        Route::Settings,
+        "Enter on the focused Settings nav item did nothing"
+    );
+}
+
+/// Enter on a focused content control (an album card) must open it.
+#[gpui::test]
+fn enter_opens_the_focused_album_card(cx: &mut TestAppContext) {
+    let (_server, shell, mut vcx) = mock_shell(cx, "enter-album");
+
+    // 8 nav stops + pin-lyrics + 3 content controls, then the first album card.
+    for _ in 0..13 {
+        press_tab(&mut vcx);
+    }
+    assert_eq!(
+        focused_control(&mut vcx, &shell).as_deref(),
+        Some("album:a1"),
+        "focus did not land on the first album card"
+    );
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.selected_album_id().map(str::to_owned)),
+        Some("a1".to_string()),
+        "Enter on the focused album card did not open the album"
+    );
+}
+
+/// A stored reduce-motion preference must be honoured from the first frame,
+/// not only after the Settings toggle is touched.
+#[gpui::test]
+fn stored_reduce_motion_is_applied_at_startup(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("motion");
+        let config = AppConfig {
+            reduce_motion: true,
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let _shell = window.root(&mut vcx).unwrap();
+    vcx.run_until_parked();
+
+    assert!(
+        vcx.update(|_window, app| app.reduce_motion()),
+        "config.reduce_motion was true but the app still animates: \
+         set_reduce_motion was never called during Shell::new"
     );
 }
 
@@ -418,7 +500,7 @@ fn icon_only_controls_expose_a_role_and_a_label() {
             shell,
             ".id(\"home-search\")",
             "shell",
-            Some("\"Search your library (Ctrl K)\""),
+            Some("\"Search music (Ctrl K)\""),
         ),
         (
             now_playing,
@@ -515,5 +597,65 @@ fn keyboard_focus_wiring_is_present_for_every_group() {
             shell.contains(role) || include_str!("../src/ui/now_playing.rs").contains(role),
             "no element uses {role}"
         );
+    }
+}
+
+/// Long titles must be clamped, not wrapped.
+///
+/// Nothing in the UI clamped text, so a long album title wrapped and made the
+/// artist baseline differ per card (ragged grid), and a long track title wrapped
+/// to three lines inside the 88 px player bar.
+#[test]
+fn long_text_is_clamped_where_it_would_wrap() {
+    let shell = include_str!("../src/ui/shell.rs");
+
+    // The chain that renders each text, and what it is for.
+    let cases: [(&str, &str); 4] = [
+        (".child(title.to_string())", "album card / track row title"),
+        (
+            ".child(artist.to_string())",
+            "album card / track row artist",
+        ),
+        ("current_title.clone()", "player bar title"),
+        (".child(current_artist.clone())", "player bar artist"),
+    ];
+
+    for (anchor, what) in cases {
+        let mut from = 0;
+        let mut seen = 0;
+        while let Some(offset) = shell[from..].find(anchor) {
+            let at = from + offset;
+            // The style chain for one text element is well under this size.
+            let start = at.saturating_sub(600);
+            let chain = &shell[start..at];
+            assert!(
+                chain.contains("line_clamp(1)") || chain.contains("line_clamp(2)"),
+                "{what} is not clamped (offset {at})"
+            );
+            seen += 1;
+            from = at + anchor.len();
+        }
+        assert!(seen > 0, "rendering code for {what} not found");
+    }
+}
+
+#[test]
+fn no_raw_colors_in_ui_sources() {
+    // The specific literals called out by audit UI-27 (outside traffic-light
+    // semantics and transparent shadows) must not reappear.
+    let bad = [
+        "gpui::rgba(0x5A411E55)",
+        "gpui::rgba(0x2F6B6348)",
+        "gpui::rgba(0x7A4A5540)",
+        "gpui::hsla(0.05, 0.4, 0.05, 0.35)",
+    ];
+    let sources = [
+        include_str!("../src/ui/shell.rs"),
+        include_str!("../src/ui/now_playing.rs"),
+    ];
+    for src in sources {
+        for b in bad {
+            assert!(!src.contains(b), "raw color {b} reappeared");
+        }
     }
 }

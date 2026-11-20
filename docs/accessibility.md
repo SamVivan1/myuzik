@@ -40,6 +40,24 @@ search field has focus, so typing (including Space, which would otherwise
 toggle playback) goes to the field; Tab is handled before that guard so it
 still leaves the field.
 
+### Activation
+
+Being reachable is not being operable. gpui at the pinned revision wires
+`on_click` to the mouse only, so a tab stop with no key handler does nothing
+when activated — the whole ring was reachable and inert, which fails WCAG 2.1.1
+(Keyboard, level A).
+
+**Enter** now activates whatever has keyboard focus. `Shell::activate_focused`
+maps the focused control's logical name to the same action its click handler
+runs, for every group: navigation, page content (album cards, artist and
+playlist rows, track rows, search results, album detail buttons), the player
+bar, the settings rows and the window chrome.
+
+**Space** stays the global play/pause shortcut, so a keyboard user has one
+unambiguous activation key. Covered by
+`enter_activates_the_focused_nav_item` and `enter_opens_the_focused_album_card`
+in `tests/a11y.rs`.
+
 ### Focus ring
 
 Focused controls draw a 2 px ring in the OS accent token (`os_accent`,

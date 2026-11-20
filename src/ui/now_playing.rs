@@ -116,6 +116,36 @@ impl Render for NowPlayingView {
         let theme = midnight_brass();
         let t = &theme.colors;
 
+        // Nothing has played yet: an empty cover frame, blank metadata and a
+        // footer printing " — " read as a broken screen. Say so instead.
+        if self.title.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(gpui::px(10.0))
+                .id("np-empty")
+                .debug_selector(|| "np-empty".to_string())
+                .role(gpui::Role::Label)
+                .aria_label("Nothing playing yet")
+                .child(
+                    div()
+                        .text_size(gpui::px(16.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child("Nothing playing yet"),
+                )
+                .child(
+                    div()
+                        .text_size(gpui::px(12.0))
+                        .text_color(t.text_secondary)
+                        .child("Pick an album or a playlist to start."),
+                )
+                .into_any_element();
+        }
+
         let progress_pct = if self.duration > 0.0 {
             (self.position / self.duration * 100.0).clamp(0.0, 100.0)
         } else {
@@ -341,7 +371,7 @@ impl Render for NowPlayingView {
                                 div()
                                     .flex()
                                     .justify_between()
-                                    .text_size(gpui::px(8.0))
+                                    .text_size(gpui::px(10.0))
                                     .text_color(t.text_tertiary)
                                     .child(format_time(self.position))
                                     .child(format_time(self.duration)),
@@ -383,10 +413,11 @@ impl Render for NowPlayingView {
                                     .gap(gpui::px(2.0))
                                     .child(
                                         div()
-                                            .text_size(gpui::px(9.0))
-                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_size(gpui::px(13.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(t.gold)
-                                            .child("SYNCED LYRICS"),
+                                            .debug_selector(|| "np-lyrics-header".to_string())
+                                            .child(self.lyrics.read(cx).header_label()),
                                     )
                                     .child(
                                         div()
@@ -478,7 +509,7 @@ impl Render for NowPlayingView {
                                             .px(gpui::px(11.0))
                                             .py(gpui::px(7.0))
                                             .rounded(gpui::px(999.0))
-                                            .bg(gpui::rgb(0x2A241C))
+                                            .bg(t.clay_dark)
                                             .text_color(t.gold_light)
                                             .text_size(gpui::px(9.0))
                                             .font_weight(gpui::FontWeight::BOLD)
@@ -497,6 +528,26 @@ impl Render for NowPlayingView {
                             .overflow_hidden()
                             .px(gpui::px(24.0))
                             .py(gpui::px(16.0))
+                            // The centring arithmetic needs the panel's real
+                            // height, and it used to assume 400 px for every
+                            // window size. The child bounds are the honest
+                            // measurement; deferring keeps the entity update out
+                            // of the prepaint that produced it.
+                            .on_children_prepainted({
+                                let lyrics = self.lyrics.clone();
+                                move |bounds, _window, app| {
+                                    let Some(bounds) = bounds.first() else {
+                                        return;
+                                    };
+                                    let height = bounds.size.height.as_f32();
+                                    let lyrics = lyrics.clone();
+                                    app.defer(move |app| {
+                                        lyrics.update(app, |view, _cx| {
+                                            view.set_viewport_height(height);
+                                        });
+                                    });
+                                }
+                            })
                             .child(self.lyrics.clone()),
                     )
                     .child(
@@ -509,9 +560,13 @@ impl Render for NowPlayingView {
                             .py(gpui::px(12.0))
                             .border_t_1()
                             .border_color(t.glass_border)
-                            .text_size(gpui::px(8.0))
+                            .text_size(gpui::px(10.0))
                             .text_color(t.text_tertiary)
-                            .child(format!("{} — {}", self.title, self.artist))
+                            .child(if self.artist.is_empty() {
+                                self.title.clone()
+                            } else {
+                                format!("{} — {}", self.title, self.artist)
+                            })
                             .child(format!(
                                 "{} / {}",
                                 format_time(self.position),
@@ -519,6 +574,7 @@ impl Render for NowPlayingView {
                             )),
                     ),
             )
+            .into_any_element()
     }
 }
 

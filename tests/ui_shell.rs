@@ -3,6 +3,7 @@
 use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
 use myuzik::app::Route;
 use myuzik::config::{AppConfig, Paths};
+use myuzik::library::{Track, TrackSource};
 use myuzik::player::engine::PlayerHandle;
 use myuzik::ui::Shell;
 
@@ -12,6 +13,26 @@ fn dummy_player() -> PlayerHandle {
     std::mem::forget(cmd_rx);
     std::mem::forget(evt_tx);
     PlayerHandle { tx, rx }
+}
+
+fn queue_track(id: &str) -> Track {
+    Track {
+        id: id.to_string(),
+        title: format!("Queue {id}"),
+        artist: "Artist".to_string(),
+        artist_id: None,
+        album: "Album".to_string(),
+        album_id: None,
+        cover_art_id: None,
+        cover_url: None,
+        duration: std::time::Duration::from_secs(120),
+        track_number: None,
+        disc_number: None,
+        year: None,
+        starred: false,
+        genre: None,
+        source: TrackSource::Navidrome,
+    }
 }
 
 fn temp_paths(tag: &str) -> Paths {
@@ -167,6 +188,12 @@ fn unreachable_server_shows_error_toast(cx: &mut TestAppContext) {
         shell.read_with(&cx, |s, _| s.toast_text().is_some()),
         "unreachable server did not produce a toast"
     );
+    // Storing the message is not enough: it has to reach the screen.
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("toast").is_some(),
+        "a failure toast was stored but never rendered: the user sees nothing"
+    );
     // The shell must still render and remain usable.
     assert_eq!(shell.read_with(&cx, |s, _| s.route()), Route::Home);
 }
@@ -284,4 +311,263 @@ fn settings_controls_update_config(cx: &mut TestAppContext) {
     let paths = temp_paths("settings");
     let text = std::fs::read_to_string(&paths.config).expect("config saved");
     assert!(text.contains("quality") && text.contains("kbps320"));
+}
+
+/// A password manager has to be able to paste into the first screen the user
+/// sees. The setup fields are hand-built text inputs, so paste is not free.
+#[gpui::test]
+fn ctrl_v_pastes_into_the_setup_form(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("paste");
+        // No server configured, so the shell opens on the setup form.
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut vcx).unwrap();
+    vcx.run_until_parked();
+    assert_eq!(shell.read_with(&vcx, |s, _| s.route()), Route::Setup);
+
+    // The server field is pre-filled with "https://"; clear it so the assertion
+    // is about the paste and nothing else.
+    shell.update(&mut vcx, |s, _| s.set_setup_fields("", "", ""));
+    vcx.run_until_parked();
+
+    vcx.update(|_window, app| {
+        app.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "https://music.example.com\n".to_string(),
+        ));
+    });
+    vcx.simulate_keystrokes("ctrl-v");
+    vcx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(&vcx, |s, _| s.setup_server_value().to_string()),
+        "https://music.example.com",
+        "Ctrl+V did not paste into the setup form (a trailing newline should be stripped)"
+    );
+}
+
+/// Opening Now Playing before anything has played must say so, not show an
+/// empty cover frame, blank metadata and a footer that prints " — ".
+#[gpui::test]
+fn now_playing_without_a_track_shows_an_empty_state(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("np-empty");
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    shell.update(&mut cx, |shell, _cx| shell.go(Route::NowPlaying));
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        cx.debug_bounds("np-empty").is_some(),
+        "Now Playing with no track rendered no empty state"
+    );
+}
+
+/// Shuffle and repeat existed in `Queue` but nothing in the UI could reach them,
+/// so the feature was unreachable despite being listed as done.
+#[gpui::test]
+fn shuffle_and_repeat_are_reachable_and_toggle(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("shuffle");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        // A configured server puts the shell on Home, where the player bar lives.
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+    // The player bar registers its focus handles while it is painted.
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        !shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "shuffle starts off"
+    );
+    // The controls are visible in the player bar, not just keyboard shortcuts.
+    assert!(
+        cx.debug_bounds("shuffle-btn").is_some(),
+        "no visible shuffle control in the player bar"
+    );
+    assert!(
+        cx.debug_bounds("repeat-btn").is_some(),
+        "no visible repeat control in the player bar"
+    );
+    let shuffle_btn = cx.debug_bounds("shuffle-btn").expect("shuffle");
+    cx.simulate_click(shuffle_btn.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "clicking the shuffle control did not turn shuffle on"
+    );
+    cx.simulate_click(shuffle_btn.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!shell.read_with(&cx, |s, cx| s.shuffle_on(cx)));
+
+    // Ctrl+S toggles shuffle from the keyboard.
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "Ctrl+S did not turn shuffle on"
+    );
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    assert!(
+        !shell.read_with(&cx, |s, cx| s.shuffle_on(cx)),
+        "Ctrl+S did not turn shuffle off"
+    );
+
+    // Repeat cycles off -> all -> one -> off.
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: off"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: all",
+        "Ctrl+R did not advance repeat"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: one"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |s, cx| s.repeat_label(cx)),
+        "Repeat: off"
+    );
+}
+
+/// A network failure must not be presented as "you have no albums" with advice to
+/// connect a server that is already connected. docs/design.md:463 asks for a
+/// plain-language error with one action, so the grid shows the real reason and a
+/// Retry control instead.
+#[gpui::test]
+fn a_library_error_shows_the_reason_and_a_retry(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("lib-error");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        std::fs::write(paths.config.parent().unwrap().join("credentials"), "secret").unwrap();
+        // Port 9 refuses connections: the library load will fail.
+        let config = AppConfig {
+            server_url: "http://127.0.0.1:9".to_string(),
+            username: "tester".to_string(),
+            ..Default::default()
+        };
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), config, paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        cx.run_until_parked();
+        if shell.read_with(&cx, |s, cx| s.home_error(cx).is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for _ in 0..3 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    assert!(
+        shell.read_with(&cx, |s, cx| s.home_error(cx).is_some()),
+        "the library error was not recorded"
+    );
+    assert!(
+        cx.debug_bounds("library-error").is_some(),
+        "a failed library load rendered no error panel"
+    );
+    assert!(
+        cx.debug_bounds("library-retry").is_some(),
+        "the error panel has no Retry control"
+    );
+}
+
+#[gpui::test]
+fn queue_panel_removes_and_reorders_tracks(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        let paths = temp_paths("queue-panel");
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        cx.open_window(WindowOptions::default(), move |_, cx| {
+            cx.new(|cx| Shell::new(cx, dummy_player(), AppConfig::default(), paths, None))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell = window.root(&mut cx).unwrap();
+
+    shell.update(&mut cx, |shell, _cx| shell.go(Route::Home));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    shell.update(&mut cx, |shell, cx| {
+        shell.play_tracks(
+            vec![queue_track("q0"), queue_track("q1"), queue_track("q2")],
+            0,
+            cx,
+        );
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let queue_button = cx.debug_bounds("queue-btn").expect("queue button");
+    cx.simulate_click(queue_button.center(), gpui::Modifiers::default());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(shell.read_with(&cx, |shell, _| shell.queue_panel_open()));
+
+    let remove = cx.debug_bounds("queue-remove-2").expect("remove button");
+    cx.simulate_click(remove.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_track_ids(cx)),
+        vec!["q0".to_string(), "q1".to_string()]
+    );
+
+    let up = cx.debug_bounds("queue-up-1").expect("move up button");
+    cx.simulate_click(up.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_track_ids(cx)),
+        vec!["q1".to_string(), "q0".to_string()]
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.queue_current_index(cx)),
+        Some(1),
+        "moving an upcoming item must keep the playing track current"
+    );
 }

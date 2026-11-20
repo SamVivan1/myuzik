@@ -123,10 +123,13 @@ instead of 1`. Both checks were run and then reverted.
 | Structure | Bound | Where |
 |---|---|---|
 | Cover LRU (in memory) | 200 entries, least-recently-added evicted | `HomeState::insert_cover` in [src/ui/shell.rs](../src/ui/shell.rs), bound exported as `COVER_CACHE_CAP` so the stress test asserts the real number |
-| Lyrics cache (on disk) | newest 500 files / 50 MB, pruned on startup and after writes | `LyricsCache::prune` ([src/lyrics/cache.rs:79](../src/lyrics/cache.rs)) |
+| Lyrics cache (on disk) | newest 500 files / 50 MB, pruned when the cache is opened | `LyricsCache::new` → `LyricsCache::prune` ([src/lyrics/cache.rs](../src/lyrics/cache.rs)) |
+| Rounded cover cache (memory) | 32 covers, keyed by source image id | `rounded_cover` ([src/overlay/mod.rs](../src/overlay/mod.rs)) |
 | Album list paging | `size` ≤ 500 per `getAlbumList2` request | `NavidromeClient::album_list` ([src/navidrome/client.rs:132](../src/navidrome/client.rs)) |
 | Search result size | `songCount=40`, `albumCount=20`, `artistCount=20` per query | `NavidromeClient::search` ([src/navidrome/client.rs:201](../src/navidrome/client.rs)) |
 | Cover download | at most 8 MB read per cover | `NavidromeClient::cover_bytes` ([src/navidrome/client.rs:257](../src/navidrome/client.rs)) |
+| YouTube stream cache (on disk) | oldest directories pruned above `stream_cache_mb` (default 1 GiB); one track capped at 32 MiB | `YouTubeProvider::prune` ([src/provider/youtube.rs](../src/provider/youtube.rs)) |
+| YouTube search results | 20 items, 20-minute duration cap, deduplicated by video id | `helper/ytmusic.py`, `YouTubeProvider::search` |
 
 ## Known limits
 
