@@ -2,6 +2,7 @@
 //! renders it and routes intents through `AppAction`/`QueueAction`.
 
 use super::*;
+use crate::ui::components::format_time;
 
 impl Shell {
     pub(super) fn render_queue_panel(

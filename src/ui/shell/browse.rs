@@ -6,6 +6,7 @@
 //! shell's private helpers and state.
 
 use super::*;
+use crate::ui::components::{album_card, format_time, track_row};
 
 impl Shell {
     fn cover_element(

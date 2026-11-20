@@ -608,6 +608,9 @@ fn keyboard_focus_wiring_is_present_for_every_group() {
 #[test]
 fn long_text_is_clamped_where_it_would_wrap() {
     let shell = include_str!("../src/ui/shell.rs");
+    let cards = include_str!("../src/ui/components/cards.rs");
+    let rows = include_str!("../src/ui/components/rows.rs");
+    let all = format!("{shell}\n{cards}\n{rows}");
 
     // The chain that renders each text, and what it is for.
     let cases: [(&str, &str); 4] = [
@@ -623,11 +626,11 @@ fn long_text_is_clamped_where_it_would_wrap() {
     for (anchor, what) in cases {
         let mut from = 0;
         let mut seen = 0;
-        while let Some(offset) = shell[from..].find(anchor) {
+        while let Some(offset) = all[from..].find(anchor) {
             let at = from + offset;
             // The style chain for one text element is well under this size.
             let start = at.saturating_sub(600);
-            let chain = &shell[start..at];
+            let chain = &all[start..at];
             assert!(
                 chain.contains("line_clamp(1)") || chain.contains("line_clamp(2)"),
                 "{what} is not clamped (offset {at})"
