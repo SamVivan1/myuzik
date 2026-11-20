@@ -55,6 +55,16 @@ def main() -> int:
             {"title": "Quick picks", "items": [
                 {"kind": "song", "id": "abcdefghijk", "title": "Fixture One", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
                 {"kind": "song", "id": "lmnopqrstuv", "title": "Fixture Two", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong003", "title": "Fixture Three", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong004", "title": "Fixture Four", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong005", "title": "Fixture Five", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong006", "title": "Fixture Six", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong007", "title": "Fixture Seven", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong008", "title": "Fixture 8", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong009", "title": "Fixture 9", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong010", "title": "Fixture 10", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong011", "title": "Fixture 11", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
+                {"kind": "song", "id": "picksong012", "title": "Fixture 12", "artist": "Fixture Artist", "album": "Fixture Album", "seconds": 120, "art": "https://example.com/fixture.jpg"},
             ]},
             {"title": "New releases", "items": [
                 {"kind": "album", "id": "MPREb_fixture", "title": "Fixture Album", "artist": "Fixture Artist", "year": "2026", "art": "https://example.com/fixture.jpg"},

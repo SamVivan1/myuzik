@@ -1088,16 +1088,17 @@ impl Shell {
                     .child("YouTube Music returned no shelves."),
             );
         }
+        // Fit whole cards only: no half-clipped card at the right edge.
+        let (max_cards, card_width) = shelf_layout(f32::from(window.viewport_size().width));
         for (s, section) in sections.iter().enumerate() {
             let mut row = div()
                 .id(format!("yt-shelf-{s}"))
                 .flex()
                 .items_start()
                 .gap(gpui::px(12.0))
-                .overflow_x_scroll()
                 .pb(gpui::px(4.0));
-            for (i, card) in section.items.iter().cloned().enumerate() {
-                row = row.child(self.browse_card(s, i, card, 150.0, window, cx, t));
+            for (i, card) in section.items.iter().take(max_cards).cloned().enumerate() {
+                row = row.child(self.browse_card(s, i, card, card_width, window, cx, t));
             }
             body = body.child(
                 div()
@@ -1121,7 +1122,14 @@ impl Shell {
                                         section.title.clone()
                                     }),
                             )
-                            .child(self.shelf_see_all(s, section.clone(), window, cx, t)),
+                            .child(self.shelf_see_all(
+                                s,
+                                section.clone(),
+                                max_cards,
+                                window,
+                                cx,
+                                t,
+                            )),
                     )
                     .child(
                         div()
@@ -1157,10 +1165,14 @@ impl Shell {
         &mut self,
         index: usize,
         section: crate::provider::youtube::BrowseSection,
+        max_cards: usize,
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
         t: &crate::theme::Colors,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui::AnyElement {
+        if section.items.len() <= max_cards {
+            return div().into_any_element();
+        }
         let key = format!("shelf-see-all-{index}");
         let selector = key.clone();
         let handle = self.focus_for(&key, Self::TAB_CONTENT, cx);
@@ -1182,6 +1194,7 @@ impl Shell {
                 this.open_shelf(section.clone(), cx);
             }))
             .child("See all ›")
+            .into_any_element()
     }
 
     fn render_shelf_screen(
@@ -1359,5 +1372,37 @@ impl Shell {
                 |el, delta| el.opacity(0.94 + 0.06 * delta),
             )
             .into_any_element()
+    }
+}
+
+/// Choose how many whole cards fit in the main content area. The sidebar is
+/// 220 px and the content has 24 px padding on each side. Returns the number of
+/// cards and the exact card width so the last card ends at the content edge.
+fn shelf_layout(viewport_width: f32) -> (usize, f32) {
+    let content_width = (viewport_width - 220.0 - 48.0).max(320.0);
+    let gap = 12.0;
+    let max_cards = (((content_width + gap) / (150.0 + gap)).floor() as usize).max(2);
+    let card_width =
+        (content_width - gap * (max_cards.saturating_sub(1)) as f32) / max_cards as f32;
+    (max_cards, card_width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shelf_layout;
+
+    #[test]
+    fn shelf_fits_whole_cards_at_common_widths() {
+        for (width, cards) in [(1280.0, 6), (1440.0, 7), (1600.0, 8), (1920.0, 10)] {
+            let (fitted, card_width) = shelf_layout(width);
+            assert_eq!(fitted, cards, "width {width}");
+            assert!(card_width >= 150.0, "width {width}: card {card_width}");
+            let total = fitted as f32 * card_width + (fitted - 1) as f32 * 12.0;
+            let content = width - 220.0 - 48.0;
+            assert!(
+                (total - content).abs() < 0.01,
+                "width {width}: total {total} vs content {content}"
+            );
+        }
     }
 }

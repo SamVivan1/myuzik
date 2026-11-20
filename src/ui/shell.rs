@@ -4236,19 +4236,6 @@ impl Render for Shell {
         };
 
         let queue_panel = self.render_queue_panel(window, cx);
-        let bottom_scrim = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(gpui::px(112.0))
-            .bg(gpui::linear_gradient(
-                180.0,
-                gpui::linear_color_stop(gpui::rgba(0x00000000), 0.0),
-                gpui::linear_color_stop(t.bg_base, 1.0),
-            ))
-            .into_any_element();
-
         // Player bar
         let player = crate::theme::glass_surface(
             div()
@@ -6713,7 +6700,6 @@ impl Render for Shell {
                     ),
                 ),
             )
-            .child(bottom_scrim)
             .child(player)
             .child(queue_panel)
             // Failure surface. Playback, autoplay and library errors are all

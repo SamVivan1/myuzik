@@ -31,7 +31,7 @@ Status: in progress. Source: screenshot audit 2026-11-20.
   - [x] Remove duplicate "Pin lyrics" entry.
   - [x] Make the header search placeholder source-aware.
 - [x] T6 Responsive layout
-  - [ ] Verify 1280 / 1440 / 1600 / 1920 widths (pending).
+  - [x] Verify 1280 / 1440 / 1600 / 1920 widths (unit test `shelf_fits_whole_cards_at_common_widths`).
   - [x] Ensure shelves never clip mid-card.
 
 ## P2 — accessibility and polish
@@ -40,7 +40,7 @@ Status: in progress. Source: screenshot audit 2026-11-20.
   - [x] "See all" focusable with role + aria label.
   - [x] Progress bar role/aria value.
   - [x] Source-switch targets >= 32 px.
-  - [ ] Icon aria-hidden (parent nav items already labelled).
+  - [ ] Icon aria-hidden (parent nav items already labelled; Svg has no accessible node).
 - [x] T8 Verification
   - [x] `cargo fmt --check`
   - [x] `cargo clippy --all-targets -- -D warnings`
